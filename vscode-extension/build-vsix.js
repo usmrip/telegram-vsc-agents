@@ -33,11 +33,17 @@ console.log(`📦 Memulai pembuatan paket VSIX resmi: ${vsixFileName}`);
 // 1. Sinkronkan berkas tools ke folder assets ekstensi
 const assetsDir = path.join(extDir, 'assets', 'tele-vs-code');
 if (!fs.existsSync(assetsDir)) fs.mkdirSync(assetsDir, { recursive: true });
-const rootTools = ['tele-worker.js', 'tele-notify.js', 'tele-task.js', 'tele-worker.cmd', 'tele-notify.cmd', 'tele-task.cmd'];
+const rootTools = [
+  'tele-worker.js', 'tele-notify.js', 'tele-task.js',
+  'tele-worker.cmd', 'tele-notify.cmd', 'tele-task.cmd',
+  'tele-worker.sh', 'tele-notify.sh', 'tele-task.sh',
+  'tele-worker', 'tele-notify', 'tele-task'
+];
 for (const tf of rootTools) {
   const p = path.join(path.dirname(extDir), tf);
+  const pAssets = path.join(assetsDir, tf);
   if (fs.existsSync(p)) {
-    fs.copyFileSync(p, path.join(assetsDir, tf));
+    fs.copyFileSync(p, pAssets);
   }
 }
 
@@ -102,7 +108,7 @@ if (fs.existsSync(srcAssets)) {
 
 // [Content_Types].xml resmi OPC
 const contentTypesXml = `<?xml version="1.0" encoding="utf-8"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension=".cmd" ContentType="application/octet-stream"/><Default Extension=".js" ContentType="application/javascript"/><Default Extension=".json" ContentType="application/json"/><Default Extension=".md" ContentType="text/markdown"/><Default Extension=".png" ContentType="image/png"/><Default Extension=".txt" ContentType="text/plain"/><Default Extension=".vsixmanifest" ContentType="text/xml"/></Types>`;
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension=".cmd" ContentType="application/octet-stream"/><Default Extension=".sh" ContentType="application/x-sh"/><Default Extension=".js" ContentType="application/javascript"/><Default Extension=".json" ContentType="application/json"/><Default Extension=".md" ContentType="text/markdown"/><Default Extension=".png" ContentType="image/png"/><Default Extension=".txt" ContentType="text/plain"/><Default Extension=".vsixmanifest" ContentType="text/xml"/></Types>`;
 fs.writeFileSync(path.join(stagingDir, '[Content_Types].xml'), contentTypesXml, 'utf-8');
 
 const vsixManifestXml = `<?xml version="1.0" encoding="utf-8"?>
@@ -117,6 +123,7 @@ const vsixManifestXml = `<?xml version="1.0" encoding="utf-8"?>
     <Properties>
       <Property Id="Microsoft.VisualStudio.Code.Engine" Value="^${minEngine}" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionPublisherDisplayName" Value="Biru Indonesia Creative" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="workspace,ui" />
       <Property Id="Microsoft.VisualStudio.Services.Links.Source" Value="https://github.com/usmrip/telegram-vsc-agents.git" />
       <Property Id="Microsoft.VisualStudio.Services.Links.Support" Value="https://github.com/usmrip/telegram-vsc-agents/issues" />
       <Property Id="Microsoft.VisualStudio.Services.Links.Learn" Value="https://github.com/usmrip/telegram-vsc-agents#readme" />

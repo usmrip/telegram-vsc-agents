@@ -7,9 +7,11 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const rootDir = path.resolve(__dirname, '..');
-const vsixFile = fs.existsSync(path.join(rootDir, 'tele-vs-code-1.0.0.vsix'))
-  ? path.join(rootDir, 'tele-vs-code-1.0.0.vsix')
-  : path.join(__dirname, 'tele-vs-code-1.0.0.vsix');
+const pkg = require('./package.json');
+const vsixFileName = `${pkg.name}-${pkg.version}.vsix`;
+const vsixFile = fs.existsSync(path.join(rootDir, vsixFileName))
+  ? path.join(rootDir, vsixFileName)
+  : path.join(__dirname, vsixFileName);
 
 if (!fs.existsSync(vsixFile)) {
   console.log('[INFO] File VSIX belum ada. Membangun paket terlebih dahulu...');

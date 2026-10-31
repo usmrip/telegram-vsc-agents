@@ -81,23 +81,31 @@ function ensureWorkspaceTools(context, wsFolder) {
   // 1. Salin script dari aset internal ekstensi jika ada
   const extAssetsDir = path.join(context.extensionPath, 'assets', 'tele-vs-code');
   if (fs.existsSync(extAssetsDir)) {
-    const assetFiles = ['tele-worker.js', 'tele-notify.js', 'tele-task.js', 'tele-worker.cmd', 'tele-notify.cmd', 'tele-task.cmd'];
+    const assetFiles = [
+      'tele-worker.js', 'tele-notify.js', 'tele-task.js',
+      'tele-worker.cmd', 'tele-notify.cmd', 'tele-task.cmd',
+      'tele-worker.sh', 'tele-notify.sh', 'tele-task.sh',
+      'tele-worker', 'tele-notify', 'tele-task'
+    ];
     for (const f of assetFiles) {
       const src = path.join(extAssetsDir, f);
       const dest = path.join(toolsDir, f);
       if (fs.existsSync(src)) {
         try {
           fs.copyFileSync(src, dest);
+          if (process.platform !== 'win32') {
+            try { fs.chmodSync(dest, 0o755); } catch (e) {}
+          }
         } catch (e) {}
       }
     }
   }
 
-  // 2. Bersihkan file tool di root workspace jika ada dari versi sebelumnya, agar file tool hanya ada di dalam .vscode/tele-vs-code/
   // 2. Bersihkan file tool di root workspace jika ada dari versi sebelumnya, agar file tool HANYA ada di dalam .vscode/tele-vs-code/
   const filesToCleanFromRoot = [
     'tele-worker.js', 'tele-notify.js', 'tele-task.js',
-    'tele-worker.cmd', 'tele-notify.cmd', 'tele-task.cmd'
+    'tele-worker.cmd', 'tele-notify.cmd', 'tele-task.cmd',
+    'tele-worker.sh', 'tele-notify.sh', 'tele-task.sh'
   ];
   for (const rf of filesToCleanFromRoot) {
     const rootFilePath = path.join(wsFolder, rf);
