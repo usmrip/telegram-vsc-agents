@@ -1,0 +1,74 @@
+name: Publish Extension to VS Code Marketplace
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_version:
+        description: 'Tipe kenaikan versi (opsional)'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: Build & Publish VSIX
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write # WAJIB: Autentikasi OIDC untuk Trusted Publishing ke VS Code Marketplace
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'vscode-extension/package.json'
+
+      - name: 📦 Install Dependencies
+        run: |
+          cd vscode-extension
+          npm install
+
+      - name: 🔢 Bump Version (Opsional via Manual Dispatch)
+        if: github.event.inputs.bump_version != '' && github.event.inputs.bump_version != 'none'
+        run: |
+          cd vscode-extension
+          npm version ${{ github.event.inputs.bump_version }} --no-git-tag-version
+
+      - name: 🔨 Build VSIX Package
+        run: |
+          node vscode-extension/build-vsix.js
+
+      - name: 📤 Upload VSIX Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tele-vs-code-vsix
+          path: tele-vs-code-*.vsix
+          if-no-files-found: error
+
+      - name: 🚀 Publish to VS Code Marketplace (Trusted Publishing / PAT Fallback)
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          cd vscode-extension
+          if [ -n "$VSCE_PAT" ]; then
+            echo "🔑 Menggunakan Token PAT dari GitHub Secrets..."
+            npx @vscode/vsce publish -p "$VSCE_PAT" --allow-missing-repository
+          else
+            echo "🛡️ Menggunakan OIDC Trusted Publishing Microsoft..."
+            npx @vscode/vsce publish --use-trusted-publishing --allow-missing-repository
+          fi
