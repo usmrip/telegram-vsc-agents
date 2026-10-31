@@ -123,6 +123,50 @@ function ensureWorkspaceTools(context, wsFolder) {
       fs.writeFileSync(queueFile, queueTpl, 'utf-8');
     } catch (e) {}
   }
+
+  // 4. Pastikan aturan AI Agent (AGENTS.md, CLAUDE.md, .cursorrules) ada agar AI di IDE Chat otomatis lapor ke Telegram & TASK_QUEUE
+  const agentRuleTpl = `## NOTIFIKASI TELEGRAM & PENCATATAN TASK QUEUE (Tele-vs-Code)
+Setiap kali Anda menerima perintah atau instruksi baru dari USER di IDE Chat ini:
+
+1. **Catat Perintah ke Dashboard & TASK_QUEUE.md:**
+   Jalankan perintah terminal:
+   node .vscode/tele-vs-code/tele-task.js add "<Perintah User>" --sender "IDE Chat" --status IN_PROGRESS
+   *(Perintah ini otomatis mencatat tugas ke server, memperbarui TASK_QUEUE.md, dan mengirim notifikasi PROSES ke Telegram).*
+
+2. **Kerjakan Tugas:**
+   Kerjakan tugas sesuai instruksi hingga tuntas 100% dan terverifikasi.
+
+3. **Tandai Selesai & Lapor ke Telegram:**
+   Setelah BENAR-BENAR SELESAI 100%:
+   node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"
+   *(Perintah ini otomatis mengupdate status server ke DONE, mencatat riwayat di TASK_QUEUE.md, dan mengirim notifikasi SELESAI ke Telegram).*
+
+4. **Jika Menemukan Kendala Error yang Memblokir:**
+   node .vscode/tele-vs-code/tele-notify.js "<Judul Kendala>" --status KENDALA --detail "<Penyebab kendala>"
+
+> ⚠️ **ATURAN MUTLAK:** JANGAN PERNAH mengirimkan status \`SELESAI\` saat tugas baru dimulai atau sedang dikerjakan. Status \`SELESAI\` HANYA untuk pekerjaan yang sudah 100% tuntas dan teruji.
+
+## ANTREAN TUGAS TELEGRAM (TASK_QUEUE.md)
+Jika terdapat tugas di TASK_QUEUE.md dengan status [PENDING] atau [IN_PROGRESS]:
+1. Kerjakan tugas sesuai instruksi sampai selesai dan teruji.
+2. Tandai selesai dengan:
+   node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"
+`;
+
+  const targetRuleFiles = ['AGENTS.md', 'CLAUDE.md', '.cursorrules'];
+  for (const rf of targetRuleFiles) {
+    const rPath = path.join(wsFolder, rf);
+    if (!fs.existsSync(rPath)) {
+      try { fs.writeFileSync(rPath, agentRuleTpl, 'utf-8'); } catch (e) {}
+    } else {
+      try {
+        const curContent = fs.readFileSync(rPath, 'utf-8');
+        if (!curContent.includes('tele-task.js') && !curContent.includes('tele-task add')) {
+          fs.appendFileSync(rPath, `\n\n${agentRuleTpl}`, 'utf-8');
+        }
+      } catch (e) {}
+    }
+  }
 }
 
 // Cache Konfigurasi Proyek dari Server Biru
