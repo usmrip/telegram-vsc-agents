@@ -1,0 +1,8 @@
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /tele-vs-code/
+
+# Webhook Endpoint Route
+RewriteRule ^webhook/?$ index.php?is_webhook=1 [QSA,L]
+</IfModule>
+

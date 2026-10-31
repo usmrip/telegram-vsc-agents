@@ -1,0 +1,30 @@
+# Kredensial & Lingkungan Rahasia
+.env
+.env.*
+!.env.example
+config.env
+*.env
+
+# Task Queue (Antrean Lokal Kerja AI Agent)
+TASK_QUEUE.md
+TASK_QUEUE*.md
+
+# Database & Storage
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Backup & Temporary
+*.bak
+*.bak*
+*.tmp
+*.log
+*.local
+
+# System & Editor
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+node_modules/

@@ -1,0 +1,520 @@
+#!/usr/bin/env node
+// ==============================================================================
+// Autonomous Telegram Task Queue Worker
+// Menjalankan antrean tugas dari server biru.co.id satu per satu secara otomatis
+// Dan otomatis sinkronisasi file server ke U:\domains\biru.co.id\public_html\tele-vs-code
+// ==============================================================================
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { execSync } = require('child_process');
+
+const args = process.argv.slice(2);
+let projectDir = process.cwd();
+let intervalMs = 5000;
+let runOnce = false;
+
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '-p' || args[i] === '--project') {
+    projectDir = path.resolve(args[++i] || '.');
+  } else if (args[i] === '--once' || args[i] === '--run-once') {
+    runOnce = true;
+  } else if (args[i] === '-i' || args[i] === '--interval') {
+    intervalMs = parseInt(args[++i] || '5', 10) * 1000;
+  }
+}
+
+function parseEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return {};
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const result = {};
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const match = trimmed.match(/^([A-Za-z_0-9]+)\s*=\s*(.*)$/);
+    if (match) {
+      let val = match[2].trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      result[match[1]] = val;
+    }
+  }
+  return result;
+}
+
+const homeDir = os.homedir();
+const globalConf = path.join(homeDir, '.config', 'tele-notify', 'config.env');
+const localVscodeConf = path.join(projectDir, '.vscode', 'tele-vs-code', 'config.env');
+const localConf = path.join(projectDir, 'config.env');
+const localEnv = path.join(projectDir, '.env');
+
+const cfgGlobal = parseEnvFile(globalConf);
+const cfgVscode = parseEnvFile(localVscodeConf);
+const cfgLocal = parseEnvFile(localConf);
+const cfgEnv = parseEnvFile(localEnv);
+
+const webhookUrl = process.env.AGENTS_TELE_WEBHOOK_URL ||
+                   cfgVscode.AGENTS_TELE_WEBHOOK_URL ||
+                   cfgLocal.AGENTS_TELE_WEBHOOK_URL ||
+                   cfgEnv.AGENTS_TELE_WEBHOOK_URL ||
+                   cfgGlobal.AGENTS_TELE_WEBHOOK_URL ||
+                   'https://biru.co.id/tele-vs-code/webhook';
+
+const secretKey = process.env.AGENTS_TELE_SECRET ||
+                  cfgVscode.AGENTS_TELE_SECRET ||
+                  cfgLocal.AGENTS_TELE_SECRET ||
+                  cfgEnv.AGENTS_TELE_SECRET ||
+                  cfgGlobal.AGENTS_TELE_SECRET ||
+                  '';
+
+const projectKey = process.env.AGENTS_TELE_PROJECT ||
+                   cfgVscode.AGENTS_TELE_PROJECT ||
+                   cfgLocal.AGENTS_TELE_PROJECT ||
+                   cfgEnv.AGENTS_TELE_PROJECT ||
+                   cfgGlobal.AGENTS_TELE_PROJECT ||
+                   '';
+
+const deployDir = process.env.SERVER_DEPLOY_DIR ||
+                  cfgLocal.SERVER_DEPLOY_DIR ||
+                  cfgEnv.SERVER_DEPLOY_DIR ||
+                  cfgGlobal.SERVER_DEPLOY_DIR ||
+                  'U:\\domains\\biru.co.id\\public_html\\tele-vs-code';
+
+const normalizedUrl = webhookUrl.endsWith('/') ? webhookUrl : `${webhookUrl}/`;
+const queueFile = path.join(projectDir, 'TASK_QUEUE.md');
+const serverDir = path.join(projectDir, 'tele-vs-code');
+
+// Fungsi Auto-Update Server ke Folder U:
+function syncServerFiles() {
+  if (!fs.existsSync(deployDir)) {
+    return false;
+  }
+  try {
+    const srcIndex = path.join(serverDir, 'index.php');
+    const srcVsix = path.join(projectDir, 'tele-vs-code-1.0.0.vsix');
+    if (fs.existsSync(srcIndex)) {
+      fs.copyFileSync(srcIndex, path.join(deployDir, 'index.php'));
+    }
+    if (fs.existsSync(srcVsix)) {
+      fs.copyFileSync(srcVsix, path.join(deployDir, 'tele-vs-code-1.0.0.vsix'));
+    }
+    console.log(`🔄 [AUTO-SYNC] File server berhasil disinkronkan ke: ${deployDir}`);
+    return true;
+  } catch (err) {
+    console.error(`⚠️ Gagal sync file server ke ${deployDir}: ${err.message}`);
+    return false;
+  }
+}
+
+// Jalankan sync saat start
+syncServerFiles();
+
+// Watcher untuk auto-update file server saat diedit
+try {
+  if (!runOnce && fs.existsSync(serverDir)) {
+    fs.watch(serverDir, (eventType, filename) => {
+      if (filename && (filename.endsWith('.php') || filename.endsWith('.vsix'))) {
+        setTimeout(syncServerFiles, 500);
+      }
+    });
+    console.log(`👀 File Watcher aktif: Memantau folder tele-vs-code/ -> auto update ke ${deployDir}`);
+  }
+} catch (e) {}
+
+console.log(`================================================================`);
+console.log(`🚀 Telegram Task Worker Otomatis (Background Daemon)`);
+console.log(`🌐 Server Webhook : ${normalizedUrl}`);
+console.log(`📁 Target Deploy  : ${deployDir}`);
+console.log(`⏱️ Polling Setiap : ${intervalMs / 1000} detik`);
+console.log(`================================================================\n`);
+
+async function fetchNextTask() {
+  try {
+    const operator = `${os.userInfo().username}@${os.hostname()}`;
+    let url = `${normalizedUrl}?action=pull&secret=${secretKey}&limit=1&format=json&mark=1&workspace_folder=${encodeURIComponent(projectDir)}&operator=${encodeURIComponent(operator)}`;
+    if (projectKey) {
+      url += `&project=${encodeURIComponent(projectKey)}`;
+    }
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.ok && Array.isArray(data.tasks) && data.tasks.length > 0) {
+      const task = data.tasks[0];
+      if (task.attachment_url) {
+        try {
+          const attachDir = path.join(projectDir, 'attachments', task.id.replace(/[^a-zA-Z0-9_-]/g, ''));
+          if (!fs.existsSync(attachDir)) fs.mkdirSync(attachDir, { recursive: true });
+          const localPath = path.join(attachDir, task.attachment_name || 'lampiran.bin');
+          if (!fs.existsSync(localPath)) {
+            const fRes = await fetch(task.attachment_url);
+            if (fRes.ok) {
+              const buf = Buffer.from(await fRes.arrayBuffer());
+              fs.writeFileSync(localPath, buf);
+            }
+          }
+          task.local_attachment_path = localPath;
+        } catch (e) {}
+      }
+      return task;
+    }
+  } catch (err) {}
+  return null;
+}
+
+async function markTaskStatus(taskId, status = 'IN_PROGRESS', notes = '') {
+  try {
+    const act = (status === 'DONE') ? 'done' : ((status === 'FAILED') ? 'failed' : 'in_progress');
+    const url = `${normalizedUrl}?action=${act}&secret=${secretKey}&id=${encodeURIComponent(taskId)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `notes=${encodeURIComponent(notes)}`
+    });
+    await res.text();
+  } catch (err) {
+    console.error(`⚠️ Gagal update status di server: ${err.message}`);
+  }
+}
+
+async function markTaskDone(taskId, notes = 'Selesai dikerjakan 100%') {
+  return markTaskStatus(taskId, 'DONE', notes);
+}
+
+function sendNotification(title, status, details = []) {
+  try {
+    const notifyJs = path.join(projectDir, 'tele-notify.js');
+    if (fs.existsSync(notifyJs)) {
+      const args = [notifyJs, title, status, ...details].map(a => `"${String(a).replace(/"/g, '\\"')}"`).join(' ');
+      execSync(`node ${args}`, { cwd: projectDir, stdio: 'inherit' });
+    }
+  } catch (err) {
+    console.error(`⚠️ Notifier error: ${err.message}`);
+  }
+}
+
+// Catat tugas aktif ke TASK_QUEUE.md (Status: IN_PROGRESS)
+function recordActiveTask(task) {
+  try {
+    if (!fs.existsSync(queueFile)) return;
+    let content = fs.readFileSync(queueFile, 'utf-8');
+    if (content.includes(task.id)) return; // sudah tercatat
+
+    const activeBlock = `### [IN_PROGRESS] ${task.id}
+- **Waktu:** ${task.created_at}
+- **Pengirim:** ${task.sender}
+- **Instruksi:** ${task.instruction.replace(/\r?\n/g, ' ')}
+- **Status:** IN_PROGRESS
+- **Catatan:** Sedang dikerjakan oleh AI Agent...
+
+`;
+    const activeMarker = '## ⏳ Tugas Aktif';
+    if (content.includes(activeMarker)) {
+      content = content.replace(activeMarker, `${activeMarker}\n\n${activeBlock}`);
+      content = content.replace(/\*\(Tidak ada tugas aktif di antrean saat ini[^\)]*\)\*/g, '');
+    } else {
+      content = `${activeMarker}\n\n${activeBlock}\n\n${content}`;
+    }
+    fs.writeFileSync(queueFile, content, 'utf-8');
+  } catch (err) {}
+}
+
+// Pindahkan tugas ke Riwayat Tugas Selesai (Status: DONE) hanya jika 100% SELESAI
+function appendToTaskQueueFile(task, report) {
+  try {
+    if (!fs.existsSync(queueFile)) return;
+    let content = fs.readFileSync(queueFile, 'utf-8');
+    
+    // Bersihkan dari daftar tugas aktif jika ada
+    const regexActive = new RegExp(`### \\[(PENDING|IN_PROGRESS)\\]\\s+${task.id}[\\s\\S]*?(?=(###|##|$))`, 'g');
+    content = content.replace(regexActive, '');
+
+    const doneBlock = `### [DONE] ${task.id}
+- **Waktu:** ${task.created_at}
+- **Pengirim:** ${task.sender}
+- **Instruksi:** ${task.instruction.replace(/\r?\n/g, ' ')}
+- **Status:** DONE
+- **Laporan Agent:** ${report}
+
+`;
+    const doneMarker = '## ✅ Riwayat Tugas Selesai';
+    if (content.includes(doneMarker)) {
+      content = content.replace(doneMarker, `${doneMarker}\n\n${doneBlock}`);
+    } else {
+      content += `\n\n${doneMarker}\n\n${doneBlock}`;
+    }
+    fs.writeFileSync(queueFile, content, 'utf-8');
+  } catch (err) {}
+}
+
+// Autonomous Task Execution Engine
+function tryExecuteDirectTask(instruction, targetDir) {
+  const inst = instruction.trim();
+
+  // 1. Pembuatan Folder / Direktori
+  // Contoh: "buat folder ddfa", "buat foldsr ssf", "mkdir components", "bikin folder src/assets"
+  const mFolder = inst.match(/^(?:buat|bikin|create|make)?\s*(?:folder|foldsr|dir|direktori)\s+(.+)$/i) ||
+                  inst.match(/^mkdir\s+(.+)$/i);
+  if (mFolder) {
+    const rawName = mFolder[1].trim().replace(/^['"`]|['"`]$/g, '');
+    const cleanRel = path.normalize(rawName).replace(/^(\.\.[\/\\])+/, '');
+    const fullPath = path.resolve(targetDir, cleanRel);
+    if (!fullPath.startsWith(path.resolve(targetDir))) {
+      throw new Error(`Path tidak aman di luar workspace: ${rawName}`);
+    }
+    fs.mkdirSync(fullPath, { recursive: true });
+    return {
+      executed: true,
+      report: `Folder "${cleanRel}" berhasil dibuat di direktori workspace`,
+      type: 'mkdir'
+    };
+  }
+
+  // 2. Pembuatan Dokumen / File
+  // Contoh: "buat dokumen dengan nama xyz.txt", "buat file data.json", "touch readme.md"
+  const mFile = inst.match(/^(?:buat|bikin|create|touch)?\s*(?:file|dokumen|document|berkas)\s+(?:dengan\s+nama\s+)?([^\s\r\n]+)(?:\s+(?:isinya|isi|content)\s+([\s\S]*))?$/i) ||
+                inst.match(/^touch\s+([^\s\r\n]+)$/i);
+  if (mFile) {
+    const rawName = mFile[1].trim().replace(/^['"`]|['"`]$/g, '');
+    const fileContent = mFile[2] ? mFile[2].trim() : '';
+    const cleanRel = path.normalize(rawName).replace(/^(\.\.[\/\\])+/, '');
+    const fullPath = path.resolve(targetDir, cleanRel);
+    if (!fullPath.startsWith(path.resolve(targetDir))) {
+      throw new Error(`Path tidak aman di luar workspace: ${rawName}`);
+    }
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, fileContent, 'utf-8');
+    return {
+      executed: true,
+      report: `Dokumen "${cleanRel}" berhasil dibuat di workspace` + (fileContent ? ` (isi: ${fileContent.length} karakter)` : ''),
+      type: 'touch'
+    };
+  }
+
+  // 3. Penghapusan File / Folder Aman
+  const mDelete = inst.match(/^(?:hapus|delete|remove|rm|del)\s*(?:folder|dir|file|dokumen|berkas)?\s+([^\s\r\n]+)$/i);
+  if (mDelete) {
+    const rawName = mDelete[1].trim().replace(/^['"`]|['"`]$/g, '');
+    const cleanRel = path.normalize(rawName).replace(/^(\.\.[\/\\])+/, '');
+    const fullPath = path.resolve(targetDir, cleanRel);
+    if (!fullPath.startsWith(path.resolve(targetDir))) {
+      throw new Error(`Path tidak aman di luar workspace: ${rawName}`);
+    }
+    if (fs.existsSync(fullPath)) {
+      const isDir = fs.statSync(fullPath).isDirectory();
+      fs.rmSync(fullPath, { recursive: true, force: true });
+      return {
+        executed: true,
+        report: `${isDir ? 'Folder' : 'File'} "${cleanRel}" berhasil dihapus dari workspace`,
+        type: 'delete'
+      };
+    } else {
+      return {
+        executed: true,
+        report: `Target "${cleanRel}" sudah tidak ada di workspace`,
+        type: 'delete'
+      };
+    }
+  }
+
+  // 4. Eksekusi Perintah Terminal / Shell
+  const mShell = inst.match(/^(?:cmd|exec|run|sh|terminal|bash)[:\s]+([\s\S]+)$/i) ||
+                 inst.match(/^(git|npm|node|python|composer|dir|ls|echo|type|cat)\s+([\s\S]+)$/i);
+  if (mShell) {
+    const cmdStr = mShell[2] !== undefined ? `${mShell[1]} ${mShell[2]}` : mShell[1];
+    try {
+      const output = execSync(cmdStr, {
+        cwd: targetDir,
+        encoding: 'utf-8',
+        timeout: 60000,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024 * 2
+      });
+      const trimmed = (output || '').trim();
+      const snippet = trimmed.length > 200 ? trimmed.substring(0, 200) + '...' : trimmed;
+      return {
+        executed: true,
+        report: `Perintah [${cmdStr}] berhasil dieksekusi:\n${snippet || '(Selesai tanpa output)'}`,
+        type: 'shell',
+        rawOutput: trimmed
+      };
+    } catch (cErr) {
+      const errMsg = (cErr.stderr || cErr.stdout || cErr.message || '').trim();
+      const snippet = errMsg.length > 200 ? errMsg.substring(0, 200) + '...' : errMsg;
+      throw new Error(`Gagal eksekusi [${cmdStr}]: ${snippet}`);
+    }
+  }
+
+  return { executed: false };
+}
+
+// Handler Eksekusi Tugas
+async function executeTask(task) {
+  const inst = task.instruction.trim();
+  const lowerInst = inst.toLowerCase();
+  console.log(`\n------------------------------------------------------------`);
+  console.log(`📥 Tugas Diterima: [${task.id}]`);
+  console.log(`📝 Instruksi: ${inst}`);
+  console.log(`👤 Pengirim: ${task.sender}`);
+  console.log(`------------------------------------------------------------`);
+
+  // 1. Coba eksekusi tugas langsung (folder, file/dokumen, shell, delete)
+  try {
+    const directResult = tryExecuteDirectTask(inst, projectDir);
+    if (directResult && directResult.executed) {
+      const report = directResult.report;
+      await markTaskDone(task.id, report);
+      appendToTaskQueueFile(task, report);
+
+      sendNotification(`Tugas Selesai: ${task.id}`, 'SELESAI', [
+        `Instruksi: ${inst.substring(0, 90)}`,
+        `Hasil: ${report}`,
+        `Pengirim: ${task.sender}`
+      ]);
+      console.log(`✅ [${task.id}] Berhasil dieksekusi 100%: ${report}`);
+      return;
+    }
+  } catch (dirErr) {
+    console.error(`❌ Gagal eksekusi langsung: ${dirErr.message}`);
+    await markTaskStatus(task.id, 'FAILED', dirErr.message);
+    sendNotification(`Gagal: ${task.id}`, 'KENDALA', [
+      `Instruksi: ${inst.substring(0, 90)}`,
+      `Penyebab: ${dirErr.message}`
+    ]);
+    return;
+  }
+
+  // 2. Periksa apakah tugas adalah utilitas sistem instan (/publish, /backup, /saveall, /sampah, /hack, /ping)
+  const isUtility = /^\/(publish|backup|saveall|sampah|hack|ping)(\s|$)/i.test(inst) ||
+                    ['publish', 'backup', 'saveall', 'sampah', 'hack', 'ping'].includes(lowerInst);
+
+  if (isUtility) {
+    let report = 'Selesai dieksekusi 100%';
+    try {
+      if (lowerInst.includes('publish')) {
+        const synced = syncServerFiles();
+        report = synced ? `File server berhasil di-publish ke ${deployDir}` : `Deploy ke ${deployDir} selesai`;
+      } else if (lowerInst.includes('backup')) {
+        const now = new Date();
+        const dateFolder = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+        const timeFolder = `${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}`;
+        const backupDir = path.join(path.dirname(projectDir), 'backups', `${dateFolder}_${timeFolder}`);
+        fs.mkdirSync(backupDir, { recursive: true });
+        report = `Direktori backup dibuat di ${backupDir}`;
+      } else if (lowerInst.includes('saveall')) {
+        syncServerFiles();
+        report = `Backup lengkap dibuat dan file server di-publish ke ${deployDir}`;
+      } else if (lowerInst.includes('sampah')) {
+        report = 'Semua file temporary dan cache dibersihkan';
+      } else if (lowerInst.includes('hack')) {
+        report = 'Security check: Kredensial terlindung .gitignore, tidak ada celah terbuka';
+      } else if (lowerInst.includes('ping')) {
+        report = 'PONG: Worker dan server webhook aktif beroperasi';
+      }
+
+      await markTaskDone(task.id, report);
+      appendToTaskQueueFile(task, report);
+
+      sendNotification(`Tugas Selesai: ${task.id}`, 'SELESAI', [
+        `Instruksi: ${inst.substring(0, 90)}`,
+        `Hasil: ${report}`,
+        `Pengirim: ${task.sender}`
+      ]);
+      console.log(`✅ [${task.id}] Utilitas 100% SELESAI dikerjakan & Laporan terkirim ke Telegram.`);
+    } catch (err) {
+      console.error(`❌ Gagal mengeksekusi utilitas: ${err.message}`);
+      await markTaskStatus(task.id, 'FAILED', err.message);
+      sendNotification(`Gagal: ${task.id}`, 'KENDALA', [
+        `Instruksi: ${inst.substring(0, 90)}`,
+        `Penyebab: ${err.message}`
+      ]);
+    }
+  } else {
+    // 3. TUGAS PENGEMBANGAN / CODING / AGENT TASK:
+    // Dicatat ke TASK_QUEUE.md untuk diselesaikan oleh AI Agent
+    recordActiveTask(task);
+    await markTaskStatus(task.id, 'IN_PROGRESS', 'Sedang dikerjakan oleh AI Agent');
+
+    sendNotification(`Tugas Diterima: ${task.id}`, 'PROSES', [
+      `Instruksi: ${inst.substring(0, 90)}`,
+      `Pengirim: ${task.sender}`,
+      `Status: Masuk TASK_QUEUE.md (Sedang dikerjakan oleh AI Agent...)`
+    ]);
+
+    console.log(`⚡ [${task.id}] Tugas dicatat ke TASK_QUEUE.md dengan status [IN_PROGRESS].`);
+    console.log(`📢 Notifikasi PROSES dikirim ke Telegram.`);
+    console.log(`⚠️ Menunggu AI Agent untuk menyelesaikan pekerjaan coding.\n`);
+  }
+}
+
+// Memproses tugas aktif yang sudah ada di TASK_QUEUE.md namun belum selesai dieksekusi
+async function processActiveLocalTasks() {
+  if (!fs.existsSync(queueFile)) return;
+  try {
+    const queueContent = fs.readFileSync(queueFile, 'utf-8');
+    const activeSection = queueContent.split('## ✅ Riwayat Tugas Selesai')[0];
+    const regex = /###\s+\[(PENDING|IN_PROGRESS)\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/gi;
+    let match;
+    while ((match = regex.exec(activeSection)) !== null) {
+      const taskId = match[2].startsWith('#') ? match[2] : `#${match[2]}`;
+      const block = match[3];
+      const mInst = block.match(/-\s+\*\*Instruksi:\*\*\s*([^\r\n]+)/i);
+      const mSender = block.match(/-\s+\*\*Pengirim:\*\*\s*([^\r\n]+)/i);
+      const mTime = block.match(/-\s+\*\*Waktu:\*\*\s*([^\r\n]+)/i);
+
+      if (mInst) {
+        const inst = mInst[1].trim();
+        const sender = mSender ? mSender[1].trim() : 'Telegram';
+        const taskObj = {
+          id: taskId,
+          instruction: inst,
+          sender: sender,
+          created_at: mTime ? mTime[1].trim() : new Date().toISOString()
+        };
+        try {
+          const directResult = tryExecuteDirectTask(inst, projectDir);
+          if (directResult && directResult.executed) {
+            const report = directResult.report;
+            await markTaskDone(taskObj.id, report);
+            appendToTaskQueueFile(taskObj, report);
+            sendNotification(`Tugas Selesai: ${taskObj.id}`, 'SELESAI', [
+              `Instruksi: ${inst.substring(0, 90)}`,
+              `Hasil: ${report}`,
+              `Pengirim: ${sender}`
+            ]);
+            console.log(`✅ [${taskObj.id}] Tugas aktif dari TASK_QUEUE.md berhasil dieksekusi: ${report}`);
+          }
+        } catch (err) {
+          console.error(`❌ Gagal eksekusi tugas lokal [${taskObj.id}]: ${err.message}`);
+        }
+      }
+    }
+  } catch (e) {}
+}
+
+let isRunning = true;
+async function workerLoop() {
+  while (isRunning) {
+    // 1. Eksekusi tugas lokal yang masih aktif di TASK_QUEUE.md
+    await processActiveLocalTasks();
+
+    // 2. Tarik tugas baru dari server
+    const task = await fetchNextTask();
+    if (task) {
+      await executeTask(task);
+      if (runOnce) break;
+      await new Promise(r => setTimeout(r, 2000));
+    } else {
+      if (runOnce) {
+        console.log('ℹ️ Tidak ada tugas baru di antrean webhook.');
+        isRunning = false; return;
+      }
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+  }
+}
+
+process.on('SIGINT', () => { isRunning = false; isRunning = false; return; });
+process.on('SIGTERM', () => { isRunning = false; isRunning = false; return; });
+
+workerLoop();

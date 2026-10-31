@@ -1,0 +1,213 @@
+{
+  "name": "tele-vs-code",
+  "displayName": "Tele-vs-Code",
+  "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
+  "version": "1.0.0",
+  "publisher": "BiruIndonesiaCreative",
+  "author": {
+    "name": "usmrip",
+    "email": "iam@usm.rip",
+    "url": "https://github.com/usmrip"
+  },
+  "homepage": "https://github.com/usmrip/telegram-vsc-agents#readme",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "icon": "icon.png",
+  "main": "./extension.js",
+  "categories": [
+    "Other",
+    "Programming Languages",
+    "Machine Learning"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Tele-vs-Code",
+      "properties": {
+        "telegramNotifier.folder": {
+          "type": "string",
+          "default": "",
+          "description": "Folder proyek yang dipantau (kosongkan untuk menggunakan workspace saat ini)"
+        },
+        "telegramNotifier.botToken": {
+          "type": "string",
+          "default": "",
+          "description": "Telegram Bot Token / Bot ID"
+        },
+        "telegramNotifier.chatId": {
+          "type": "string",
+          "default": "",
+          "description": "Telegram Group Chat ID (contoh: -0000000000)"
+        },
+        "telegramNotifier.webhookUrl": {
+          "type": "string",
+          "default": "https://biru.co.id/tele-vs-code/webhook",
+          "description": "URL Server Webhook untuk Task Queue (Default: https://biru.co.id/tele-vs-code/webhook)",
+          "markdownDescription": "URL Server Webhook untuk Task Queue (Default: `https://biru.co.id/tele-vs-code/webhook`)"
+        },
+        "telegramNotifier.secretKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Secret Key Webhook. Belum punya API Key? Daftar di https://biru.co.id/tele-vs-code/",
+          "markdownDescription": "API Secret Key Webhook. Belum punya API Key? [Klik di sini untuk mendaftar akun](https://biru.co.id/tele-vs-code/) dan dapatkan API Key Anda."
+        },
+        "telegramNotifier.project": {
+          "type": "string",
+          "default": "",
+          "description": "Project Key unik (format: prj_xxxxxxxxxx) dari https://biru.co.id/tele-vs-code/",
+          "markdownDescription": "Project Key unik (format: `prj_xxxxxxxxxx`) dari dashboard https://biru.co.id/tele-vs-code/."
+        },
+        "telegramNotifier.timezone": {
+          "type": "string",
+          "default": "Asia/Jakarta",
+          "enum": [
+            "Asia/Jakarta",
+            "Asia/Makassar",
+            "Asia/Jayapura",
+            "Asia/Singapore",
+            "Asia/Kuala_Lumpur",
+            "Asia/Bangkok",
+            "UTC",
+            "Asia/Tokyo",
+            "Europe/London",
+            "America/New_York"
+          ],
+          "enumDescriptions": [
+            "WIB (Waktu Indonesia Barat, UTC+7)",
+            "WITA (Waktu Indonesia Tengah, UTC+8)",
+            "WIT (Waktu Indonesia Timur, UTC+9)",
+            "SGT (Singapore Time, UTC+8)",
+            "MYT (Malaysia Time, UTC+8)",
+            "ICT (Indochina Time, UTC+7)",
+            "UTC (Universal Coordinated Time, UTC+0)",
+            "JST (Japan Standard Time, UTC+9)",
+            "GMT/BST (London Time)",
+            "EST/EDT (New York Time)"
+          ],
+          "description": "Zona waktu yang dijadikan acuan untuk waktu notifikasi Telegram",
+          "markdownDescription": "Zona waktu acuan waktu notifikasi (Default: `Asia/Jakarta` - WIB)"
+        },
+        "telegramNotifier.autoPull": {
+          "type": "boolean",
+          "default": true,
+          "description": "Otomatis tarik dan sinkronkan tugas baru dari Telegram/Server di latar belakang",
+          "markdownDescription": "Otomatis memantau antrean tugas di latar belakang dan memasukkan tugas baru ke `TASK_QUEUE.md`."
+        },
+        "telegramNotifier.pullInterval": {
+          "type": "number",
+          "default": 5,
+          "minimum": 2,
+          "maximum": 60,
+          "description": "Interval polling tugas otomatis dalam detik (Default: 5 detik)",
+          "markdownDescription": "Waktu jeda antar pemeriksaan tugas baru di server (Default: `5` detik)."
+        },
+        "telegramNotifier.showToastOnNewTask": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tampilkan notifikasi pop-up di VS Code saat tugas baru dari Telegram masuk"
+        },
+        "telegramNotifier.askOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tanyakan konfirmasi pengaktifan worker otomasi saat membuka ulang VS Code",
+          "markdownDescription": "Menampilkan dialog konfirmasi untuk mengaktifkan worker otomasi saat membuka folder kerja."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "telegramNotifier.quickSetup",
+        "title": "Hubungkan ke Server Biru (API Secret & Project Key)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.sendSuccess",
+        "title": "Kirim Notifikasi: SELESAI (100% Tuntas)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.sendProgress",
+        "title": "Kirim Notifikasi: PROSES (Sedang Dikerjakan)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.sendError",
+        "title": "Kirim Notifikasi: KENDALA (Ada Masalah)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.pullTasks",
+        "title": "Tarik Antrean Tugas Baru dari Webhook",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.openQueue",
+        "title": "Buka File TASK_QUEUE.md",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.openDashboard",
+        "title": "Buka Web Dashboard Task Manager",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.setupSecretKey",
+        "title": "Setup API Secret Key & Webhook (Daftar Akun)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.toggleAutoPull",
+        "title": "Otomatisasi Worker: Aktifkan / Jeda Auto-Pull",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.startCliWorker",
+        "title": "Jalankan Autonomous Worker di Terminal (tele-worker)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.whoami",
+        "title": "Siapa Saya? (Identifikasi Workspace & Server)",
+        "category": "Tele-vs-Code"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "telegram-bridge",
+          "title": "Telegram Tasks",
+          "icon": "$(bell)"
+        }
+      ]
+    },
+    "views": {
+      "telegram-bridge": [
+        {
+          "id": "telegramNotifier.taskView",
+          "name": "Antrean Tugas (Task Queue)"
+        }
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/usmrip/telegram-vsc-agents.git"
+  },
+  "bugs": {
+    "url": "https://github.com/usmrip/telegram-vsc-agents/issues"
+  },
+  "keywords": [
+    "telegram",
+    "vscode",
+    "agent",
+    "ai-agent",
+    "antigravity",
+    "task-queue",
+    "automation",
+    "remote-control",
+    "dev-notifier"
+  ]
+}
