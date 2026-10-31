@@ -3,10 +3,12 @@
 > **Telegram sebagai pesuruh VS Code dari mana aja**  
 > Delegasikan instruksi, kontrol otomatisasi coding AI Agent, dan pantau hasil pekerjaan di Visual Studio Code secara langsung melalui aplikasi Telegram Anda di HP/Laptop kapan saja dan di mana saja.
 
+[![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-BiruIndonesiaCreative.tele--vs--code-007acc?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code)
 [![GitHub Repo](https://img.shields.io/badge/GitHub-usmrip%2Ftelegram--vsc--agents-blue?logo=github)](https://github.com/usmrip/telegram-vsc-agents)
-[![VS Code Extension](https://img.shields.io/badge/VS%20Code-tele--vs--code-007acc?logo=visualstudiocode)](https://marketplace.visualstudio.com/)
 [![Dashboard Server](https://img.shields.io/badge/Server-biru.co.id%2Ftele--vs--code-success)](https://biru.co.id/tele-vs-code/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+📌 **Marketplace:** [https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code](https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code)
 
 ---
 
@@ -26,7 +28,11 @@ Bayangkan Anda sedang di luar rumah, di jalan, atau sedang bersantai, dan Anda i
 
 ## 📥 Panduan Instalasi Ekstensi
 
-### Cara 1: Menggunakan Git Clone & Installer Otomatis
+### Cara 1: Langsung dari Visual Studio Marketplace (Resmi & Paling Mudah)
+- Buka tautan resmi: **[https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code](https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code)** lalu klik **Install**.
+- Atau di panel Extensions VS Code (`Ctrl + Shift + X`), cari `tele-vs-code` oleh `BiruIndonesiaCreative` lalu klik **Install**.
+
+### Cara 2: Menggunakan Git Clone & Installer Otomatis
 ```bash
 # Clone repositori
 git clone https://github.com/usmrip/telegram-vsc-agents.git
@@ -40,7 +46,7 @@ install-vsix.cmd
 code --install-extension tele-vs-code-1.0.0.vsix --force
 ```
 
-### Cara 2: Melalui UI Visual Studio Code
+### Cara 3: Melalui UI Visual Studio Code (.VSIX)
 1. Unduh paket `tele-vs-code-1.0.0.vsix` dari [GitHub Releases](https://github.com/usmrip/telegram-vsc-agents/releases) atau portal [https://biru.co.id/tele-vs-code/](https://biru.co.id/tele-vs-code/).
 2. Buka Visual Studio Code.
 3. Buka panel **Extensions** (`Ctrl + Shift + X`).
@@ -88,7 +94,7 @@ telegram-vsc-agents/
 │       ├── tele-worker.js     # Autonomous background task executor
 │       ├── tele-notify.js     # CLI notifikasi Telegram
 │       └── tele-task.js       # CLI manajemen status antrean
-├── TASK_QUEUE.md              # File antrean tugas AI Agent
+├── TASK_QUEUE.md              # File antrean tugas AI Agent (di-ignore oleh git)
 ├── tele-vs-code-1.0.0.vsix    # Paket instalasi ekstensi VS Code
 ├── vscode-extension/          # Source code ekstensi VS Code
 │   ├── extension.js
