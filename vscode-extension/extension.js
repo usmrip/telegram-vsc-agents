@@ -851,6 +851,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     } else {
       // Jika sudah valid: Tampilkan seluruh menu lengkap
       menuItems = [
+        { label: '$(add) Tambah Tugas Baru / Kirim Perintah ke Antrean', description: 'Kirim tugas ke antrean TASK_QUEUE.md & notifikasi Telegram', cmd: 'telegramNotifier.addTask' },
         { label: '$(account) Siapa Saya? (Identifikasi Workspace)', description: `Folder: ${cur.folder} -> [${resolved.name}] (#${resolved.code})`, cmd: 'telegramNotifier.whoami' },
         { label: isWorkerActive ? '$(debug-pause) Jeda Worker Otomatis (Auto-Pull)' : '$(play) Aktifkan Worker Otomatis (Auto-Pull)', description: isWorkerActive ? `Sedang aktif memantau server setiap ${cur.pullInterval}s` : 'Mulai memantau tugas masuk dari server secara otomatis', cmd: 'telegramNotifier.toggleAutoPull' },
         { label: '$(cloud-download) Tarik Antrean Sekarang (Manual Pull)', description: 'Sinkronisasi instan task dari server webhook ke TASK_QUEUE.md', cmd: 'telegramNotifier.pullTasks' },
@@ -1187,6 +1188,34 @@ TIMEZONE="${matchedProject.timezone || 'Asia/Jakarta'}"
       taskProvider.refresh();
     } catch (err) {
       vscode.window.showErrorMessage(`❌ ${err.message}`);
+    }
+  }));
+
+  // 8b. Tambah Tugas Baru dari IDE ke TASK_QUEUE & Telegram
+  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.addTask', async () => {
+    const cur = getEffectiveConfig();
+    const inst = await vscode.window.showInputBox({
+      title: '➕ Tambah Tugas Baru / Kirim Perintah ke Antrean',
+      prompt: 'Masukkan instruksi tugas atau perintah untuk AI Agent:',
+      placeHolder: 'Contoh: Buatkan modul autentikasi atau perbaiki bug...'
+    });
+    if (!inst || !inst.trim()) return;
+
+    try {
+      const candidates = [
+        path.join(cur.folder, '.vscode', 'tele-vs-code', 'tele-task.js'),
+        path.join(cur.folder, 'tele-task.js')
+      ];
+      const taskJs = candidates.find(p => fs.existsSync(p));
+      if (taskJs) {
+        execSync(`node "${taskJs}" add "${inst.trim().replace(/"/g, '\\"')}" --sender "VS Code IDE" --status IN_PROGRESS`, { cwd: cur.folder, stdio: 'inherit' });
+        vscode.window.showInformationMessage(`✅ Tugas berhasil ditambahkan ke antrean & notifikasi Telegram terkirim!`);
+        taskProvider.refresh();
+      } else {
+        vscode.window.showErrorMessage('❌ Skrip tele-task.js tidak ditemukan di folder workspace.');
+      }
+    } catch (e) {
+      vscode.window.showErrorMessage(`❌ Gagal menambah tugas: ${e.message}`);
     }
   }));
 

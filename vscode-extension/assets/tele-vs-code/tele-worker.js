@@ -181,10 +181,19 @@ async function markTaskDone(taskId, notes = 'Selesai dikerjakan 100%') {
   return markTaskStatus(taskId, 'DONE', notes);
 }
 
+function getNotifyScript() {
+  const candidates = [
+    path.join(__dirname, 'tele-notify.js'),
+    path.join(projectDir, '.vscode', 'tele-vs-code', 'tele-notify.js'),
+    path.join(projectDir, 'tele-notify.js')
+  ];
+  return candidates.find(p => fs.existsSync(p)) || null;
+}
+
 function sendNotification(title, status, details = []) {
   try {
-    const notifyJs = path.join(projectDir, 'tele-notify.js');
-    if (fs.existsSync(notifyJs)) {
+    const notifyJs = getNotifyScript();
+    if (notifyJs) {
       const args = [notifyJs, title, status, ...details].map(a => `"${String(a).replace(/"/g, '\\"')}"`).join(' ');
       execSync(`node ${args}`, { cwd: projectDir, stdio: 'inherit' });
     }

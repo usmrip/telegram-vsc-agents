@@ -2,7 +2,7 @@
   "name": "tele-vs-code",
   "displayName": "Tele-vs-Code",
   "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "publisher": "BiruIndonesiaCreative",
   "author": {
     "name": "usmrip",
@@ -130,6 +130,11 @@
       }
     },
     "commands": [
+      {
+        "command": "telegramNotifier.addTask",
+        "title": "Tambah Tugas Baru / Kirim Perintah ke Antrean & Telegram",
+        "category": "Tele-vs-Code"
+      },
       {
         "command": "telegramNotifier.quickSetup",
         "title": "Hubungkan ke Server Biru (API Secret & Project Key)",

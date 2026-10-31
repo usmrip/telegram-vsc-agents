@@ -84,20 +84,45 @@ for (let i = 1; i < args.length; i++) {
 const normalizedUrl = webhookUrl.endsWith('/') ? webhookUrl : `${webhookUrl}/`;
 const queueFile = path.join(cwd, 'TASK_QUEUE.md');
 
+function getNotifyScript() {
+  const candidates = [
+    path.join(__dirname, 'tele-notify.js'),
+    path.join(cwd, '.vscode', 'tele-vs-code', 'tele-notify.js'),
+    path.join(cwd, 'tele-notify.js')
+  ];
+  return candidates.find(p => fs.existsSync(p)) || null;
+}
+
 function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', attachmentUrl = '', attachmentType = '', attachmentName = '') {
   try {
     if (!fs.existsSync(queueFile)) {
-      fs.writeFileSync(queueFile, '# TASK QUEUE\n\n## ⏳ Tugas Aktif\n\n## ✅ Riwayat Tugas Selesai\n', 'utf-8');
+      fs.writeFileSync(queueFile, '# 📋 TASK QUEUE (Antrean Tugas Agent)\n\n## ⏳ Tugas Aktif\n\n## ✅ Riwayat Tugas Selesai\n', 'utf-8');
     }
     let content = fs.readFileSync(queueFile, 'utf-8');
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
     if (status === 'DONE' || status === 'FAILED') {
-      // Hapus dari tugas aktif
-      const regexActive = new RegExp(`### \\[(PENDING|IN_PROGRESS)\\]\\s+${taskId}[\\s\\S]*?(?=(###|##|$))`, 'g');
+      let finalInstruction = instruction;
+      let finalSender = sender;
+
+      // Ambil instruksi dan pengirim dari blok aktif jika parameter kosong
+      const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const regexActive = new RegExp(`### \\[(PENDING|IN_PROGRESS)\\]\\s+${escapedId}[\\s\\S]*?(?=(###|##|$))`, 'g');
+      const match = content.match(regexActive);
+      if (match && match[0]) {
+        if (!finalInstruction) {
+          const mInst = match[0].match(/- \*\*Instruksi:\*\*\s*(.+)/);
+          if (mInst) finalInstruction = mInst[1].trim();
+        }
+        if (!finalSender || finalSender === 'IDE Chat') {
+          const mSend = match[0].match(/- \*\*Pengirim:\*\*\s*(.+)/);
+          if (mSend) finalSender = mSend[1].trim();
+        }
+      }
       content = content.replace(regexActive, '');
 
-      const doneBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${sender}\n- **Instruksi:** ${instruction.replace(/\r?\n/g, ' ')}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
+      const cleanInstruction = (finalInstruction || 'Perintah dari IDE Chat').replace(/\r?\n/g, ' ');
+      const doneBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${finalSender || 'IDE Chat'}\n- **Instruksi:** ${cleanInstruction}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
       const doneMarker = '## ✅ Riwayat Tugas Selesai';
       if (content.includes(doneMarker)) {
         content = content.replace(doneMarker, `${doneMarker}\n\n${doneBlock}`);
@@ -154,6 +179,16 @@ async function run() {
       if (data.ok) {
         console.log(`✅ [${data.id}] Berhasil dicatat ke Dashboard Status Server (${status}).`);
         updateLocalQueueFile(data.id, instruction, sender, status, notes);
+
+        // Kirim notifikasi ke Telegram bahwa tugas dari IDE Chat sedang diproses
+        const notifyJs = getNotifyScript();
+        if (notifyJs) {
+          try {
+            const shortInst = instruction.length > 80 ? (instruction.substring(0, 77) + '...') : instruction;
+            const statArg = status === 'IN_PROGRESS' ? 'PROSES' : (status === 'DONE' ? 'SELESAI' : 'INFO');
+            execSync(`node "${notifyJs}" "Tugas IDE: ${shortInst.replace(/"/g, '\\"')}" --status ${statArg} --detail "Instruksi: ${instruction.replace(/"/g, '\\"')}" --detail "Pengirim: ${sender}" --detail "ID: ${data.id}"`, { stdio: 'inherit' });
+          } catch (e) {}
+        }
       } else {
         console.error(`❌ Gagal mencatat ke server: ${data.error || 'Unknown error'}`);
       }
@@ -231,10 +266,12 @@ async function run() {
         updateLocalQueueFile(taskId, '', 'IDE Chat', command.toUpperCase(), report);
 
         // Kirim laporan ke Telegram via tele-notify
-        const notifyJs = path.join(cwd, 'tele-notify.js');
-        if (fs.existsSync(notifyJs)) {
-          const statArg = command === 'done' ? 'SELESAI' : 'KENDALA';
-          execSync(`node "${notifyJs}" "Tugas: ${taskId}" --status ${statArg} --detail "${report}"`, { stdio: 'inherit' });
+        const notifyJs = getNotifyScript();
+        if (notifyJs) {
+          try {
+            const statArg = command === 'done' ? 'SELESAI' : 'KENDALA';
+            execSync(`node "${notifyJs}" "Tugas: ${taskId}" --status ${statArg} --detail "${report.replace(/"/g, '\\"')}"`, { stdio: 'inherit' });
+          } catch (e) {}
         }
       } else {
         console.error(`❌ Gagal update server: ${data.error}`);
