@@ -67,9 +67,9 @@ jobs:
           cd vscode-extension
           if [ -n "$VSCE_PAT" ]; then
             echo "🔑 Menggunakan Token PAT dari GitHub Secrets..."
-            npx @vscode/vsce publish -p "$VSCE_PAT" --allow-missing-repository
+            npx @vscode/vsce publish --packagePath tele-vs-code-*.vsix -p "$VSCE_PAT"
           else
             echo "🛡️ Menggunakan OIDC Trusted Publishing Microsoft..."
-            npx @vscode/vsce publish --use-trusted-publishing --allow-missing-repository
+            npx @vscode/vsce publish --packagePath tele-vs-code-*.vsix --oidc
           fi
 
