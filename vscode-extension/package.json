@@ -209,5 +209,8 @@
     "automation",
     "remote-control",
     "dev-notifier"
-  ]
+  ],
+  "devDependencies": {
+    "@vscode/vsce": "^4.1.0"
+  }
 }

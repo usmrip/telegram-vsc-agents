@@ -65,11 +65,19 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           cd vscode-extension
+          VSIX_FILE=$(node -p "const p = require('./package.json'); p.name + '-' + p.version + '.vsix'")
+          echo "📦 Menyiapkan publikasi berkas: $VSIX_FILE"
+          if [ ! -f "$VSIX_FILE" ]; then
+            echo "❌ Berkas $VSIX_FILE tidak ditemukan di folder vscode-extension!"
+            ls -la
+            exit 1
+          fi
+
           if [ -n "$VSCE_PAT" ]; then
             echo "🔑 Menggunakan Token PAT dari GitHub Secrets..."
-            npx @vscode/vsce publish --packagePath tele-vs-code-*.vsix -p "$VSCE_PAT"
+            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" -p "$VSCE_PAT"
           else
             echo "🛡️ Menggunakan OIDC Trusted Publishing Microsoft..."
-            npx @vscode/vsce publish --packagePath tele-vs-code-*.vsix --oidc
+            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" --oidc
           fi
 
