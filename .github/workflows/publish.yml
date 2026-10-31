@@ -72,3 +72,4 @@ jobs:
             echo "🛡️ Menggunakan OIDC Trusted Publishing Microsoft..."
             npx @vscode/vsce publish --use-trusted-publishing --allow-missing-repository
           fi
+
