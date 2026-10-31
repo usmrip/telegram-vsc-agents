@@ -75,9 +75,9 @@ jobs:
 
           if [ -n "$VSCE_PAT" ]; then
             echo "🔑 Menggunakan Token PAT dari GitHub Secrets..."
-            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" -p "$VSCE_PAT"
+            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" -p "$VSCE_PAT" --skip-duplicate
           else
             echo "🛡️ Menggunakan OIDC Trusted Publishing Microsoft..."
-            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" --oidc
+            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" --oidc --skip-duplicate
           fi
 
