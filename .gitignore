@@ -21,6 +21,8 @@ data/
 *.tmp
 *.log
 *.local
+backups/
+*.zip
 
 # System & Editor
 .vscode/
