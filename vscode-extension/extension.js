@@ -39,11 +39,20 @@ function getEffectiveConfig() {
     : process.cwd();
 
   const vsConfig = vscode.workspace.getConfiguration('telegramNotifier');
+  const configuredFolder = vsConfig.get('folder');
+  let folder = wsFolder;
+  if (configuredFolder && typeof configuredFolder === 'string' && configuredFolder.trim()) {
+    const trimmed = configuredFolder.trim();
+    if (fs.existsSync(trimmed)) {
+      folder = trimmed;
+    }
+  }
+
   const homeDir = os.homedir();
   const globalConf = path.join(homeDir, '.config', 'tele-notify', 'config.env');
-  const vscodeConf = path.join(wsFolder, '.vscode', 'tele-vs-code', 'config.env');
-  const localConf = path.join(wsFolder, 'config.env');
-  const localEnv = path.join(wsFolder, '.env');
+  const vscodeConf = path.join(folder, '.vscode', 'tele-vs-code', 'config.env');
+  const localConf = path.join(folder, 'config.env');
+  const localEnv = path.join(folder, '.env');
 
   const cfgGlobal = parseEnvFile(globalConf);
   const cfgVscode = parseEnvFile(vscodeConf);
@@ -51,20 +60,20 @@ function getEffectiveConfig() {
   const cfgEnv = parseEnvFile(localEnv);
 
   // PRIORITAS: .vscode/tele-vs-code/config.env > config.env lokal > .env lokal > VS Code Setting > global
-  const folder = wsFolder;
   const project = cfgVscode.AGENTS_TELE_PROJECT || cfgLocal.AGENTS_TELE_PROJECT || cfgEnv.AGENTS_TELE_PROJECT || vsConfig.get('project') || cfgGlobal.AGENTS_TELE_PROJECT || '';
   const secretKey = cfgVscode.AGENTS_TELE_SECRET || cfgLocal.AGENTS_TELE_SECRET || cfgEnv.AGENTS_TELE_SECRET || vsConfig.get('secretKey') || cfgGlobal.AGENTS_TELE_SECRET || '';
   const webhookUrl = cfgVscode.AGENTS_TELE_WEBHOOK_URL || cfgLocal.AGENTS_TELE_WEBHOOK_URL || cfgEnv.AGENTS_TELE_WEBHOOK_URL || vsConfig.get('webhookUrl') || 'https://biru.co.id/tele-vs-code/webhook';
   const timezone = cfgVscode.TIMEZONE || cfgLocal.TIMEZONE || cfgEnv.TIMEZONE || vsConfig.get('timezone') || 'Asia/Jakarta';
-  const autoPull = vsConfig.get('autoPull') === true;
-  const askOnStartup = vsConfig.get('askOnStartup') !== false;
-  const pullInterval = Math.max(2, Math.min(60, vsConfig.get('pullInterval') || 5));
+  const autoPull = vsConfig.get('autoPull') !== false;
+  const askOnStartup = vsConfig.get('askOnStartup') === true;
+  const pullInterval = Math.max(1, Math.min(60, vsConfig.get('pullInterval') || 2));
   const showToastOnNewTask = vsConfig.get('showToastOnNewTask') !== false;
+  const autoExecuteSimpleTasks = vsConfig.get('autoExecuteSimpleTasks') === true;
 
   const botToken = cfgVscode.TELEGRAM_BOT_TOKEN || cfgLocal.TELEGRAM_BOT_TOKEN || cfgEnv.TELEGRAM_BOT_TOKEN || vsConfig.get('botToken') || cfgGlobal.TELEGRAM_BOT_TOKEN || '';
   const chatId = cfgVscode.TELEGRAM_CHAT_ID || cfgLocal.TELEGRAM_CHAT_ID || cfgEnv.TELEGRAM_CHAT_ID || vsConfig.get('chatId') || cfgGlobal.TELEGRAM_CHAT_ID || '';
 
-  return { folder, botToken, chatId, webhookUrl, secretKey, timezone, project, wsFolder, autoPull, askOnStartup, pullInterval, showToastOnNewTask, vscodeConf };
+  return { folder, botToken, chatId, webhookUrl, secretKey, timezone, project, wsFolder, autoPull, askOnStartup, pullInterval, showToastOnNewTask, autoExecuteSimpleTasks, vscodeConf };
 }
 
 // ------------------------------------------------------------------------------
@@ -124,36 +133,44 @@ function ensureWorkspaceTools(context, wsFolder) {
     } catch (e) {}
   }
 
-  // 4. Pastikan aturan AI Agent (AGENTS.md, CLAUDE.md, .cursorrules) ada agar AI di IDE Chat otomatis lapor ke Telegram & TASK_QUEUE
-  const agentRuleTpl = `## NOTIFIKASI TELEGRAM & PENCATATAN TASK QUEUE (Tele-vs-Code)
-Setiap kali Anda menerima perintah atau instruksi baru dari USER di IDE Chat ini:
+  // 4. Pastikan aturan AI Agent (AGENTS.md, CLAUDE.md, GEMINI.md, .cursorrules) ada agar AI di IDE Chat otomatis mengeksekusi TASK_QUEUE & lapor ke Telegram
+  const agentRuleTpl = `# 🤖 PANDUAN KERJA OTOMATIS AI AGENT (Tele-vs-Code)
 
-1. **Catat Perintah ke Dashboard & TASK_QUEUE.md:**
-   Jalankan perintah terminal:
-   node .vscode/tele-vs-code/tele-task.js add "<Perintah User>" --sender "IDE Chat" --status IN_PROGRESS
-   *(Perintah ini otomatis mencatat tugas ke server, memperbarui TASK_QUEUE.md, dan mengirim notifikasi PROSES ke Telegram).*
+## ⚡ 1. MANDATORY TRIGGER: EKSEKUSI OTOMATIS ANTREAN TUGAS (TASK_QUEUE.md)
+Setiap kali Anda menerima giliran bicara, prompt, atau instruksi apapun dari USER di IDE Chat ini:
 
-2. **Kerjakan Tugas:**
-   Kerjakan tugas sesuai instruksi hingga tuntas 100% dan terverifikasi.
+1. **LANGKAH 1 (PRIORITAS UTAMA - PERIKSA TASK_QUEUE.md):**
+   - Periksa file \`TASK_QUEUE.md\` di root proyek.
+   - Jika terdapat tugas berstatus \`[PENDING]\` atau \`[IN_PROGRESS]\` (terutama tugas masuk dari Telegram):
+     👉 **ANDA WAJIB OTOMATIS MENGEKSEKUSI TUGAS TERSEBUT SAMPAI SELESAI 100%!**
+     - Ubah status menjadi \`[IN_PROGRESS]\` saat mulai dikerjakan.
+     - Kerjakan instruksinya dan uji verifikasi hingga tuntas.
+     - Setelah selesai 100%, tandai selesai menggunakan perintah:
+       node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"
+     - Selesaikan antrean berurutan satu per satu.
 
-3. **Tandai Selesai & Lapor ke Telegram:**
-   Setelah BENAR-BENAR SELESAI 100%:
-   node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"
-   *(Perintah ini otomatis mengupdate status server ke DONE, mencatat riwayat di TASK_QUEUE.md, dan mengirim notifikasi SELESAI ke Telegram).*
+2. **LANGKAH 2 (PENCATATAN PERINTAH BARU):**
+   - Jika antrean kosong/sudah selesai dan user memberikan perintah baru:
+     node .vscode/tele-vs-code/tele-task.js add "<Perintah User>" --sender "IDE Chat" --status IN_PROGRESS
+   - Kerjakan tugas hingga tuntas 100%, lalu tandai selesai dengan:
+     node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"
 
-4. **Jika Menemukan Kendala Error yang Memblokir:**
-   node .vscode/tele-vs-code/tele-notify.js "<Judul Kendala>" --status KENDALA --detail "<Penyebab kendala>"
+3. **KATA KUNCI PEMICU INSTAN:**
+   Jika user mengetik: \`proses antrian\`, \`kerjakan queue\`, \`next task\`, \`/queue\`, atau \`lanjutkan\`:
+   👉 Langsung baca \`TASK_QUEUE.md\` dan selesaikan tugas berikutnya tanpa menunggu konfirmasi!
 
-> ⚠️ **ATURAN MUTLAK:** JANGAN PERNAH mengirimkan status \`SELESAI\` saat tugas baru dimulai atau sedang dikerjakan. Status \`SELESAI\` HANYA untuk pekerjaan yang sudah 100% tuntas dan teruji.
+## 📢 2. NOTIFIKASI TELEGRAM
+- **Jika Sukses (100% selesai & teruji):**
+  node .vscode/tele-vs-code/tele-notify.js "<Judul Tugas>" --status SELESAI --detail "<Rincian 1>" --detail "<Rincian 2>"
+- **Jika Sedang Dikerjakan:**
+  node .vscode/tele-vs-code/tele-notify.js "<Judul Tugas>" --status PROSES --detail "<Status>"
+- **Jika Ada Kendala Error:**
+  node .vscode/tele-vs-code/tele-notify.js "<Judul Kendala>" --status KENDALA --detail "<Penyebab>"
 
-## ANTREAN TUGAS TELEGRAM (TASK_QUEUE.md)
-Jika terdapat tugas di TASK_QUEUE.md dengan status [PENDING] atau [IN_PROGRESS]:
-1. Kerjakan tugas sesuai instruksi sampai selesai dan teruji.
-2. Tandai selesai dengan:
-   node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"
+> ⚠️ **ATURAN MUTLAK:** JANGAN PERNAH mengirimkan status \`SELESAI\` sebelum tugas benar-benar 100% tuntas dan teruji.
 `;
 
-  const targetRuleFiles = ['AGENTS.md', 'CLAUDE.md', '.cursorrules'];
+  const targetRuleFiles = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.cursorrules'];
   for (const rf of targetRuleFiles) {
     const rPath = path.join(wsFolder, rf);
     if (!fs.existsSync(rPath)) {
@@ -471,6 +488,23 @@ function activate(context) {
     const cur = getEffectiveConfig();
     ensureWorkspaceTools(context, cur.folder);
     updateStatusBar();
+    taskProvider.refresh();
+  }));
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration('telegramNotifier')) {
+      const cur = getEffectiveConfig();
+      ensureWorkspaceTools(context, cur.folder);
+      updateStatusBar();
+      taskProvider.refresh();
+      if (cur.autoPull && !isWorkerActive) {
+        startAutoWorker();
+      }
+    }
+  }));
+  context.subscriptions.push(vscode.window.onDidChangeWindowState(state => {
+    if (state.focused) {
+      pullTaskQueue(true);
+    }
   }));
 
 // Autonomous Task Execution Engine for VS Code Extension
@@ -674,8 +708,10 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
       return;
     }
 
-    // 1. Eksekusi terlebih dahulu tugas lokal yang masih aktif di TASK_QUEUE.md
-    await processActiveLocalTasks(cur);
+    // 1. Eksekusi terlebih dahulu tugas lokal yang masih aktif di TASK_QUEUE.md (jika autoExecuteSimpleTasks aktif)
+    if (cur.autoExecuteSimpleTasks) {
+      await processActiveLocalTasks(cur);
+    }
 
     const operator = `${os.userInfo().username}@${os.hostname()}`;
     let url = `${cur.webhookUrl.replace(/\/?$/, '/')}?action=pull&secret=${cur.secretKey}&limit=5&format=json&mark=1&workspace_folder=${encodeURIComponent(cur.folder)}&workspace_name=${encodeURIComponent(path.basename(cur.folder))}&operator=${encodeURIComponent(operator)}`;
@@ -730,43 +766,56 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
           }
           fs.writeFileSync(queueFile, content, 'utf-8');
 
-          // EKSEKUTOR OTOMATIS: Coba jalankan instruksi langsung (folder, file, dokumen, shell)
-          try {
-            const execRes = tryExecuteDirectTask(t.instruction, cur.folder);
-            if (execRes && execRes.executed) {
-              const rep = execRes.report;
-              await markServerTaskDone(cur, t.id, rep);
-              appendDoneToTaskQueueFile(queueFile, t, rep);
-              content = fs.readFileSync(queueFile, 'utf-8');
+          // EKSEKUTOR OTOMATIS: Hanya jika diaktifkan (default: false agar tugas tetap di TASK_QUEUE untuk AI Agent)
+          if (cur.autoExecuteSimpleTasks) {
+            try {
+              const execRes = tryExecuteDirectTask(t.instruction, cur.folder);
+              if (execRes && execRes.executed) {
+                const rep = execRes.report;
+                await markServerTaskDone(cur, t.id, rep);
+                appendDoneToTaskQueueFile(queueFile, t, rep);
+                content = fs.readFileSync(queueFile, 'utf-8');
 
+                try {
+                  await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${t.id}`, 'SELESAI', [
+                    `Instruksi: ${t.instruction.substring(0, 90)}`,
+                    `Hasil: ${rep}`,
+                    `Pengirim: ${t.sender}`
+                  ], cur.project, cur.timezone);
+                } catch (nErr) {}
+
+                vscode.window.showInformationMessage(`✅ Tugas [${t.id}] berhasil dieksekusi: ${rep}`);
+                continue;
+              }
+            } catch (execErr) {
+              await markServerTaskFailed(cur, t.id, execErr.message);
               try {
-                await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${t.id}`, 'SELESAI', [
+                await sendTelegramMessage(cur.botToken, cur.chatId, `Gagal: ${t.id}`, 'KENDALA', [
                   `Instruksi: ${t.instruction.substring(0, 90)}`,
-                  `Hasil: ${rep}`,
-                  `Pengirim: ${t.sender}`
+                  `Penyebab: ${execErr.message}`
                 ], cur.project, cur.timezone);
               } catch (nErr) {}
-
-              vscode.window.showInformationMessage(`✅ Tugas [${t.id}] berhasil dieksekusi: ${rep}`);
+              vscode.window.showErrorMessage(`❌ Gagal mengeksekusi tugas [${t.id}]: ${execErr.message}`);
               continue;
             }
-          } catch (execErr) {
-            await markServerTaskFailed(cur, t.id, execErr.message);
-            try {
-              await sendTelegramMessage(cur.botToken, cur.chatId, `Gagal: ${t.id}`, 'KENDALA', [
-                `Instruksi: ${t.instruction.substring(0, 90)}`,
-                `Penyebab: ${execErr.message}`
-              ], cur.project, cur.timezone);
-            } catch (nErr) {}
-            vscode.window.showErrorMessage(`❌ Gagal mengeksekusi tugas [${t.id}]: ${execErr.message}`);
-            continue;
           }
 
-          // Jika bukan tugas eksekusi langsung, beri tahu user bahwa tugas coding masuk antrean
+          // Beri tahu user bahwa tugas baru masuk antrean dengan aksi eksekusi langsung ke AI Chat
           if (!silent || cur.showToastOnNewTask) {
             const instBrief = t.instruction ? (t.instruction.length > 55 ? t.instruction.substring(0, 55) + '...' : t.instruction) : '';
-            vscode.window.showInformationMessage(`📥 Tugas baru dari Telegram [${t.id}]: "${instBrief}" (Menunggu AI Agent)`, 'Buka TASK_QUEUE.md').then(act => {
-              if (act === 'Buka TASK_QUEUE.md') {
+            vscode.window.showInformationMessage(
+              `📥 Tugas baru dari Telegram [${t.id}]: "${instBrief}"`,
+              '🚀 Kerjakan dengan AI Agent',
+              '📋 Buka TASK_QUEUE.md'
+            ).then(async act => {
+              if (act === '🚀 Kerjakan dengan AI Agent') {
+                const prompt = `Periksa file TASK_QUEUE.md dan selesaikan tugas ${t.id} ("${t.instruction}") sampai tuntas 100% sesuai AGENTS.md.`;
+                await vscode.env.clipboard.writeText(prompt);
+                try {
+                  await vscode.commands.executeCommand('workbench.action.chat.open');
+                } catch (cErr) {}
+                vscode.window.showInformationMessage(`📋 Prompt tugas [${t.id}] telah disalin ke clipboard! Tempelkan (Ctrl+V) di chat AI untuk mulai mengeksekusi.`);
+              } else if (act === '📋 Buka TASK_QUEUE.md') {
                 vscode.commands.executeCommand('telegramNotifier.openQueue');
               }
             });
@@ -797,7 +846,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     if (!cur.secretKey) return;
 
     isWorkerActive = true;
-    setTimeout(() => pullTaskQueue(true), 1000);
+    setTimeout(() => pullTaskQueue(true), 300);
     autoPullTimer = setInterval(() => {
       pullTaskQueue(true);
     }, cur.pullInterval * 1000);
@@ -883,8 +932,14 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
 
     let menuItems = [];
     if (!isConfigValid) {
-      // Jika API Secret dan Project Key belum valid: HANYA tampilkan Hubungkan ke Server Biru, lainnya sembunyikan
+      // Jika API Secret dan Project Key belum valid: tampilkan Folder Workspace dan Hubungkan ke Server Biru
       menuItems = [
+        {
+          label: `$(folder) Folder Workspace: ${path.basename(cur.folder)}`,
+          description: cur.folder,
+          detail: 'Working directory tempat AGENTS.md & TASK_QUEUE.md dikelola. Klik untuk ubah folder.',
+          cmd: 'telegramNotifier.setFolder'
+        },
         {
           label: '$(gear) Hubungkan ke Server Biru (Setup Wizard)',
           description: 'Atur API Secret Key & pilih proyek dari server Biru',
@@ -893,13 +948,21 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
         }
       ];
     } else {
-      // Jika sudah valid: Tampilkan seluruh menu lengkap
+      // Jika sudah valid: Tampilkan seluruh menu lengkap dengan Folder Workspace di posisi paling atas
       menuItems = [
+        {
+          label: `$(folder) Folder Workspace: ${path.basename(cur.folder)}`,
+          description: cur.folder,
+          detail: 'Working directory tempat AGENTS.md, CLAUDE.md, & TASK_QUEUE.md dikelola. Klik untuk ubah folder.',
+          cmd: 'telegramNotifier.setFolder'
+        },
+        { label: '$(play-circle) Kerjakan Antrean Tugas Berikutnya (Kirim ke Chat AI)', description: 'Salin instruksi tugas aktif di TASK_QUEUE & buka chat AI', cmd: 'telegramNotifier.runNextTask' },
         { label: '$(add) Tambah Tugas Baru / Kirim Perintah ke Antrean', description: 'Kirim tugas ke antrean TASK_QUEUE.md & notifikasi Telegram', cmd: 'telegramNotifier.addTask' },
         { label: '$(account) Siapa Saya? (Identifikasi Workspace)', description: `Folder: ${cur.folder} -> [${resolved.name}] (#${resolved.code})`, cmd: 'telegramNotifier.whoami' },
         { label: isWorkerActive ? '$(debug-pause) Jeda Worker Otomatis (Auto-Pull)' : '$(play) Aktifkan Worker Otomatis (Auto-Pull)', description: isWorkerActive ? `Sedang aktif memantau server setiap ${cur.pullInterval}s` : 'Mulai memantau tugas masuk dari server secara otomatis', cmd: 'telegramNotifier.toggleAutoPull' },
         { label: '$(cloud-download) Tarik Antrean Sekarang (Manual Pull)', description: 'Sinkronisasi instan task dari server webhook ke TASK_QUEUE.md', cmd: 'telegramNotifier.pullTasks' },
         { label: '$(gear) Hubungkan ke Server Biru (Setup Wizard)', description: 'Atur ulang API Secret Key & pilih proyek dari server Biru', cmd: 'telegramNotifier.quickSetup' },
+        { label: '$(folder-opened) Ubah Working Directory / Folder Workspace', description: 'Pilih folder kerja lain tempat AGENTS.md & TASK_QUEUE.md berada', cmd: 'telegramNotifier.setFolder' },
         { label: '$(terminal) Jalankan Autonomous CLI Worker di Terminal', description: 'Buka terminal tele-worker untuk eksekusi skrip mandiri', cmd: 'telegramNotifier.startCliWorker' },
         { label: '$(file-text) Buka TASK_QUEUE.md', description: 'Lihat daftar tugas antrean dan riwayat selesai', cmd: 'telegramNotifier.openQueue' },
         { label: '$(check) Kirim Notifikasi: SELESAI', description: 'Kirim laporan tugas tuntas 100%', cmd: 'telegramNotifier.sendSuccess' },
@@ -945,8 +1008,132 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     });
 
     if (pick && pick.description) {
+      if (pick.label.includes('Folder Workspace')) {
+        vscode.commands.executeCommand('telegramNotifier.setFolder');
+        return;
+      }
       await vscode.env.clipboard.writeText(pick.description);
       vscode.window.showInformationMessage(`📋 Disalin: ${pick.description}`);
+    }
+  }));
+
+  // 2b. Atur Working Directory / Folder Workspace (AGENTS.md, CLAUDE.md, TASK_QUEUE.md)
+  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.setFolder', async () => {
+    const cur = getEffectiveConfig();
+    const wsFolders = vscode.workspace.workspaceFolders || [];
+
+    const choices = [];
+    if (wsFolders.length > 0) {
+      for (const wf of wsFolders) {
+        choices.push({
+          label: `$(root-folder) Workspace: ${wf.name}`,
+          description: wf.uri.fsPath,
+          detail: wf.uri.fsPath === cur.folder ? '⭐ (Working Directory Saat Ini)' : 'Pilih folder workspace ini sebagai working directory',
+          folderPath: wf.uri.fsPath
+        });
+      }
+    }
+
+    choices.push({
+      label: '$(folder) Pilih Folder Lain dari Komputer... (Browse)',
+      description: 'Pilih folder kerja manapun di disk',
+      detail: 'Membuka dialog pemilih direktori',
+      folderPath: '__browse__'
+    });
+
+    if (cur.folder !== cur.wsFolder) {
+      choices.push({
+        label: '$(sync) Reset ke Default Workspace Utama',
+        description: cur.wsFolder,
+        detail: 'Kembalikan working directory ke root workspace utama VS Code',
+        folderPath: cur.wsFolder
+      });
+    }
+
+    const pick = await vscode.window.showQuickPick(choices, {
+      title: '📂 Atur Folder Workspace / Working Directory (Tele-vs-Code)',
+      placeHolder: `Working directory aktif saat ini: ${cur.folder}`
+    });
+
+    if (!pick) return;
+
+    let targetPath = '';
+    if (pick.folderPath === '__browse__') {
+      const selected = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: 'Pilih Sebagai Working Directory',
+        title: 'Pilih Folder Tempat AGENTS.md, CLAUDE.md, & TASK_QUEUE.md Dikelola',
+        defaultUri: vscode.Uri.file(cur.folder)
+      });
+      if (selected && selected[0]) {
+        targetPath = selected[0].fsPath;
+      }
+    } else {
+      targetPath = pick.folderPath;
+    }
+
+    if (targetPath) {
+      const vsConfig = vscode.workspace.getConfiguration('telegramNotifier');
+      await vsConfig.update('folder', targetPath, vscode.ConfigurationTarget.Workspace);
+
+      ensureWorkspaceTools(context, targetPath);
+      taskProvider.refresh();
+      await updateStatusBar();
+
+      vscode.window.showInformationMessage(
+        `📂 Working Directory disetel ke: ${targetPath}\nBerkas AGENTS.md, CLAUDE.md, dan TASK_QUEUE.md siap digunakan oleh AI Agent.`,
+        'Buka TASK_QUEUE.md'
+      ).then(act => {
+        if (act === 'Buka TASK_QUEUE.md') {
+          vscode.commands.executeCommand('telegramNotifier.openQueue');
+        }
+      });
+    }
+  }));
+
+  // 2c. Kerjakan Antrean Tugas Berikutnya via AI Chat
+  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.runNextTask', async () => {
+    const cur = getEffectiveConfig();
+    const queueFile = path.join(cur.folder, 'TASK_QUEUE.md');
+    if (!fs.existsSync(queueFile)) {
+      ensureWorkspaceTools(context, cur.folder);
+      vscode.window.showInformationMessage('ℹ️ File TASK_QUEUE.md belum memiliki antrean tugas aktif.');
+      return;
+    }
+
+    try {
+      const content = fs.readFileSync(queueFile, 'utf-8');
+      const activeSection = content.split('## ✅ Riwayat Tugas Selesai')[0];
+      const match = /###\s+\[(PENDING|IN_PROGRESS)\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/i.exec(activeSection);
+      if (!match) {
+        vscode.window.showInformationMessage('ℹ️ Tidak ada tugas aktif [PENDING] atau [IN_PROGRESS] di antrean TASK_QUEUE.md.');
+        return;
+      }
+
+      const taskId = match[2].startsWith('#') ? match[2] : `#${match[2]}`;
+      const block = match[3];
+      const mInst = block.match(/-\s+\*\*Instruksi:\*\*\s*([^\r\n]+)/i);
+      const instruction = mInst ? mInst[1].trim() : '';
+
+      const prompt = `Periksa file TASK_QUEUE.md dan selesaikan tugas ${taskId} ("${instruction}") sampai tuntas 100% sesuai AGENTS.md.`;
+      await vscode.env.clipboard.writeText(prompt);
+
+      try {
+        await vscode.commands.executeCommand('workbench.action.chat.open');
+      } catch (cErr) {}
+
+      vscode.window.showInformationMessage(
+        `🚀 Tugas [${taskId}] disalin ke clipboard! Tempelkan (Ctrl+V) di chat AI untuk mulai mengeksekusi.`,
+        'Buka TASK_QUEUE.md'
+      ).then(act => {
+        if (act === 'Buka TASK_QUEUE.md') {
+          vscode.commands.executeCommand('telegramNotifier.openQueue');
+        }
+      });
+    } catch (e) {
+      vscode.window.showErrorMessage(`❌ Gagal membaca antrean tugas: ${e.message}`);
     }
   }));
 

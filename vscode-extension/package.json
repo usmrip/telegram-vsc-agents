@@ -2,7 +2,7 @@
   "name": "tele-vs-code",
   "displayName": "Tele-vs-Code",
   "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "publisher": "BiruIndonesiaCreative",
   "author": {
     "name": "usmrip",
@@ -42,7 +42,9 @@
         "telegramNotifier.folder": {
           "type": "string",
           "default": "",
-          "description": "Folder proyek yang dipantau (kosongkan untuk menggunakan workspace saat ini)"
+          "scope": "resource",
+          "description": "Folder kerja utama (working directory) tempat berkas AGENTS.md, CLAUDE.md, dan TASK_QUEUE.md dikelola AI Agent (Kosongkan untuk menggunakan workspace saat ini)",
+          "markdownDescription": "Folder kerja utama (*Working Directory*) tempat berkas aturan AI Agent (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`) dan antrean tugas (`TASK_QUEUE.md`) dikelola. Kosongkan untuk menggunakan workspace aktif saat ini."
         },
         "telegramNotifier.botToken": {
           "type": "string",
@@ -110,11 +112,11 @@
         },
         "telegramNotifier.pullInterval": {
           "type": "number",
-          "default": 5,
-          "minimum": 2,
+          "default": 2,
+          "minimum": 1,
           "maximum": 60,
-          "description": "Interval polling tugas otomatis dalam detik (Default: 5 detik)",
-          "markdownDescription": "Waktu jeda antar pemeriksaan tugas baru di server (Default: `5` detik)."
+          "description": "Interval polling tugas otomatis dalam detik (Default: 2 detik)",
+          "markdownDescription": "Waktu jeda antar pemeriksaan tugas baru di server (Default: `2` detik untuk responsivitas instan)."
         },
         "telegramNotifier.showToastOnNewTask": {
           "type": "boolean",
@@ -123,13 +125,29 @@
         },
         "telegramNotifier.askOnStartup": {
           "type": "boolean",
-          "default": true,
-          "description": "Tanyakan konfirmasi pengaktifan worker otomasi saat membuka ulang VS Code",
-          "markdownDescription": "Menampilkan dialog konfirmasi untuk mengaktifkan worker otomasi saat membuka folder kerja."
+          "default": false,
+          "description": "Tanyakan konfirmasi pengaktifan worker otomasi saat membuka ulang VS Code (Default: false - langsung aktif otomatis)",
+          "markdownDescription": "Jika `false` (default), worker otomasi langsung aktif otomatis memantau antrean Telegram saat VS Code dibuka jika proyek sudah terhubung."
+        },
+        "telegramNotifier.autoExecuteSimpleTasks": {
+          "type": "boolean",
+          "default": false,
+          "description": "Otomatis eksekusi perintah sederhana (buat file/folder) langsung tanpa menunggu AI Agent",
+          "markdownDescription": "Jika `false` (default), seluruh perintah Telegram langsung dimasukkan ke `TASK_QUEUE.md` sebagai antrean untuk dieksekusi oleh AI Agent di VS Code."
         }
       }
     },
     "commands": [
+      {
+        "command": "telegramNotifier.runNextTask",
+        "title": "Kerjakan Antrean Tugas Berikutnya (Kirim ke Chat AI)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.setFolder",
+        "title": "Atur Folder Workspace / Working Directory",
+        "category": "Tele-vs-Code"
+      },
       {
         "command": "telegramNotifier.addTask",
         "title": "Tambah Tugas Baru / Kirim Perintah ke Antrean & Telegram",

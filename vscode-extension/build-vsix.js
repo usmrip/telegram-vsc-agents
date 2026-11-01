@@ -41,9 +41,12 @@ const rootTools = [
 ];
 for (const tf of rootTools) {
   const p = path.join(path.dirname(extDir), tf);
+  const pVscode = path.join(path.dirname(extDir), '.vscode', 'tele-vs-code', tf);
   const pAssets = path.join(assetsDir, tf);
   if (fs.existsSync(p)) {
     fs.copyFileSync(p, pAssets);
+  } else if (fs.existsSync(pVscode)) {
+    fs.copyFileSync(pVscode, pAssets);
   }
 }
 
