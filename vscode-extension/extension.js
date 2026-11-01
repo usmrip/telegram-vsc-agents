@@ -507,6 +507,43 @@ function activate(context) {
     }
   }));
 
+  // Watcher TASK_QUEUE.md: deteksi tugas selesai secara live & tampilkan popup selesai
+  let lastKnownDoneIds = new Set();
+  function checkDoneTasksInQueue(targetFolder) {
+    const qFile = path.join(targetFolder, 'TASK_QUEUE.md');
+    if (!fs.existsSync(qFile)) return;
+    try {
+      const qContent = fs.readFileSync(qFile, 'utf-8');
+      const doneSection = qContent.split('## ✅ Riwayat Tugas Selesai')[1] || '';
+      const regex = /###\s+\[DONE\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+(?:-\s+\*\*Waktu:\*\*\s*[^\r\n]*[\r\n]+)?(?:-\s+\*\*Pengirim:\*\*\s*[^\r\n]*[\r\n]+)?(?:-\s+\*\*Instruksi:\*\*\s*([^\r\n]*))?/gi;
+      let m;
+      while ((m = regex.exec(doneSection)) !== null) {
+        const dId = m[1].trim();
+        const dInst = (m[2] || '').trim();
+        if (lastKnownDoneIds.size > 0 && !lastKnownDoneIds.has(dId)) {
+          const instSnippet = dInst ? (dInst.length > 50 ? dInst.substring(0, 50) + '...' : dInst) : '';
+          vscode.window.showInformationMessage(`✅ Tugas [${dId}] Selesai 100%! "${instSnippet}"`);
+          taskProvider.refresh();
+        }
+        lastKnownDoneIds.add(dId);
+      }
+    } catch (e) {}
+  }
+  checkDoneTasksInQueue(curInitial.folder);
+
+  try {
+    const qWatcher = vscode.workspace.createFileSystemWatcher('**/TASK_QUEUE.md');
+    qWatcher.onDidChange(() => {
+      checkDoneTasksInQueue(getEffectiveConfig().folder);
+      taskProvider.refresh();
+    });
+    qWatcher.onDidCreate(() => {
+      checkDoneTasksInQueue(getEffectiveConfig().folder);
+      taskProvider.refresh();
+    });
+    context.subscriptions.push(qWatcher);
+  } catch (wErr) {}
+
 // Autonomous Task Execution Engine for VS Code Extension
 function tryExecuteDirectTask(instruction, targetDir) {
   const inst = instruction.trim();
@@ -800,25 +837,39 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
             }
           }
 
-          // Beri tahu user bahwa tugas baru masuk antrean dengan aksi eksekusi langsung ke AI Chat
+          // Beri tahu user bahwa tugas baru masuk antrean
           if (!silent || cur.showToastOnNewTask) {
             const instBrief = t.instruction ? (t.instruction.length > 55 ? t.instruction.substring(0, 55) + '...' : t.instruction) : '';
-            vscode.window.showInformationMessage(
-              `📥 Tugas baru dari Telegram [${t.id}]: "${instBrief}"`,
-              '🚀 Kerjakan dengan AI Agent',
-              '📋 Buka TASK_QUEUE.md'
-            ).then(async act => {
-              if (act === '🚀 Kerjakan dengan AI Agent') {
-                const prompt = `Periksa file TASK_QUEUE.md dan selesaikan tugas ${t.id} ("${t.instruction}") sampai tuntas 100% sesuai AGENTS.md.`;
-                await vscode.env.clipboard.writeText(prompt);
-                try {
-                  await vscode.commands.executeCommand('workbench.action.chat.open');
-                } catch (cErr) {}
-                vscode.window.showInformationMessage(`📋 Prompt tugas [${t.id}] telah disalin ke clipboard! Tempelkan (Ctrl+V) di chat AI untuk mulai mengeksekusi.`);
-              } else if (act === '📋 Buka TASK_QUEUE.md') {
-                vscode.commands.executeCommand('telegramNotifier.openQueue');
+            const isIdeTask = (t.id && (t.id.includes('-IDE-') || t.id.startsWith('#TASK-IDE'))) ||
+                              (t.sender && (t.sender.includes('IDE') || t.sender.includes('VS Code')));
+
+            if (isIdeTask) {
+              // Tugas dari IDE (dengan kode khusus -IDE-): JANGAN tampilkan pop-up dialog delegasi
+              // Tampilkan pop-up status tugas dikerjakan / selesai
+              if (t.status === 'DONE') {
+                vscode.window.showInformationMessage(`✅ [${t.id}] Tugas IDE Selesai: "${instBrief}"`);
+              } else {
+                vscode.window.showInformationMessage(`⚡ [${t.id}] Tugas IDE Sedang Dikerjakan: "${instBrief}"`);
               }
-            });
+            } else {
+              // Tugas dari Telegram: tampilkan pop-up dialog interaktif untuk kirim ke AI Chat
+              vscode.window.showInformationMessage(
+                `📥 Tugas baru dari Telegram [${t.id}]: "${instBrief}"`,
+                '🚀 Kerjakan dengan AI Agent',
+                '📋 Buka TASK_QUEUE.md'
+              ).then(async act => {
+                if (act === '🚀 Kerjakan dengan AI Agent') {
+                  const prompt = `Periksa file TASK_QUEUE.md dan selesaikan tugas ${t.id} ("${t.instruction}") sampai tuntas 100% sesuai AGENTS.md.`;
+                  await vscode.env.clipboard.writeText(prompt);
+                  try {
+                    await vscode.commands.executeCommand('workbench.action.chat.open');
+                  } catch (cErr) {}
+                  vscode.window.showInformationMessage(`📋 Prompt tugas [${t.id}] telah disalin ke clipboard! Tempelkan (Ctrl+V) di chat AI untuk mulai mengeksekusi.`);
+                } else if (act === '📋 Buka TASK_QUEUE.md') {
+                  vscode.commands.executeCommand('telegramNotifier.openQueue');
+                }
+              });
+            }
           }
         }
 

@@ -172,7 +172,7 @@ async function run() {
     try {
       let url = `${normalizedUrl}?action=push&secret=${secretKey}`;
       if (projectKey) url += `&project=${encodeURIComponent(projectKey)}`;
-      const params = new URLSearchParams({ instruction, sender, status, notes, command: cmd });
+      const params = new URLSearchParams({ instruction, sender, status, notes, command: cmd, is_ide: '1' });
       const res = await fetch(url, { method: 'POST', body: params });
       const data = await res.json();
 

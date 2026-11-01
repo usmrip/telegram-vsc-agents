@@ -1523,7 +1523,9 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
             exit;
         }
 
-        $taskId = '#TASK-' . date('Ymd-His') . '-' . substr(bin2hex(random_bytes(2)), 0, 4);
+        $isIde = !empty($_POST['is_ide']) || !empty($_GET['is_ide']) || stripos($sender, 'IDE') !== false || stripos($sender, 'VS Code') !== false;
+        $idPrefix = $isIde ? '#TASK-IDE-' : '#TASK-';
+        $taskId = $idPrefix . date('Ymd-His') . '-' . substr(bin2hex(random_bytes(2)), 0, 4);
         $now = date('Y-m-d H:i:s');
         $stmtIns = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, notes, command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $stmtIns->execute([$taskId, $user['id'], $prjId, $instruction, $sender, $status, $now, $now, $notes, $command]);
@@ -2420,6 +2422,24 @@ if ($currentUser) {
     $stmtP->execute([$currentUser['id']]);
     $projects = $stmtP->fetchAll(PDO::FETCH_ASSOC);
 
+    // Cek kelayakan tombol donasi:
+    // Khusus untuk yang login, memiliki proyek, dan proyek sudah dilayani oleh dan sukses notifikasi
+    $userSuccessCount = 0;
+    if (!empty($projects)) {
+        $stmtDone = $db->prepare("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND (status = 'DONE' OR status = 'done')");
+        $stmtDone->execute([$currentUser['id']]);
+        $userSuccessCount = (int)$stmtDone->fetchColumn();
+        if ($userSuccessCount === 0) {
+            foreach ($projects as $p) {
+                if (!empty($p['last_seen'])) {
+                    $userSuccessCount = 1;
+                    break;
+                }
+            }
+        }
+    }
+    $canShowDonation = (!empty($currentUser) && !empty($projects) && $userSuccessCount > 0);
+
     // Load Whitelist Users milik User (Private Chat)
     $stmtW = $db->prepare("SELECT w.*, p.name as project_name FROM bot_whitelist w LEFT JOIN projects p ON w.project_id = p.id WHERE w.user_id = ? ORDER BY w.id DESC");
     $stmtW->execute([$currentUser['id']]);
@@ -2550,6 +2570,12 @@ function renderSvg($name, $size = 15, $class = '') {
             <span>tele<span class="brand-slash">/</span>vs<span class="brand-slash">/</span>code</span>
         </a>
         <div class="navbar-actions">
+            <?php if (!empty($canShowDonation)): ?>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="openDonationModal()" title="Dukung Pengembangan Tele-vs-Code" style="background: rgba(244, 63, 94, 0.15); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.35); display: inline-flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 13px;">❤️</span>
+                    <span>Donasi</span>
+                </button>
+            <?php endif; ?>
             <a class="btn btn-secondary btn-sm" href="?action=download_vsix" title="Download ekstensi VS Code offline (.VSIX)">
                 <?= renderSvg('download', 14) ?>
                 <span>Unduh VSIX</span>
@@ -3059,6 +3085,29 @@ function renderSvg($name, $size = 15, $class = '') {
             <!-- TAB 2: PENGATURAN PROYEK & KREDENSIAL                            -->
             <!-- ================================================================ -->
             <section class="tab-pane">
+                <?php if (!empty($canShowDonation)): ?>
+                    <div class="card" style="border: 1px solid rgba(244, 63, 94, 0.3); background: rgba(244, 63, 94, 0.05); margin-bottom: 22px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding: 16px 20px;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 26px;">❤️</span>
+                            <div>
+                                <div style="font-size: 13.5px; font-weight: 600; color: #fff;">
+                                    Dukung Tele-vs-Code: <i>"bertahan hidup dengan teknologi dan #berkembangBaik"</i>
+                                </div>
+                                <div style="font-size: 12px; color: var(--text-muted); margin-top: 3px;">
+                                    Proyek Anda telah berhasil terlayani dan sukses menerima notifikasi tugas AI Agent. Dukung kelanjutan proyek ini dengan ulasan bintang 5 atau donasi.
+                                </div>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <a href="https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code&ssr=false#review-details" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm" style="font-size: 12px;">
+                                <span>⭐ Rating Marketplace</span>
+                            </a>
+                            <button type="button" class="btn btn-primary btn-sm" onclick="openDonationModal()" style="background: #e11d48; border-color: #be123c;">
+                                <span>❤️ Ayo Donasi</span>
+                            </button>
+                        </div>
+                    </div>
+                <?php endif; ?>
                 <!-- Kredensial Pengguna & Download VSIX -->
                 <div class="card" style="background: linear-gradient(135deg, rgba(22, 22, 28, 0.95), rgba(12, 12, 15, 0.85)); border-color: rgba(255, 255, 255, 0.16); margin-bottom: 22px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
@@ -3946,6 +3995,63 @@ function renderSvg($name, $size = 15, $class = '') {
     </div>
 </div>
 
+<!-- Modal Donasi Tele-vs-Code -->
+<div id="modalDonation" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closeDonationModal()">
+    <div class="modal-content" style="max-width: 500px; text-align: center; padding: 28px 24px;">
+        <div style="display: flex; justify-content: flex-end; margin-top: -8px; margin-right: -8px;">
+            <button type="button" class="btn btn-icon btn-ghost" onclick="closeDonationModal()" title="Tutup">
+                <?= renderSvg('close', 16) ?>
+            </button>
+        </div>
+
+        <div style="width: 58px; height: 58px; border-radius: 50%; background: rgba(244, 63, 94, 0.12); border: 1px solid rgba(244, 63, 94, 0.35); display: inline-flex; align-items: center; justify-content: center; font-size: 28px; margin-bottom: 12px;">
+            ❤️
+        </div>
+
+        <h3 style="font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 4px;">
+            Dukung Tele-vs-Code
+        </h3>
+
+        <!-- Tujuan Donasi -->
+        <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px 16px; margin: 12px 0 16px; font-size: 13.5px; color: #fecdd3; line-height: 1.6;">
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 3px;">Tujuan Donasi</div>
+            <b>"bertahan hidup dengan teknologi dan #berkembangBaik"</b>
+        </div>
+
+        <p style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 16px; text-align: left;">
+            Terima kasih telah menggunakan <b>Tele-vs-Code</b>! Notifikasi dan antrean tugas AI Agent proyek Anda telah berhasil berjalan normal. Jika alat ini bermanfaat mempermudah pekerjaan Anda, dukung kelanjutan proyek ini melalui 2 langkah mudah:
+        </p>
+
+        <!-- Instruksi Like & Review di Marketplace VSIX -->
+        <div style="background: rgba(56, 189, 248, 0.07); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 20px; text-align: left; font-size: 12px; color: #bae6fd; line-height: 1.6;">
+            <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; color: #38bdf8; margin-bottom: 4px;">
+                <span style="font-size: 14px;">⭐</span>
+                <span>Beri Rating & Komentar di VS Code Marketplace:</span>
+            </div>
+            <div>
+                1. Buka halaman resmi ekstensi <b>Tele-vs-Code</b> di VS Code Marketplace.<br>
+                2. Berikan <b>Rating 5 Bintang</b> dan tulis ulasan atau komentar pengalaman Anda menggunakan Tele-vs-Code.<br>
+                3. Ulasan Anda sangat berharga agar ekstensi ini terus berkembang dan bermanfaat bagi banyak developer!
+            </div>
+            <div style="margin-top: 10px;">
+                <a href="https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code&ssr=false#review-details" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm" style="font-size: 11.5px; width: 100%; justify-content: center; background: rgba(56, 189, 248, 0.12); color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">
+                    <span>⭐ Buka Halaman Review Marketplace &rarr;</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Tombol Ayo Donasi -->
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+            <a href="https://ayo.ke/donasi" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="justify-content: center; font-weight: 600; padding: 11px 20px; font-size: 14px; background: #e11d48; border-color: #be123c; color: #fff; box-shadow: 0 4px 14px rgba(225, 29, 72, 0.4);">
+                <span>❤️ Ayo Donasi</span>
+            </a>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="closeDonationModal()" style="color: var(--text-muted); font-size: 12px;">
+                Nanti Saja
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- Sonner Toast Engine & Client Controller -->
 <script src="assets/js/liquid.js?v=<?= filemtime(__DIR__ . '/assets/js/liquid.js') ?>"></script>
 <script src="assets/js/sonner.js?v=<?= filemtime(__DIR__ . '/assets/js/sonner.js') ?>"></script>
@@ -3988,6 +4094,15 @@ function checkTagUniqueness(inputEl, excludeId, feedbackId, submitBtnId) {
             }
         } catch (e) {}
     }, 250);
+}
+
+function openDonationModal() {
+    const m = document.getElementById('modalDonation');
+    if (m) m.style.display = 'flex';
+}
+function closeDonationModal() {
+    const m = document.getElementById('modalDonation');
+    if (m) m.style.display = 'none';
 }
 
 function toggleProjectCard(id) {
