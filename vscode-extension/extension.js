@@ -932,7 +932,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
 
     let menuItems = [];
     if (!isConfigValid) {
-      // Jika API Secret dan Project Key belum valid: tampilkan Folder Workspace dan Hubungkan ke Server Biru
+      // Jika API Secret dan Project Key belum valid: tampilkan Folder Workspace, Hubungkan ke Server Biru, dan Whoami
       menuItems = [
         {
           label: `$(folder) Folder Workspace: ${path.basename(cur.folder)}`,
@@ -945,30 +945,65 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
           description: 'Atur API Secret Key & pilih proyek dari server Biru',
           detail: '⚠️ API Secret atau Project Key belum valid. Klik untuk menghubungkan workspace ke Server Biru.',
           cmd: 'telegramNotifier.quickSetup'
+        },
+        {
+          label: '$(account) Siapa Saya? (Identifikasi Workspace)',
+          description: 'Belum Terhubung ke Server Biru',
+          detail: `Folder: ${cur.folder}`,
+          cmd: 'telegramNotifier.whoami'
         }
       ];
     } else {
-      // Jika sudah valid: Tampilkan seluruh menu lengkap dengan Folder Workspace di posisi paling atas
+      // Menu Utama Terstruktur & Rapi:
       menuItems = [
+        // 1. Folder Workspace (Klik langsung untuk ubah folder kerja)
         {
           label: `$(folder) Folder Workspace: ${path.basename(cur.folder)}`,
           description: cur.folder,
-          detail: 'Working directory tempat AGENTS.md, CLAUDE.md, & TASK_QUEUE.md dikelola. Klik untuk ubah folder.',
+          detail: 'Working directory tempat AGENTS.md, CLAUDE.md, & TASK_QUEUE.md dikelola. Klik untuk ubah.',
           cmd: 'telegramNotifier.setFolder'
         },
-        { label: '$(play-circle) Kerjakan Antrean Tugas Berikutnya (Kirim ke Chat AI)', description: 'Salin instruksi tugas aktif di TASK_QUEUE & buka chat AI', cmd: 'telegramNotifier.runNextTask' },
-        { label: '$(add) Tambah Tugas Baru / Kirim Perintah ke Antrean', description: 'Kirim tugas ke antrean TASK_QUEUE.md & notifikasi Telegram', cmd: 'telegramNotifier.addTask' },
-        { label: '$(account) Siapa Saya? (Identifikasi Workspace)', description: `Folder: ${cur.folder} -> [${resolved.name}] (#${resolved.code})`, cmd: 'telegramNotifier.whoami' },
-        { label: isWorkerActive ? '$(debug-pause) Jeda Worker Otomatis (Auto-Pull)' : '$(play) Aktifkan Worker Otomatis (Auto-Pull)', description: isWorkerActive ? `Sedang aktif memantau server setiap ${cur.pullInterval}s` : 'Mulai memantau tugas masuk dari server secara otomatis', cmd: 'telegramNotifier.toggleAutoPull' },
-        { label: '$(cloud-download) Tarik Antrean Sekarang (Manual Pull)', description: 'Sinkronisasi instan task dari server webhook ke TASK_QUEUE.md', cmd: 'telegramNotifier.pullTasks' },
-        { label: '$(gear) Hubungkan ke Server Biru (Setup Wizard)', description: 'Atur ulang API Secret Key & pilih proyek dari server Biru', cmd: 'telegramNotifier.quickSetup' },
-        { label: '$(folder-opened) Ubah Working Directory / Folder Workspace', description: 'Pilih folder kerja lain tempat AGENTS.md & TASK_QUEUE.md berada', cmd: 'telegramNotifier.setFolder' },
-        { label: '$(terminal) Jalankan Autonomous CLI Worker di Terminal', description: 'Buka terminal tele-worker untuk eksekusi skrip mandiri', cmd: 'telegramNotifier.startCliWorker' },
-        { label: '$(file-text) Buka TASK_QUEUE.md', description: 'Lihat daftar tugas antrean dan riwayat selesai', cmd: 'telegramNotifier.openQueue' },
-        { label: '$(check) Kirim Notifikasi: SELESAI', description: 'Kirim laporan tugas tuntas 100%', cmd: 'telegramNotifier.sendSuccess' },
-        { label: '$(zap) Kirim Notifikasi: PROSES', description: 'Kirim laporan progres / sedang dikerjakan', cmd: 'telegramNotifier.sendProgress' },
-        { label: '$(error) Kirim Notifikasi: KENDALA', description: 'Kirim laporan kendala / error', cmd: 'telegramNotifier.sendError' },
-        { label: '$(browser) Buka Web Dashboard', description: 'Buka dashboard server biru.co.id/tele-vs-code', cmd: 'telegramNotifier.openDashboard' }
+        // 2. Sub-Menu: Tasks & Jobs
+        {
+          label: '$(checklist) Tasks & Jobs (Antrean Tugas)...',
+          description: 'Antrean tugas, trigger AI Chat, & autonomous CLI worker',
+          detail: 'Buka sub-menu: Kerjakan Antrean, Tambah Tugas, Buka Queue, & Terminal CLI Worker',
+          sub: 'tasks'
+        },
+        // 3. Sub-Menu: Kontrol Worker & Durasi Polling (Kotak Hijau + Durasi)
+        {
+          label: '$(sync) Kontrol Worker & Durasi Polling...',
+          description: isWorkerActive ? `🟢 Aktif (Polling setiap ${cur.pullInterval} detik)` : '⚪ Dijeda / Nonaktif',
+          detail: `Buka sub-menu: Jeda/Mulai auto-pull, Tarik tugas manual, & Ubah durasi polling`,
+          sub: 'worker'
+        },
+        // 4. Sub-Menu: Test Notifikasi Telegram
+        {
+          label: '$(bell) Test Notifikasi Telegram...',
+          description: 'Kirim notifikasi pengujian ke bot Telegram proyek',
+          detail: 'Buka sub-menu: Kirim pesan uji coba SELESAI, PROSES, atau KENDALA',
+          sub: 'test_notify'
+        },
+        // 5. Buka Web Dashboard
+        {
+          label: '$(browser) Buka Web Dashboard',
+          description: 'Buka dashboard server https://biru.co.id/tele-vs-code/',
+          cmd: 'telegramNotifier.openDashboard'
+        },
+        // 6. Hubungkan ke Server Biru (Dipindahkan ke Bawah)
+        {
+          label: '$(gear) Hubungkan ke Server Biru (Setup Wizard)',
+          description: 'Atur ulang API Secret Key & pilih proyek dari server Biru',
+          detail: 'Konfigurasi akun dan autentikasi proyek',
+          cmd: 'telegramNotifier.quickSetup'
+        },
+        // 7. Whoami (Paling Bawah - Menampilkan Status Worker & Durasi)
+        {
+          label: '$(account) Siapa Saya? (Identifikasi Workspace)',
+          description: isWorkerActive ? `Worker: 🟢 MENYALA (${cur.pullInterval}s)` : 'Worker: ⚪ TIDAK MENYALA',
+          detail: `Folder: ${path.basename(cur.folder)} -> [${resolved.name}] (#${resolved.code || resolved.projectKey})`,
+          cmd: 'telegramNotifier.whoami'
+        }
       ];
     }
 
@@ -981,22 +1016,96 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
       placeHolder: placeholderText
     });
 
-    if (choice && choice.cmd) {
+    if (!choice) return;
+
+    // Sub-Menu: Tasks & Jobs
+    if (choice.sub === 'tasks') {
+      const taskSubItems = [
+        { label: '$(play-circle) Kerjakan Antrean Tugas Berikutnya (Kirim ke Chat AI)', description: 'Salin instruksi tugas aktif di TASK_QUEUE & buka chat AI', cmd: 'telegramNotifier.runNextTask' },
+        { label: '$(add) Tambah Tugas Baru / Kirim Perintah ke Antrean', description: 'Kirim tugas ke antrean TASK_QUEUE.md & notifikasi Telegram', cmd: 'telegramNotifier.addTask' },
+        { label: '$(file-text) Buka TASK_QUEUE.md', description: 'Lihat daftar tugas antrean dan riwayat selesai', cmd: 'telegramNotifier.openQueue' },
+        { label: '$(terminal) Jalankan Autonomous CLI Worker di Terminal', description: 'Buka terminal tele-worker untuk eksekusi skrip mandiri', cmd: 'telegramNotifier.startCliWorker' },
+        { label: '$(arrow-left) Kembali ke Menu Utama', description: 'Tutup submenu tasks', cmd: 'telegramNotifier.showMenu' }
+      ];
+      const subPick = await vscode.window.showQuickPick(taskSubItems, {
+        title: `📋 Menu Tasks & Jobs (${resolved.name})`,
+        placeHolder: 'Pilih aksi manajemen tugas:'
+      });
+      if (subPick && subPick.cmd) {
+        vscode.commands.executeCommand(subPick.cmd);
+      }
+      return;
+    }
+
+    // Sub-Menu: Kontrol Worker & Durasi Polling
+    if (choice.sub === 'worker') {
+      const workerSubItems = [
+        {
+          label: isWorkerActive ? '$(debug-pause) Jeda Worker Otomatis (Pause Auto-Pull)' : '$(play) Aktifkan Worker Otomatis (Start Auto-Pull)',
+          description: isWorkerActive ? `Sedang aktif memantau server setiap ${cur.pullInterval}s` : 'Mulai memantau tugas masuk dari server secara otomatis',
+          cmd: 'telegramNotifier.toggleAutoPull'
+        },
+        {
+          label: '$(cloud-download) Tarik Antrean Sekarang (Manual Pull Seketika)',
+          description: 'Sinkronisasi instan task dari server webhook ke TASK_QUEUE.md',
+          cmd: 'telegramNotifier.pullTasks'
+        },
+        {
+          label: `$(watch) Atur Durasi Refresh Polling Worker (Saat ini: ${cur.pullInterval} detik)`,
+          description: 'Ubah frekuensi jeda pemeriksaan antrean tugas baru ke server',
+          cmd: 'telegramNotifier.setPullInterval'
+        },
+        { label: '$(arrow-left) Kembali ke Menu Utama', description: 'Tutup submenu worker', cmd: 'telegramNotifier.showMenu' }
+      ];
+      const subPick = await vscode.window.showQuickPick(workerSubItems, {
+        title: `🔄 Kontrol Worker Otomatis & Polling (${resolved.name})`,
+        placeHolder: `Status Worker: ${isWorkerActive ? `🟢 AKTIF (${cur.pullInterval}s)` : '⚪ DIJEDA'}`
+      });
+      if (subPick && subPick.cmd) {
+        vscode.commands.executeCommand(subPick.cmd);
+      }
+      return;
+    }
+
+    // Sub-Menu: Test Notifikasi Telegram
+    if (choice.sub === 'test_notify') {
+      const testSubItems = [
+        { label: '$(check) Test Notifikasi: SELESAI (100% Tuntas)', description: 'Kirim notifikasi sukses tuntas 100% ke Telegram', cmd: 'telegramNotifier.sendSuccess' },
+        { label: '$(zap) Test Notifikasi: PROSES (Sedang Dikerjakan)', description: 'Kirim notifikasi update progres tugas ke Telegram', cmd: 'telegramNotifier.sendProgress' },
+        { label: '$(error) Test Notifikasi: KENDALA (Ada Masalah/Error)', description: 'Kirim notifikasi kendala atau masalah ke Telegram', cmd: 'telegramNotifier.sendError' },
+        { label: '$(arrow-left) Kembali ke Menu Utama', description: 'Tutup submenu test notifikasi', cmd: 'telegramNotifier.showMenu' }
+      ];
+      const subPick = await vscode.window.showQuickPick(testSubItems, {
+        title: `🔔 Test Notifikasi Telegram (${resolved.name})`,
+        placeHolder: 'Pilih jenis pesan notifikasi yang ingin diuji:'
+      });
+      if (subPick && subPick.cmd) {
+        vscode.commands.executeCommand(subPick.cmd);
+      }
+      return;
+    }
+
+    if (choice.cmd) {
       vscode.commands.executeCommand(choice.cmd);
     }
   }));
 
-  // 2. Command /whoami di VS Code: Menampilkan Identitas Workspace & Routing
+  // 2. Command /whoami di VS Code: Menampilkan Identitas Workspace & Routing (Paling Bawah di Menu)
   context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.whoami', async () => {
     const cur = getEffectiveConfig();
     const resolved = await getResolvedProject();
     const operator = `${os.userInfo().username}@${os.hostname()}`;
 
+    const workerStatusText = isWorkerActive
+      ? `🟢 MENYALA OTOMATIS (Refresh setiap ${cur.pullInterval} detik)`
+      : `⚪ TIDAK MENYALA (Dijeda / Nonaktif)`;
+
     const items = [
       { label: `📁 Proyek: ${resolved.name || "(Belum Dipilih)"}${resolved.code ? ` (#${resolved.code})` : ""}`, description: `ID Proyek: ${resolved.id ? resolved.id : "(Belum Disetel)"}` },
-      { label: `📂 Folder Workspace:`, description: cur.folder },
+      { label: `📂 Folder Workspace (Working Directory):`, description: cur.folder },
+      { label: `📡 Status Worker Otomatis:`, description: workerStatusText },
+      { label: `⏱️ Durasi Refresh Polling:`, description: isWorkerActive ? `${cur.pullInterval} detik (Menyala Aktif)` : `${cur.pullInterval} detik (Tidak Menyala)` },
       { label: `💻 Operator Host:`, description: operator },
-      { label: `📡 Status Worker:`, description: isWorkerActive ? `🟢 Aktif (Polling setiap ${cur.pullInterval} detik)` : `⚪ Dijeda / Nonaktif` },
       { label: `🌐 Server Webhook:`, description: cur.webhookUrl },
       { label: `🔑 API Key Secret:`, description: cur.secretKey ? (cur.secretKey.substring(0, 8) + '••••••••') : '(Belum diatur)' },
       { label: `🤖 Bot Telegram:`, description: resolved.botToken ? `Chat ID: ${resolved.chatId}` : '(Mengikuti server Biru)' }
@@ -1004,7 +1113,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
 
     const pick = await vscode.window.showQuickPick(items, {
       title: '👤 Identifikasi Workspace Tele-vs-Code',
-      placeHolder: 'Informasi status koneksi workspace ini dengan Telegram & Server Biru'
+      placeHolder: `Status Worker: ${isWorkerActive ? `🟢 MENYALA (${cur.pullInterval}s)` : '⚪ TIDAK MENYALA'} | Klik item untuk menyalin`
     });
 
     if (pick && pick.description) {
@@ -1012,9 +1121,43 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
         vscode.commands.executeCommand('telegramNotifier.setFolder');
         return;
       }
+      if (pick.label.includes('Status Worker') || pick.label.includes('Durasi Refresh')) {
+        vscode.commands.executeCommand('telegramNotifier.setPullInterval');
+        return;
+      }
       await vscode.env.clipboard.writeText(pick.description);
       vscode.window.showInformationMessage(`📋 Disalin: ${pick.description}`);
     }
+  }));
+
+  // 2b. Atur Durasi Refresh Polling Worker
+  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.setPullInterval', async () => {
+    const cur = getEffectiveConfig();
+    const input = await vscode.window.showInputBox({
+      title: '⏱️ Atur Durasi Refresh Worker (Polling Interval)',
+      prompt: 'Masukkan jeda waktu pemeriksaan tugas baru ke server (1 - 60 detik):',
+      value: String(cur.pullInterval),
+      validateInput: val => {
+        const num = parseInt(val, 10);
+        if (isNaN(num) || num < 1 || num > 60) {
+          return 'Masukkan angka bulat antara 1 sampai 60 detik';
+        }
+        return null;
+      }
+    });
+
+    if (!input) return;
+    const newInterval = parseInt(input, 10);
+    const vsConfig = vscode.workspace.getConfiguration('telegramNotifier');
+    await vsConfig.update('pullInterval', newInterval, vscode.ConfigurationTarget.Global);
+
+    if (isWorkerActive) {
+      startAutoWorker();
+    } else {
+      updateStatusBar();
+    }
+
+    vscode.window.showInformationMessage(`⏱️ Durasi refresh polling worker berhasil diubah menjadi ${newInterval} detik.`);
   }));
 
   // 2b. Atur Working Directory / Folder Workspace (AGENTS.md, CLAUDE.md, TASK_QUEUE.md)

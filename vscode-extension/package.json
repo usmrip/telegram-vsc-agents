@@ -2,7 +2,7 @@
   "name": "tele-vs-code",
   "displayName": "Tele-vs-Code",
   "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "publisher": "BiruIndonesiaCreative",
   "author": {
     "name": "usmrip",
@@ -138,6 +138,11 @@
       }
     },
     "commands": [
+      {
+        "command": "telegramNotifier.setPullInterval",
+        "title": "Atur Durasi Refresh Polling Worker",
+        "category": "Tele-vs-Code"
+      },
       {
         "command": "telegramNotifier.runNextTask",
         "title": "Kerjakan Antrean Tugas Berikutnya (Kirim ke Chat AI)",

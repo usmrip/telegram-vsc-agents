@@ -61,7 +61,20 @@ function resolveDbPath() {
 }
 
 define('DB_FILE', resolveDbPath());
-define('VSIX_FILE', __DIR__ . '/tele-vs-code-1.0.0.vsix');
+function getLatestVsixFile() {
+    $candidates = glob(__DIR__ . '/tele-vs-code-*.vsix');
+    if (!empty($candidates)) {
+        usort($candidates, function($a, $b) {
+            return version_compare(
+                preg_replace('/^.*tele-vs-code-|\.vsix$/', '', $b),
+                preg_replace('/^.*tele-vs-code-|\.vsix$/', '', $a)
+            );
+        });
+        return $candidates[0];
+    }
+    return __DIR__ . '/tele-vs-code-1.0.7.vsix';
+}
+define('VSIX_FILE', getLatestVsixFile());
 define('SUPERADMIN_EMAIL', 'iam@usm.rip');
 
 // ------------------------------------------------------------------------------
@@ -255,6 +268,23 @@ function applyTimezone($tz) {
     $tz = trim($tz ?: 'Asia/Jakarta');
     @date_default_timezone_set($tz);
     return $tz;
+}
+
+// Helper: Generate Random 5-Character Unique Project Code Tag (Global Uniqueness like Domain)
+function generateUniqueProjectCode($db) {
+    $chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    for ($attempt = 0; $attempt < 300; $attempt++) {
+        $code = '';
+        for ($i = 0; $i < 5; $i++) {
+            $code .= $chars[random_int(0, strlen($chars) - 1)];
+        }
+        $stmt = $db->prepare('SELECT COUNT(*) FROM projects WHERE LOWER(code) = ?');
+        $stmt->execute([$code]);
+        if ((int)$stmt->fetchColumn() === 0) {
+            return $code;
+        }
+    }
+    return substr(bin2hex(random_bytes(3)), 0, 5);
 }
 
 // Helper: Normalize WhatsApp Number
@@ -578,6 +608,59 @@ function sendSmtpEmail($to, $subject, $htmlBody, &$debugLog = null) {
 $action = $_GET['action'] ?? ($_POST['action'] ?? '');
 $db = getDb();
 
+// Cek Keunikan Kode TAG via AJAX (On-Blur / Live Check Unik Global)
+if ($action === 'check_code_unique') {
+    header('Content-Type: application/json');
+    $rawCode = trim($_GET['code'] ?? ($_POST['code'] ?? ''));
+    $cleanCode = strtolower(preg_replace('/[^a-z0-9_-]/', '', $rawCode));
+    $excludeId = (int)($_GET['exclude_id'] ?? ($_POST['exclude_id'] ?? 0));
+
+    $isAdmin = false;
+    if (!empty($_SESSION['tvsc_uid'])) {
+        $uStmt = $db->prepare("SELECT email, is_admin FROM users WHERE id = ?");
+        $uStmt->execute([$_SESSION['tvsc_uid']]);
+        $uData = $uStmt->fetch(PDO::FETCH_ASSOC);
+        if ($uData) {
+            $isAdmin = (strtolower($uData['email']) === strtolower(SUPERADMIN_EMAIL) || !empty($uData['is_admin']));
+        }
+    }
+
+    $minLen = $isAdmin ? 1 : 5;
+    if (!$cleanCode || strlen($cleanCode) < $minLen) {
+        $msg = "Kode TAG minimal $minLen karakter!";
+        if (!$isAdmin) {
+            $msg .= " Hanya admin yang dapat menggunakan kurang dari 5 karakter.";
+        }
+        echo json_encode(['ok' => false, 'available' => false, 'message' => $msg]);
+        exit;
+    }
+    if (strlen($cleanCode) > 20) {
+        echo json_encode(['ok' => false, 'available' => false, 'message' => 'Kode tag maksimal 20 karakter']);
+        exit;
+    }
+
+    $stmt = $db->prepare('SELECT id, name FROM projects WHERE LOWER(code) = ? AND id != ? LIMIT 1');
+    $stmt->execute([$cleanCode, $excludeId]);
+    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($existing) {
+        echo json_encode([
+            'ok' => true,
+            'available' => false,
+            'code' => $cleanCode,
+            'message' => "Kode TAG '#$cleanCode' sudah digunakan pengguna lain!"
+        ]);
+    } else {
+        echo json_encode([
+            'ok' => true,
+            'available' => true,
+            'code' => $cleanCode,
+            'message' => "Kode TAG '#$cleanCode' tersedia dan unik di seluruh sistem."
+        ]);
+    }
+    exit;
+}
+
 // Kompatibilitas alias action untuk ekstensi VS Code & CLI:
 if ($action === 'pull') $action = 'api_pull';
 if ($action === 'push') $action = 'api_push';
@@ -601,7 +684,7 @@ if ($action === 'download_vsix') {
     $vsixTarget = VSIX_FILE;
     if (file_exists($vsixTarget)) {
         header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="tele-vs-code-1.0.0.vsix"');
+        header('Content-Disposition: attachment; filename="' . basename(VSIX_FILE) . '"');
         header('Content-Length: ' . filesize($vsixTarget));
         readfile($vsixTarget);
         exit;
@@ -711,16 +794,41 @@ if ($action === 'webhook') {
     // JIKA USER BELUM DI-WHITELIST UNTUK PROYEK APAPUN:
     // Jangan respon perintah apapun termasuk list projects (/projects), /whoami, /use, /status, /task, dsb.
     // HANYA perintah /id atau /myid yang direspons agar user dapat mengetahui User ID untuk didaftarkan ke whitelist.
+    // Handler perintah publik /id, /myid, atau /start (untuk pengguna belum whitelist)
+    $isIdCmd = (bool)preg_match('/^\/(id|myid|start)(?:@\w+)?(?:\s.*)?$/i', $text);
     if (empty($accessibleProjects)) {
-        if ($text === '/id' || $text === '/myid') {
-            $reply = "🆔 <b>INFORMASI ID TELEGRAM:</b>\n\n"
-                   . "• <b>User ID Anda:</b> <code>$senderUserId</code>\n"
-                   . "• <b>Username:</b> @" . htmlspecialchars($senderUsername ?: '-') . "\n"
+        if ($isIdCmd) {
+            $botId = explode(':', $project['bot_token'])[0] ?? '';
+            $reply = "🆔 <b>INFORMASI IDENTITAS TELEGRAM & BOT</b>\n"
+                   . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                   . "👤 <b>Identitas Anda:</b>\n"
+                   . "• <b>User ID Anda:</b> <code>$senderUserId</code> <i>(Gunakan nomor ini untuk Whitelist)</i>\n"
+                   . "• <b>Username:</b> " . ($senderUsername ? "@" . htmlspecialchars($senderUsername) : "<i>(Belum disetel)</i>") . "\n"
                    . "• <b>Nama:</b> " . htmlspecialchars($sender) . "\n"
-                   . "• <b>Chat ID:</b> <code>$incomingChatId</code>\n"
-                   . "• <b>Tipe Chat:</b> <code>$chatType</code>\n\n"
-                   . "⚠️ <i>User ID Telegram Anda belum didaftarkan di Whitelist Proyek manapun.\n"
-                   . "Daftarkan User ID <code>$senderUserId</code> ini pada menu Whitelist Pengguna di dashboard https://biru.co.id/tele-vs-code/ agar bot dapat merespons perintah Anda.</i>";
+                   . "• <b>Chat ID:</b> <code>$incomingChatId</code> (" . htmlspecialchars($chatType) . ")\n"
+                   . "• <b>Status Whitelist:</b> ⚪ <b>Belum Terdaftar</b>\n\n"
+                   . "🤖 <b>Identitas Bot & Proyek:</b>\n"
+                   . "• <b>Bot ID:</b> <code>$botId</code>\n"
+                   . "• <b>Target Proyek:</b> <code>" . htmlspecialchars($project['name']) . "</code> (#" . htmlspecialchars($project['code'] ?: 'a') . ")\n"
+                   . "• <b>Waktu Server:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n\n"
+                   . "━━━━━━━━━━━━━━━━━━━━━━\n"
+                   . "🚀 <b>PANDUAN PEMASANGAN & CARA PENGGUNAAN:</b>\n\n"
+                   . "<b>1. Daftarkan User ID ke Whitelist</b>\n"
+                   . "• Buka dashboard: <a href=\"https://biru.co.id/tele-vs-code/\">biru.co.id/tele-vs-code/</a>\n"
+                   . "• Buka tab <b>Proyek</b> &rarr; scroll ke bagian <b>Whitelist Pengguna Private Chat</b>\n"
+                   . "• Klik <b>Tambah User Whitelist</b> & masukkan User ID Anda: <code>$senderUserId</code>\n\n"
+                   . "<b>2. Pasang Ekstensi di Visual Studio Code</b>\n"
+                   . "• Buka VS Code &rarr; tekan <code>Ctrl+Shift+X</code> (menu Extensions)\n"
+                   . "• Cari <b>Tele-vs-Code</b> oleh <i>Biru Indonesia Creative</i> &rarr; klik <b>Install</b>\n"
+                   . "• <i>Marketplace: <a href=\"https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code\">Link Tele-vs-Code</a></i>\n\n"
+                   . "<b>3. Hubungkan ke Server Biru di VS Code</b>\n"
+                   . "• Di VS Code, klik status bar <b>Tele-vs-Code</b> di pojok kanan bawah (atau tekan <code>F1</code> &rarr; pilih <b>Tele-vs-Code: Hubungkan ke Server Biru</b>)\n"
+                   . "• Masukkan <b>API Secret Key</b> akun Anda & pilih proyek Anda\n\n"
+                   . "<b>4. Kirim Tugas & AI Otomatis Bekerja</b>\n"
+                   . "Ketik perintah apapun di chat ini (misal: <code>buat file auth.js</code> atau <code>refactor navbar</code>).\n"
+                   . "AI Agent di VS Code akan langsung mengeksekusi antrean tugas di <code>TASK_QUEUE.md</code> sampai selesai 100% dan membalas laporannya ke sini!\n\n"
+                   . "⚠️ <i>Catatan: Daftarkan User ID <code>$senderUserId</code> ke whitelist di dashboard agar bot dapat mulai mengeksekusi instruksi Anda.</i>";
+
             callTelegram($project['bot_token'], 'sendMessage', [
                 'chat_id' => $incomingChatId,
                 'text' => $reply,
@@ -763,16 +871,30 @@ if ($action === 'webhook') {
         }
     }
 
-    // Command /id - Jika sudah whitelisted
+    // Command /id & /myid - Jika sudah whitelisted
     if ($text === '/id' || $text === '/myid') {
-        $reply = "🆔 <b>INFORMASI ID TELEGRAM:</b>\n\n"
-               . "📁 <b>Proyek Aktif:</b> <code>" . htmlspecialchars($activeProject['name']) . "</code> (#" . ($activeProject['code'] ?: $activeProject['id']) . ")\n"
-               . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n"
-               . "• <b>Chat ID:</b> <code>$incomingChatId</code>\n"
-               . "• <b>Tipe Chat:</b> <code>$chatType</code>\n"
-               . "• <b>User ID Anda:</b> <code>$senderUserId</code> (✅ Terdaftar di Whitelist)\n"
-               . "• <b>Username:</b> @" . htmlspecialchars($senderUsername ?: '-') . "\n"
-               . "• <b>Nama:</b> " . htmlspecialchars($sender) . "\n";
+        $botId = explode(':', $project['bot_token'])[0] ?? '';
+        $reply = "🆔 <b>INFORMASI IDENTITAS TELEGRAM & BOT</b>\n"
+               . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+               . "👤 <b>Identitas Anda:</b>\n"
+               . "• <b>User ID Anda:</b> <code>$senderUserId</code> (🟢 <b>Terdaftar di Whitelist</b>)\n"
+               . "• <b>Username:</b> " . ($senderUsername ? "@" . htmlspecialchars($senderUsername) : "<i>(Belum disetel)</i>") . "\n"
+               . "• <b>Nama:</b> " . htmlspecialchars($sender) . "\n"
+               . "• <b>Chat ID:</b> <code>$incomingChatId</code> (" . htmlspecialchars($chatType) . ")\n\n"
+               . "🤖 <b>Identitas Bot & Proyek:</b>\n"
+               . "• <b>Bot ID:</b> <code>$botId</code>\n"
+               . "• <b>Proyek Aktif:</b> <code>" . htmlspecialchars($activeProject['name']) . "</code> (#" . ($activeProject['code'] ?: $activeProject['id']) . ")\n"
+               . "• <b>Project Key:</b> <code>" . htmlspecialchars($activeProject['project_key']) . "</code>\n"
+               . "• <b>Waktu Server:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n\n"
+               . "━━━━━━━━━━━━━━━━━━━━━━\n"
+               . "🚀 <b>PANDUAN PEMASANGAN & PENGGUNAAN:</b>\n\n"
+               . "<b>1. Pasang Ekstensi di VS Code</b>\n"
+               . "Cari <b>Tele-vs-Code</b> oleh <i>Biru Indonesia Creative</i> di menu Extensions VS Code (<code>Ctrl+Shift+X</code>) atau unduh via <a href=\"https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code\">VS Code Marketplace</a>.\n\n"
+               . "<b>2. Hubungkan Workspace ke Server Biru</b>\n"
+               . "Klik status bar <b>Tele-vs-Code</b> di pojok kanan bawah VS Code (atau <code>F1</code> &rarr; <i>Tele-vs-Code: Hubungkan ke Server Biru</i>), lalu masukkan API Secret Key akun Anda.\n\n"
+               . "<b>3. Kirim Tugas ke AI Agent</b>\n"
+               . "Ketik perintah di chat ini untuk membuat antrean tugas yang otomatis dikerjakan oleh AI Agent VS Code!";
+
         callTelegram($project['bot_token'], 'sendMessage', [
             'chat_id' => $incomingChatId,
             'text' => $reply,
@@ -1962,16 +2084,29 @@ if ($currentUser) {
             $errorMsg = 'Nama proyek wajib diisi!';
         } else {
             if (!$code) {
-                // Auto-generate code
-                $existingCount = (int)$db->query("SELECT count(*) FROM projects WHERE user_id = " . (int)$currentUser['id'])->fetchColumn();
-                $code = chr(97 + ($existingCount % 26));
+                $code = generateUniqueProjectCode($db);
             }
-            $pkey = 'prj_' . substr(bin2hex(random_bytes(6)), 0, 10);
-            $now = date('Y-m-d H:i:s');
-            $ins = $db->prepare("INSERT INTO projects (user_id, project_key, name, code, bot_token, chat_id, timezone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $ins->execute([$currentUser['id'], $pkey, $name, $code, $botToken, $chatId, $timezone, $now, $now]);
-            $successMsg = "✅ Proyek <b>" . htmlspecialchars($name) . "</b> (Kode: <code>#$code</code>) berhasil dibuat!";
-            $currentTab = 'projects';
+
+            // Validasi panjang Kode TAG: minimal 5 karakter untuk umum, admin boleh 1-4 karakter
+            if (strlen($code) < 5 && empty($isSuperAdmin)) {
+                $errorMsg = "❌ Kode TAG minimal 5 karakter! Hanya admin yang dapat menggunakan kode kurang dari 5 karakter.";
+                $currentTab = 'projects';
+            } else {
+                // Validasi keunikan Kode TAG di seluruh sistem (seperti nama domain)
+                $stmtChk = $db->prepare("SELECT id FROM projects WHERE LOWER(code) = ? LIMIT 1");
+                $stmtChk->execute([$code]);
+                if ($stmtChk->fetch()) {
+                    $errorMsg = "❌ Kode TAG '<b>#$code</b>' sudah digunakan pengguna lain! Seperti nama domain, Kode TAG harus unik di seluruh sistem.";
+                    $currentTab = 'projects';
+                } else {
+                $pkey = 'prj_' . substr(bin2hex(random_bytes(6)), 0, 10);
+                $now = date('Y-m-d H:i:s');
+                $ins = $db->prepare("INSERT INTO projects (user_id, project_key, name, code, bot_token, chat_id, timezone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $ins->execute([$currentUser['id'], $pkey, $name, $code, $botToken, $chatId, $timezone, $now, $now]);
+                $successMsg = "✅ Proyek <b>" . htmlspecialchars($name) . "</b> (Kode TAG: <code>#$code</code>) berhasil dibuat!";
+                $currentTab = 'projects';
+                }
+            }
         }
     }
 
@@ -1985,14 +2120,28 @@ if ($currentUser) {
         $timezone = trim($_POST['timezone'] ?? '');
 
         if (!$code) {
-            $code = 'a';
+            $code = generateUniqueProjectCode($db);
         }
 
-        $upd = $db->prepare("UPDATE projects SET name = ?, code = ?, bot_token = ?, chat_id = ?, timezone = ?, updated_at = ? WHERE id = ? AND user_id = ?");
-        $upd->execute([$name, $code, $botToken, $chatId, $timezone, date('Y-m-d H:i:s'), $pid, $currentUser['id']]);
+        // Validasi panjang Kode TAG: minimal 5 karakter untuk umum, admin boleh 1-4 karakter
+        if (strlen($code) < 5 && empty($isSuperAdmin)) {
+            $errorMsg = "❌ Kode TAG minimal 5 karakter! Hanya admin yang dapat menggunakan kode kurang dari 5 karakter.";
+            $currentTab = 'projects';
+        } else {
+            // Validasi keunikan Kode TAG di seluruh sistem (seperti nama domain)
+            $stmtChk = $db->prepare("SELECT id FROM projects WHERE LOWER(code) = ? AND id != ? LIMIT 1");
+            $stmtChk->execute([$code, $pid]);
+            if ($stmtChk->fetch()) {
+                $errorMsg = "❌ Kode TAG '<b>#$code</b>' sudah digunakan pengguna lain! Seperti nama domain, Kode TAG harus unik di seluruh sistem.";
+                $currentTab = 'projects';
+            } else {
+            $upd = $db->prepare("UPDATE projects SET name = ?, code = ?, bot_token = ?, chat_id = ?, timezone = ?, updated_at = ? WHERE id = ? AND user_id = ?");
+            $upd->execute([$name, $code, $botToken, $chatId, $timezone, date('Y-m-d H:i:s'), $pid, $currentUser['id']]);
 
-        $successMsg = "✅ Perubahan proyek <b>" . htmlspecialchars($name) . "</b> berhasil disimpan!";
-        $currentTab = 'projects';
+            $successMsg = "✅ Perubahan proyek <b>" . htmlspecialchars($name) . "</b> (Kode TAG: <code>#$code</code>) berhasil disimpan!";
+            $currentTab = 'projects';
+            }
+        }
     }
 
     // Update Zona Waktu Akun Pengguna
@@ -2358,7 +2507,10 @@ function renderSvg($name, $size = 15, $class = '') {
         'key' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>',
         'link' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
         'bot' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><rect width="18" height="12" x="3" y="6" rx="2"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M12 2v4"/><path d="M2 10h1"/><path d="M21 10h1"/></svg>',
-        'close' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+        'close' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+        'chevron-down' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><polyline points="6 9 12 15 18 9"/></svg>',
+        'chevron-up' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><polyline points="18 15 12 9 6 15"/></svg>',
+        'minimize' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>'
     ];
     return $icons[$name] ?? '';
 }
@@ -3037,9 +3189,12 @@ function renderSvg($name, $size = 15, $class = '') {
                                 <input type="text" name="name" placeholder="Contoh: E-Commerce Mobile App" required>
                             </div>
                             <div class="form-group">
-                                <label>Kode Tag Telegram (a, b, web, api) :</label>
-                                <input type="text" name="code" placeholder="Contoh: a" style="color: #fff; font-weight: 500;">
-                                <small style="color: var(--text-muted); font-size: 11px;">Prefix di Telegram: <code>#a</code></small>
+                                <label>Kode Tag Telegram (Unik Global, <?= !empty($isSuperAdmin) ? 'Bebas 1-20 Karakter' : 'Minimal 5 Karakter' ?>) * :</label>
+                                <?php $defCode = generateUniqueProjectCode($db); ?>
+                                <input type="text" name="code" id="new_project_code" value="<?= $defCode ?>" placeholder="Contoh: <?= $defCode ?>" style="color: #fff; font-weight: 600; letter-spacing: 1px;" minlength="<?= !empty($isSuperAdmin) ? '1' : '5' ?>" onblur="checkTagUniqueness(this, 0, 'new_code_feedback', 'btnCreateProject')" oninput="checkTagUniqueness(this, 0, 'new_code_feedback', 'btnCreateProject')" required>
+                                <div id="new_code_feedback" style="font-size: 11.5px; margin-top: 4px; color: var(--text-muted);">
+                                    Prefix di Telegram: <code>#<?= $defCode ?></code> (<?= !empty($isSuperAdmin) ? 'Admin: bebas 1-20 karakter' : 'Minimal 5 karakter unik di seluruh sistem' ?>)
+                                </div>
                             </div>
                         </div>
                         <div class="grid-2">
@@ -3050,6 +3205,9 @@ function renderSvg($name, $size = 15, $class = '') {
                             <div class="form-group">
                                 <label>Chat ID / Group ID :</label>
                                 <input type="text" name="chat_id" placeholder="Contoh: -0000000000">
+                                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+                                    💡 Ketik <code>/id</code> atau <code>/myid</code> di chat bot Telegram untuk mengetahui Chat ID Anda.
+                                </div>
                             </div>
                         </div>
                         <div class="form-group">
@@ -3062,7 +3220,7 @@ function renderSvg($name, $size = 15, $class = '') {
                             </select>
                         </div>
                         <div style="display: flex; gap: 8px; margin-top: 14px;">
-                            <button type="submit" class="btn btn-primary btn-sm">Buat Proyek</button>
+                            <button type="submit" id="btnCreateProject" class="btn btn-primary btn-sm">Buat Proyek</button>
                             <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('boxNewProject').style.display='none'">Batal</button>
                         </div>
                     </form>
@@ -3118,28 +3276,28 @@ function renderSvg($name, $size = 15, $class = '') {
                     <?php
                         $webhookUrl = "https://biru.co.id/tele-vs-code/webhook?pkey=" . urlencode($prj['project_key']);
                     ?>
-                    <div class="card" style="margin-bottom: 20px;">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px; margin-bottom: 16px;">
-                            <div>
+                    <div class="card" id="projectCard_<?= $prj['id'] ?>" style="margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px;">
+                            <div style="cursor: pointer;" onclick="toggleProjectCard(<?= $prj['id'] ?>)" title="Klik untuk membuka / menutup form pengaturan">
                                 <h3 style="font-size: 16px; font-weight: 500; color: #fff; display: flex; align-items: center; gap: 8px;">
                                     <span><?= htmlspecialchars($prj['name']) ?></span>
                                     <span class="badge badge-done">Tag: #<?= htmlspecialchars($prj['code'] ?: 'a') ?></span>
-                                    <span style="font-size: 11.5px; background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 2px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.3); display: inline-flex; align-items: center; gap: 6px;">
+                                    <span style="font-size: 11.5px; background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 2px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.3); display: inline-flex; align-items: center; gap: 6px;" onclick="event.stopPropagation();">
                                         <span>Project Key:</span> <code><?= htmlspecialchars($prj['project_key']) ?></code>
-                                        <button type="button" class="btn btn-icon btn-ghost" style="width: 18px; height: 18px; color: #38bdf8; padding: 0;" onclick="copyText('<?= htmlspecialchars($prj['project_key']) ?>', 'Project Key')" title="Salin Project Key">
+                                        <button type="button" class="btn btn-icon btn-ghost" style="width: 18px; height: 18px; color: #38bdf8; padding: 0;" onclick="event.stopPropagation(); copyText('<?= htmlspecialchars($prj['project_key']) ?>', 'Project Key')" title="Salin Project Key">
                                             <?= renderSvg('copy', 11) ?>
                                         </button>
                                     </span>
                                 </h3>
-                                <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; align-items: center; gap: 6px;">
+                                <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; align-items: center; gap: 6px;" onclick="event.stopPropagation();">
                                     <span>Webhook:</span>
                                     <code><?= $webhookUrl ?></code>
-                                    <button type="button" class="btn btn-icon btn-ghost" style="width: 20px; height: 20px;" onclick="copyText('<?= htmlspecialchars($webhookUrl) ?>', 'Webhook URL')" title="Salin Webhook">
+                                    <button type="button" class="btn btn-icon btn-ghost" style="width: 20px; height: 20px;" onclick="event.stopPropagation(); copyText('<?= htmlspecialchars($webhookUrl) ?>', 'Webhook URL')" title="Salin Webhook">
                                         <?= renderSvg('copy', 11) ?>
                                     </button>
                                 </div>
                             </div>
-                            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
                                 <?php if (!empty($prj['bot_token'])): ?>
                                     <a href="?action=test_bot&id=<?= $prj['id'] ?>" class="btn btn-secondary btn-sm" title="Uji Bot">
                                         <?= renderSvg('bot', 13) ?>
@@ -3150,16 +3308,18 @@ function renderSvg($name, $size = 15, $class = '') {
                                         <span>Pasang Webhook</span>
                                     </a>
                                 <?php endif; ?>
-                                <?php if (count($projects) > 1): ?>
-                                    <a href="?action=delete_project&id=<?= $prj['id'] ?>&csrf=<?= getCsrfToken() ?>" onclick="return confirm('Hapus proyek ini?')" class="btn btn-danger btn-sm" title="Hapus Proyek">
-                                        <?= renderSvg('trash', 13) ?>
-                                    </a>
-                                <?php endif; ?>
+                                <!-- Tombol Minimize / Collapse Card (Default Tertutup) -->
+                                <button type="button" class="btn btn-outline btn-sm" id="btnToggleProject_<?= $prj['id'] ?>" onclick="toggleProjectCard(<?= $prj['id'] ?>)" title="Buka / Minimalkan Form Proyek" style="display: inline-flex; align-items: center; gap: 6px;">
+                                    <span id="iconToggleProject_<?= $prj['id'] ?>" style="display: inline-flex; align-items: center; transition: transform 0.25s ease;">
+                                        <?= renderSvg('chevron-down', 13) ?>
+                                    </span>
+                                    <span id="textToggleProject_<?= $prj['id'] ?>">Buka</span>
+                                </button>
                             </div>
                         </div>
 
-                        <!-- Form Edit Proyek -->
-                        <form method="POST" action="?action=save_project">
+                        <!-- Form Edit Proyek (Collapsible, Default Tertutup) -->
+                        <form method="POST" action="?action=save_project" id="projectForm_<?= $prj['id'] ?>" style="display: none; margin-top: 18px; border-top: 1px solid var(--border-subtle); padding-top: 18px;">
                             <input type="hidden" name="csrf" value="<?= getCsrfToken() ?>">
                             <input type="hidden" name="project_id" value="<?= $prj['id'] ?>">
 
@@ -3169,8 +3329,11 @@ function renderSvg($name, $size = 15, $class = '') {
                                     <input type="text" name="name" value="<?= htmlspecialchars($prj['name']) ?>" required>
                                 </div>
                                 <div class="form-group">
-                                    <label>Kode Tag Telegram (a, b):</label>
-                                    <input type="text" name="code" value="<?= htmlspecialchars($prj['code'] ?? '') ?>" placeholder="a" style="font-weight: 500; color: #fff;">
+                                    <label>Kode Tag Telegram (Unik Global, <?= !empty($isSuperAdmin) ? 'Bebas 1-20 Karakter' : 'Minimal 5 Karakter' ?>) * :</label>
+                                    <input type="text" name="code" id="edit_project_code_<?= $prj['id'] ?>" value="<?= htmlspecialchars($prj['code'] ?? '') ?>" placeholder="<?= !empty($isSuperAdmin) ? '1-20 karakter' : 'Minimal 5 karakter' ?>" style="font-weight: 600; color: #fff; letter-spacing: 1px;" minlength="<?= !empty($isSuperAdmin) ? '1' : '5' ?>" onblur="checkTagUniqueness(this, <?= $prj['id'] ?>, 'edit_code_feedback_<?= $prj['id'] ?>', 'btnSaveProject_<?= $prj['id'] ?>')" oninput="checkTagUniqueness(this, <?= $prj['id'] ?>, 'edit_code_feedback_<?= $prj['id'] ?>', 'btnSaveProject_<?= $prj['id'] ?>')" required>
+                                    <div id="edit_code_feedback_<?= $prj['id'] ?>" style="font-size: 11.5px; margin-top: 4px; color: var(--text-muted);">
+                                        Prefix di Telegram: <code>#<?= htmlspecialchars($prj['code'] ?? '') ?></code> (<?= !empty($isSuperAdmin) ? 'Admin: bebas 1-20 karakter' : 'Minimal 5 karakter' ?>)
+                                    </div>
                                 </div>
                             </div>
 
@@ -3182,6 +3345,9 @@ function renderSvg($name, $size = 15, $class = '') {
                                 <div class="form-group">
                                     <label>Group / Chat ID:</label>
                                     <input type="text" name="chat_id" value="<?= htmlspecialchars($prj['chat_id']) ?>" placeholder="-0000000000">
+                                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+                                        💡 Ketik <code>/id</code> atau <code>/myid</code> di grup Telegram atau chat pribadi bot untuk melihat Chat ID.
+                                    </div>
                                 </div>
                             </div>
 
@@ -3207,10 +3373,18 @@ function renderSvg($name, $size = 15, $class = '') {
                                 </div>
                             </div>
 
-                            <div style="display: flex; gap: 8px;">
-                                <button type="submit" class="btn btn-primary btn-sm">Simpan Pengaturan</button>
-                                <?php if (!empty($prj['bot_token'])): ?>
-                                    <a href="?action=test_bot&id=<?= $prj['id'] ?>" class="btn btn-outline btn-sm">Tes Koneksi</a>
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px;">
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <button type="submit" class="btn btn-primary btn-sm">Simpan Pengaturan</button>
+                                    <?php if (!empty($prj['bot_token'])): ?>
+                                        <a href="?action=test_bot&id=<?= $prj['id'] ?>" class="btn btn-outline btn-sm">Tes Koneksi</a>
+                                    <?php endif; ?>
+                                </div>
+                                <?php if (count($projects) > 1): ?>
+                                    <a href="?action=delete_project&id=<?= $prj['id'] ?>&csrf=<?= getCsrfToken() ?>" onclick="return confirm('Yakin ingin menghapus proyek <?= htmlspecialchars($prj['name']) ?>?')" class="btn btn-danger btn-sm" title="Hapus Proyek" style="display: inline-flex; align-items: center; gap: 6px;">
+                                        <?= renderSvg('trash', 13) ?>
+                                        <span>Hapus Proyek</span>
+                                    </a>
                                 <?php endif; ?>
                             </div>
                         </form>
@@ -3233,6 +3407,17 @@ function renderSvg($name, $size = 15, $class = '') {
                             <?= renderSvg('plus', 13) ?>
                             <span>Tambah User Whitelist</span>
                         </button>
+                    </div>
+
+                    <!-- Informasi Cara Mendapatkan User ID Telegram -->
+                    <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: var(--radius-md); padding: 14px 18px; margin-bottom: 18px; font-size: 12.5px; color: #bae6fd; line-height: 1.6;">
+                        <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; color: #38bdf8; margin-bottom: 4px;">
+                            <?= renderSvg('help', 15) ?>
+                            <span>Cara Mengetahui User ID Telegram Anda:</span>
+                        </div>
+                        <div>
+                            Buka aplikasi Telegram dan kirim pesan perintah <code>/id</code> atau <code>/myid</code> ke <b>Bot Telegram</b> proyek Anda di obrolan pribadi (private message). Bot akan langsung membalas dengan <b>User ID Anda</b>, <b>ID Bot</b>, serta panduan pemasangan. Salin nomor User ID tersebut lalu klik tombol <b>Tambah User Whitelist</b> di atas untuk mendaftarkannya.
+                        </div>
                     </div>
 
                     <!-- Form Tambah Whitelist (Collapsible) -->
@@ -3413,8 +3598,8 @@ function renderSvg($name, $size = 15, $class = '') {
                     </div>
 
                     <div class="card-inner" style="margin-bottom: 12px;">
-                        <h4 style="font-size: 13.5px; font-weight: 500; color: #fff; margin-bottom: 4px;">2. Dapatkan Chat ID Grup atau Chat Pribadi</h4>
-                        <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">Masukkan bot ke dalam grup Telegram Anda &rarr; ketik perintah <code>/id</code> di grup &rarr; bot akan membalas dengan Chat ID angka Anda. Masukkan ke kolom <b>Group / Chat ID</b>.</p>
+                        <h4 style="font-size: 13.5px; font-weight: 500; color: #fff; margin-bottom: 4px;">2. Dapatkan Chat ID & User ID via /id atau /myid</h4>
+                        <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">Kirim pesan <code>/id</code> atau <code>/myid</code> ke Bot Anda di chat pribadi (private message) untuk mendapatkan <b>User ID Anda</b> & <b>ID Bot</b>, atau ketik <code>/id</code> di dalam grup untuk mendapatkan <b>Chat ID grup</b>. Bot juga otomatis membalas dengan panduan instalasi lengkap.</p>
                     </div>
 
                     <div class="card-inner" style="margin-bottom: 12px;">
@@ -3424,7 +3609,7 @@ function renderSvg($name, $size = 15, $class = '') {
 
                     <div class="card-inner">
                         <h4 style="font-size: 13.5px; font-weight: 500; color: #fff; margin-bottom: 4px;">4. Hubungkan ke Visual Studio Code (.VSIX)</h4>
-                        <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">Unduh file <code>tele-vs-code-1.0.0.vsix</code> di atas &rarr; buka VS Code &rarr; tekan <code>Ctrl+Shift+X</code> &rarr; pilih <b>Install from VSIX...</b> &rarr; masukkan API Key akun Anda.</p>
+                        <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">Unduh file <code><?= basename(VSIX_FILE) ?></code> di atas &rarr; buka VS Code &rarr; tekan <code>Ctrl+Shift+X</code> &rarr; pilih <b>Install from VSIX...</b> &rarr; masukkan API Key akun Anda.</p>
                     </div>
                 </div>
             </section>
@@ -3765,6 +3950,67 @@ function renderSvg($name, $size = 15, $class = '') {
 <script src="assets/js/liquid.js?v=<?= filemtime(__DIR__ . '/assets/js/liquid.js') ?>"></script>
 <script src="assets/js/sonner.js?v=<?= filemtime(__DIR__ . '/assets/js/sonner.js') ?>"></script>
 <script src="assets/js/app.js?v=<?= filemtime(__DIR__ . '/assets/js/app.js') ?>"></script>
+<script>
+const IS_USER_ADMIN = <?= !empty($isSuperAdmin) ? 'true' : 'false' ?>;
+let tagCheckTimeout = null;
+function checkTagUniqueness(inputEl, excludeId, feedbackId, submitBtnId) {
+    clearTimeout(tagCheckTimeout);
+    const feedbackEl = document.getElementById(feedbackId);
+    const submitBtn = submitBtnId ? document.getElementById(submitBtnId) : null;
+    const rawVal = inputEl.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    inputEl.value = rawVal;
+
+    const minLen = IS_USER_ADMIN ? 1 : 5;
+
+    if (!rawVal || rawVal.length < minLen) {
+        if (feedbackEl) {
+            feedbackEl.innerHTML = `<span style="color: #f87171;">❌ Kode TAG minimal ${minLen} karakter!${!IS_USER_ADMIN ? ' (Hanya admin yang boleh kurang dari 5 karakter)' : ''}</span>`;
+        }
+        if (submitBtn) submitBtn.disabled = true;
+        inputEl.style.borderColor = 'rgba(248, 113, 113, 0.7)';
+        return;
+    }
+
+    tagCheckTimeout = setTimeout(async () => {
+        try {
+            const res = await fetch(`?action=check_code_unique&code=${encodeURIComponent(rawVal)}&exclude_id=${excludeId}`);
+            const data = await res.json();
+            if (feedbackEl) {
+                if (data.available) {
+                    feedbackEl.innerHTML = `<span style="color: #4ade80;">✅ Kode TAG <b>#${rawVal}</b> tersedia & unik di seluruh sistem!</span>`;
+                    if (submitBtn) submitBtn.disabled = false;
+                    inputEl.style.borderColor = 'rgba(74, 222, 128, 0.6)';
+                } else {
+                    feedbackEl.innerHTML = `<span style="color: #f87171;">❌ ${data.message || 'Kode TAG sudah dipakai pengguna lain!'}</span>`;
+                    if (submitBtn) submitBtn.disabled = true;
+                    inputEl.style.borderColor = 'rgba(248, 113, 113, 0.7)';
+                }
+            }
+        } catch (e) {}
+    }, 250);
+}
+
+function toggleProjectCard(id) {
+    const form = document.getElementById('projectForm_' + id);
+    const textEl = document.getElementById('textToggleProject_' + id);
+    const iconEl = document.getElementById('iconToggleProject_' + id);
+    const btn = document.getElementById('btnToggleProject_' + id);
+    if (!form) return;
+
+    const isClosed = (form.style.display === 'none' || form.style.display === '');
+    if (isClosed) {
+        form.style.display = 'block';
+        if (textEl) textEl.textContent = 'Minimalkan';
+        if (iconEl) iconEl.style.transform = 'rotate(180deg)';
+        if (btn) btn.setAttribute('title', 'Minimalkan Card Proyek');
+    } else {
+        form.style.display = 'none';
+        if (textEl) textEl.textContent = 'Buka';
+        if (iconEl) iconEl.style.transform = 'rotate(0deg)';
+        if (btn) btn.setAttribute('title', 'Buka Pengaturan Proyek');
+    }
+}
+</script>
 
 </body>
 </html>
