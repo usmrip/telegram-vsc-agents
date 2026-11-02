@@ -15,7 +15,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
         ...options,
         headers: {
           'Connection': 'close',
-          'User-Agent': 'Tele-vs-Code/1.0.8',
+          'User-Agent': 'Tele-vs-Code/1.0.9',
           ...(options.headers || {})
         },
         signal: options.signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined)
@@ -443,12 +443,18 @@ async function executeTask(task) {
         const synced = syncServerFiles();
         report = synced ? `File server berhasil di-publish ke ${deployDir}` : `Deploy ke ${deployDir} selesai`;
       } else if (lowerInst.includes('backup')) {
-        const now = new Date();
-        const dateFolder = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-        const timeFolder = `${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}`;
-        const backupDir = path.join(path.dirname(projectDir), 'backups', `${dateFolder}_${timeFolder}`);
-        fs.mkdirSync(backupDir, { recursive: true });
-        report = `Direktori backup dibuat di ${backupDir}`;
+        const backupScript = path.join(projectDir, 'backup.js');
+        if (fs.existsSync(backupScript)) {
+          execSync(`node "${backupScript}"`, { cwd: projectDir, stdio: 'inherit' });
+          report = 'Pencadangan penuh berhasil dibuat (database SQLite, source code, dan redundansi Drive U:)';
+        } else {
+          const now = new Date();
+          const dateFolder = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+          const timeFolder = `${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}`;
+          const backupDir = path.join(path.dirname(projectDir), 'backups', `${dateFolder}_${timeFolder}`);
+          fs.mkdirSync(backupDir, { recursive: true });
+          report = `Direktori backup dibuat di ${backupDir}`;
+        }
       } else if (lowerInst.includes('saveall')) {
         syncServerFiles();
         report = `Backup lengkap dibuat dan file server di-publish ke ${deployDir}`;
