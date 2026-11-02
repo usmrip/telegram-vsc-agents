@@ -22,6 +22,7 @@
   "command.toggleAutoPull": "Jeda / Nyalakan Worker Otomatis (Auto-Pull)",
   "command.pullTasks": "Tarik Antrean Sekarang (Manual Webhook Sync)",
   "command.startCliWorker": "Jalankan Autonomous CLI Worker di Terminal",
+  "command.uploadMedia": "Unggah File / Media Dokumentasi ke Server Biru",
   "command.showMenu": "Buka Menu Utama Tele-vs-Code"
 }
 

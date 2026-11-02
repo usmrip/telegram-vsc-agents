@@ -23,6 +23,7 @@ if (args.length === 0 || args[0] === '-h' || args[0] === '--help') {
   console.log('  tele-task failed "<TASK-ID>" "<Penyebab kendala>"');
   console.log('  tele-task list');
   console.log('  tele-task whoami');
+  console.log('  tele-task upload <path_to_file> [--caption "Catatan"] [--task "#TASK-xxx"] [--notify]');
   process.exit(0);
 }
 
@@ -373,6 +374,54 @@ async function run() {
       }
     } catch (err) {
       console.error(`❌ Gagal mengambil status: ${err.message}`);
+    }
+  } else if (command === 'upload') {
+    const filePath = args[1];
+    if (!filePath) {
+      console.error('[ERROR] Path file wajib disertakan! Contoh: node tele-task.js upload screenshot.png --caption "Hasil pengujian"');
+      process.exit(1);
+    }
+    const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+    if (!fs.existsSync(absPath)) {
+      console.error(`[ERROR] File tidak ditemukan di: ${absPath}`);
+      process.exit(1);
+    }
+    let caption = '';
+    let taskId = '';
+    let notifyTele = false;
+    for (let i = 2; i < args.length; i++) {
+      if (args[i] === '--caption' || args[i] === '-c') caption = args[++i] || '';
+      else if (args[i] === '--task' || args[i] === '-t') taskId = args[++i] || '';
+      else if (args[i] === '--notify' || args[i] === '-n') notifyTele = true;
+    }
+
+    try {
+      console.log(`📤 Mengunggah berkas "${path.basename(absPath)}" ke Server Biru untuk dokumentasi...`);
+      const fileBuf = fs.readFileSync(absPath);
+      const blob = new Blob([fileBuf]);
+      const formData = new FormData();
+      formData.append('file', blob, path.basename(absPath));
+      if (caption) formData.append('caption', caption);
+      if (taskId) formData.append('task_id', taskId);
+      if (projectKey) formData.append('project', projectKey);
+      formData.append('uploaded_by', `${os.userInfo().username}@${os.hostname()} (CLI tele-task)`);
+      if (notifyTele) formData.append('notify_telegram', '1');
+
+      const baseUrl = normalizedUrl.replace(/\/webhook\/?$/, '/').replace(/\/$/, '');
+      const uploadUrl = `${baseUrl}/?action=upload_media&secret=${encodeURIComponent(secretKey)}`;
+      const res = await fetch(uploadUrl, { method: 'POST', body: formData });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        console.log(`✅ [SUKSES] Berkas berhasil diunggah ke Server Biru!`);
+        console.log(`📁 Nama Berkas : ${data.file_name}`);
+        console.log(`🌐 URL Server   : ${data.file_url}`);
+        console.log(`📦 Ukuran      : ${(data.file_size / 1024).toFixed(1)} KB`);
+        if (data.task_id) console.log(`🆔 ID Tugas    : ${data.task_id}`);
+      } else {
+        console.error(`❌ Gagal mengunggah: ${data.error || res.status}`);
+      }
+    } catch (err) {
+      console.error(`❌ Network error: ${err.message}`);
     }
   }
 }

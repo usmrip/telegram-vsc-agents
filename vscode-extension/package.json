@@ -290,8 +290,22 @@
         "command": "telegramNotifier.executeActiveTask",
         "title": "Jalankan Tugas Aktif via Agent Handler Terpilih",
         "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.uploadMedia",
+        "title": "Unggah File / Media Dokumentasi ke Server Biru",
+        "category": "Tele-vs-Code"
       }
     ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "telegramNotifier.uploadMedia",
+          "group": "tele_vs_code",
+          "when": "!explorerResourceIsFolder"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {

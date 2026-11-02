@@ -12,7 +12,7 @@ $actionParam = $_GET['action'] ?? ($_POST['action'] ?? '');
 $isApiOrWebhook = (
     strpos($reqUri, '/tele-vs-code/webhook') !== false ||
     isset($_GET['is_webhook']) ||
-    in_array($actionParam, ['pull', 'api_pull', 'push', 'api_push', 'done', 'api_done', 'failed', 'api_failed', 'in_progress', 'api_in_progress', 'status', 'api_status', 'projects', 'api_projects', 'webhook'])
+    in_array($actionParam, ['pull', 'api_pull', 'push', 'api_push', 'done', 'api_done', 'failed', 'api_failed', 'in_progress', 'api_in_progress', 'status', 'api_status', 'projects', 'api_projects', 'webhook', 'upload', 'upload_media', 'api_upload_media', 'media_list', 'api_media_list'])
 );
 
 if (!$isApiOrWebhook && session_status() === PHP_SESSION_NONE) {
@@ -124,7 +124,7 @@ function getDb() {
         
         // Optimasi: Eksekusi DDL & Migrasi skema database hanya jika versi skema belum up-to-date
         $ver = (int)$pdo->query("PRAGMA user_version")->fetchColumn();
-        $targetVer = 2;
+        $targetVer = 3;
         if ($ver < $targetVer) {
             runDatabaseMigrations($pdo);
             $pdo->exec("PRAGMA user_version = $targetVer;");
@@ -227,6 +227,25 @@ function runDatabaseMigrations($pdo) {
         notes TEXT,
         result TEXT DEFAULT '',
         command TEXT DEFAULT '',
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )");
+
+    // Table Project Media & Dokumentasi
+    $pdo->exec("CREATE TABLE IF NOT EXISTS project_media (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        project_id INTEGER DEFAULT 0,
+        project_key TEXT DEFAULT '',
+        task_id TEXT DEFAULT '',
+        file_name TEXT NOT NULL,
+        original_name TEXT DEFAULT '',
+        file_path TEXT NOT NULL,
+        file_url TEXT NOT NULL,
+        file_type TEXT DEFAULT '',
+        file_size INTEGER DEFAULT 0,
+        caption TEXT DEFAULT '',
+        uploaded_by TEXT DEFAULT 'IDE',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )");
 
@@ -1191,6 +1210,8 @@ if ($action === 'failed') $action = 'api_failed';
 if ($action === 'in_progress' || $action === 'start' || $action === 'proses') $action = 'api_in_progress';
 if ($action === 'status') $action = 'api_status';
 if ($action === 'projects') $action = 'api_projects';
+if ($action === 'upload' || $action === 'upload_media' || $action === 'upload_file') $action = 'api_upload_media';
+if ($action === 'media_list' || $action === 'get_media') $action = 'api_media_list';
 
 // Deteksi jika diakses via endpoint /tele-vs-code/webhook
 $reqUri = $_SERVER['REQUEST_URI'] ?? '';
@@ -2473,7 +2494,7 @@ if ($action === 'attachment') {
 }
 
 // REST API untuk VS Code Extension & Worker Agent
-if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in_progress', 'api_status', 'api_projects'])) {
+if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in_progress', 'api_status', 'api_projects', 'api_upload_media', 'api_media_list'])) {
     $apiKey = $_GET['secret'] ?? ($_POST['secret'] ?? ($_GET['key'] ?? ($_POST['key'] ?? ($_SERVER['HTTP_X_API_KEY'] ?? ''))));
     if (!$apiKey) {
         http_response_code(401);
@@ -2504,6 +2525,236 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $stmtP = $db->prepare("SELECT id, project_key, name, code, bot_token, chat_id, timezone, last_workspace_folder, last_operator, last_seen FROM projects WHERE user_id = ?");
         $stmtP->execute([$user['id']]);
         echo json_encode(['ok' => true, 'projects' => $stmtP->fetchAll(PDO::FETCH_ASSOC)]);
+        exit;
+    }
+
+    // Upload Media / File Dokumentasi dari IDE atau CLI
+    if ($action === 'api_upload_media') {
+        $fileKey = null;
+        foreach (['file', 'media', 'attachment', 'document', 'image'] as $k) {
+            if (!empty($_FILES[$k]) && !empty($_FILES[$k]['tmp_name'])) {
+                $fileKey = $k;
+                break;
+            }
+        }
+
+        if (!$fileKey || empty($_FILES[$fileKey]['tmp_name'])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Tidak ada file atau media yang diunggah. Gunakan field "file" atau "media" dalam multipart/form-data.']);
+            exit;
+        }
+
+        $f = $_FILES[$fileKey];
+        if ($f['error'] !== UPLOAD_ERR_OK) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Gagal mengunggah file (Kode error PHP: ' . $f['error'] . ')']);
+            exit;
+        }
+
+        $maxBytes = 50 * 1024 * 1024; // 50MB
+        if ($f['size'] > $maxBytes) {
+            http_response_code(413);
+            echo json_encode(['error' => 'Ukuran file melebihi batas maksimum 50MB.']);
+            exit;
+        }
+
+        $prjInput = trim($_POST['project'] ?? ($_GET['project'] ?? ($_POST['project_key'] ?? ($_GET['project_key'] ?? ''))));
+        $targetProject = null;
+        if ($prjInput) {
+            $stmtPrj = $db->prepare("SELECT * FROM projects WHERE user_id = ? AND (project_key = ? OR LOWER(code) = ? OR LOWER(name) = ?) LIMIT 1");
+            $stmtPrj->execute([$user['id'], $prjInput, strtolower($prjInput), strtolower($prjInput)]);
+            $targetProject = $stmtPrj->fetch(PDO::FETCH_ASSOC);
+        }
+        if (!$targetProject) {
+            $stmtPrj = $db->prepare("SELECT * FROM projects WHERE user_id = ? ORDER BY id ASC LIMIT 1");
+            $stmtPrj->execute([$user['id']]);
+            $targetProject = $stmtPrj->fetch(PDO::FETCH_ASSOC);
+        }
+
+        $prjId = $targetProject ? (int)$targetProject['id'] : 0;
+        $prjKey = $targetProject ? $targetProject['project_key'] : 'prj_general';
+        $taskId = trim($_POST['task_id'] ?? ($_GET['task_id'] ?? ($_POST['id'] ?? ($_GET['id'] ?? ''))));
+        $caption = trim($_POST['caption'] ?? ($_GET['caption'] ?? ($_POST['description'] ?? ($_GET['description'] ?? ''))));
+        $uploadedBy = trim($_POST['uploaded_by'] ?? ($_GET['uploaded_by'] ?? 'IDE'));
+
+        $origName = basename(str_replace(['../', '..\\', chr(0)], '', $f['name']));
+        $cleanName = preg_replace('/[^a-zA-Z0-9_.\-]/', '_', $origName);
+        $cleanName = preg_replace('/\.(php[0-9]*|phtml|phar|phps|inc|shtml|cgi|pl|py|sh|bash|bat|cmd|ps1|exe|asp|aspx|jsp|env)\./i', '_$1.', $cleanName);
+
+        $ext = strtolower(pathinfo($cleanName, PATHINFO_EXTENSION));
+        $executableExts = [
+            'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'phps', 'inc',
+            'shtml', 'cgi', 'pl', 'py', 'sh', 'bash', 'zsh', 'bat', 'cmd', 'ps1', 'psm1',
+            'exe', 'com', 'scr', 'msi', 'vbs', 'vbe', 'wsf', 'wsh', 'htaccess', 'htpasswd',
+            'ini', 'config', 'conf', 'asp', 'aspx', 'jsp', 'jspx', 'action', 'do', 'dll', 'so',
+            'env', 'svgz'
+        ];
+        if (in_array($ext, $executableExts) || empty($ext)) {
+            $cleanName .= '.txt';
+            $ext = 'txt';
+        }
+
+        $dateSub = date('Ymd');
+        if ($taskId) {
+            $cleanTid = preg_replace('/[^a-zA-Z0-9_#-]/', '', $taskId);
+            $subFolder = $cleanTid;
+        } else {
+            $subFolder = $prjKey . '/' . $dateSub;
+        }
+
+        $uploadDir = __DIR__ . '/uploads/' . $subFolder;
+        if (!is_dir($uploadDir)) {
+            @mkdir($uploadDir, 0755, true);
+        }
+
+        $mainUploadDir = __DIR__ . '/uploads';
+        if (!file_exists($mainUploadDir . '/.htaccess')) {
+            $ht = "<FilesMatch \"(?i)\\.(php|phtml|phar|phps|inc|shtml|cgi|pl|py|sh|bat|cmd|exe|htaccess)$\">\n"
+                . "    <IfModule mod_authz_core.c>\n"
+                . "        Require all denied\n"
+                . "    </IfModule>\n"
+                . "</FilesMatch>\n"
+                . "<IfModule mod_headers.c>\n"
+                . "    Header set X-Content-Type-Options \"nosniff\"\n"
+                . "</IfModule>\n";
+            @file_put_contents($mainUploadDir . '/.htaccess', $ht);
+        }
+
+        $baseStem = pathinfo($cleanName, PATHINFO_FILENAME);
+        $finalName = $cleanName;
+        $counter = 1;
+        while (file_exists($uploadDir . '/' . $finalName)) {
+            $finalName = $baseStem . '_' . date('His') . '_' . $counter . '.' . $ext;
+            $counter++;
+        }
+
+        $targetPath = $uploadDir . '/' . $finalName;
+        if (!move_uploaded_file($f['tmp_name'], $targetPath)) {
+            if (!copy($f['tmp_name'], $targetPath)) {
+                http_response_code(500);
+                echo json_encode(['error' => 'Gagal menyimpan file ke direktori server']);
+                exit;
+            }
+            @unlink($f['tmp_name']);
+        }
+
+        $fileContentSample = @file_get_contents($targetPath, false, null, 0, 4096);
+        if ($fileContentSample !== false && (preg_match('/<\?(php|=|\s)/i', $fileContentSample) || stripos($fileContentSample, '__halt_compiler') !== false)) {
+            if (!str_ends_with(strtolower($finalName), '.txt')) {
+                $safeRenamed = $finalName . '.txt';
+                rename($targetPath, $uploadDir . '/' . $safeRenamed);
+                $finalName = $safeRenamed;
+                $targetPath = $uploadDir . '/' . $finalName;
+            }
+        }
+
+        $subFolderParts = explode('/', $subFolder);
+        $encodedSub = implode('/', array_map('rawurlencode', $subFolderParts));
+        $fileUrl = "https://biru.co.id/tele-vs-code/uploads/" . $encodedSub . "/" . rawurlencode($finalName);
+
+        $fileType = $f['type'] ?? '';
+        if (!$fileType || $fileType === 'application/octet-stream') {
+            $extMime = [
+                'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'webp' => 'image/webp', 'gif' => 'image/gif', 'svg' => 'image/svg+xml',
+                'mp4' => 'video/mp4', 'mov' => 'video/quicktime', 'webm' => 'video/webm',
+                'mp3' => 'audio/mpeg', 'ogg' => 'audio/ogg', 'wav' => 'audio/wav',
+                'pdf' => 'application/pdf', 'txt' => 'text/plain', 'md' => 'text/markdown', 'json' => 'application/json', 'zip' => 'application/zip'
+            ];
+            $fileType = $extMime[$ext] ?? 'application/octet-stream';
+        }
+        $fileSize = (int)$f['size'];
+
+        $ins = $db->prepare("INSERT INTO project_media (user_id, project_id, project_key, task_id, file_name, original_name, file_path, file_url, file_type, file_size, caption, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $now = date('Y-m-d H:i:s');
+        $ins->execute([
+            $user['id'],
+            $prjId,
+            $prjKey,
+            $taskId,
+            $finalName,
+            $origName,
+            $targetPath,
+            $fileUrl,
+            $fileType,
+            $fileSize,
+            $caption,
+            $uploadedBy,
+            $now
+        ]);
+        $mediaId = (int)$db->lastInsertId();
+
+        if ($taskId) {
+            $updT = $db->prepare("UPDATE tasks SET attachment_url = ?, attachment_name = ?, attachment_type = ? WHERE id = ? AND user_id = ?");
+            $attType = str_starts_with($fileType, 'image/') ? 'photo' : (str_starts_with($fileType, 'video/') ? 'video' : 'document');
+            $updT->execute([$fileUrl, $finalName, $attType, $taskId, $user['id']]);
+        }
+
+        $notifyTele = !empty($_POST['notify_telegram']) || !empty($_GET['notify_telegram']);
+        if ($notifyTele && $targetProject && !empty($targetProject['bot_token']) && !empty($targetProject['chat_id'])) {
+            $pName = htmlspecialchars($targetProject['name'] ?: 'Tele-vs-Code');
+            $pCode = !empty($targetProject['code']) ? (' (#' . htmlspecialchars($targetProject['code']) . ')') : '';
+            $teleCaption = "📁 <b>DOKUMENTASI MEDIA BARU</b>\n"
+                         . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                         . "📁 <b>Proyek:</b> <code>$pName</code>$pCode\n"
+                         . "📎 <b>Berkas:</b> <code>" . htmlspecialchars($finalName) . "</code> (" . round($fileSize / 1024, 1) . " KB)\n"
+                         . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . "\n"
+                         . "👤 <b>Pengunggah:</b> " . htmlspecialchars($uploadedBy) . "\n";
+            if ($caption) {
+                $teleCaption .= "📝 <b>Keterangan:</b> " . htmlspecialchars($caption) . "\n";
+            }
+            if ($taskId) {
+                $teleCaption .= "🆔 <b>ID Tugas:</b> <code>" . htmlspecialchars($taskId) . "</code>\n";
+            }
+            $teleCaption .= "\n🌐 <a href=\"$fileUrl\">Buka / Unduh Berkas Dokumentasi</a>\n"
+                          . "🤖 <i>Tersimpan otomatis di Server Biru</i>";
+
+            if (str_starts_with($fileType, 'image/') && strlen($teleCaption) <= 1024) {
+                callTelegram($targetProject['bot_token'], 'sendPhoto', [
+                    'chat_id' => $targetProject['chat_id'],
+                    'photo' => $fileUrl,
+                    'caption' => $teleCaption,
+                    'parse_mode' => 'HTML'
+                ]);
+            } else {
+                callTelegram($targetProject['bot_token'], 'sendMessage', [
+                    'chat_id' => $targetProject['chat_id'],
+                    'text' => $teleCaption,
+                    'parse_mode' => 'HTML',
+                    'link_preview_options' => json_encode(['url' => $fileUrl, 'prefer_large_media' => true])
+                ]);
+            }
+        }
+
+        echo json_encode([
+            'ok' => true,
+            'id' => $mediaId,
+            'file_name' => $finalName,
+            'original_name' => $origName,
+            'file_url' => $fileUrl,
+            'file_type' => $fileType,
+            'file_size' => $fileSize,
+            'task_id' => $taskId,
+            'caption' => $caption,
+            'message' => 'Berkas media dokumentasi berhasil disimpan di Server Biru'
+        ]);
+        exit;
+    }
+
+    // List Media & Dokumen Proyek
+    if ($action === 'api_media_list') {
+        $prjInput = trim($_GET['project'] ?? ($_GET['project_key'] ?? ''));
+        $sql = "SELECT m.*, p.name as project_name FROM project_media m LEFT JOIN projects p ON m.project_id = p.id WHERE m.user_id = ?";
+        $params = [$user['id']];
+        if ($prjInput) {
+            $sql .= " AND (m.project_key = ? OR LOWER(p.code) = ? OR LOWER(p.name) = ?)";
+            $params[] = $prjInput;
+            $params[] = strtolower($prjInput);
+            $params[] = strtolower($prjInput);
+        }
+        $sql .= " ORDER BY m.created_at DESC LIMIT 50";
+        $stmtM = $db->prepare($sql);
+        $stmtM->execute($params);
+        echo json_encode(['ok' => true, 'media' => $stmtM->fetchAll(PDO::FETCH_ASSOC)]);
         exit;
     }
 

@@ -22,6 +22,7 @@
   "command.toggleAutoPull": "Toggle Automation Worker (Pause/Start)",
   "command.pullTasks": "Pull Tasks Now (Instant Webhook Sync)",
   "command.startCliWorker": "Run Autonomous CLI Worker in Terminal",
+  "command.uploadMedia": "Upload File / Media Documentation to Biru Server",
   "command.showMenu": "Open Tele-vs-Code Main Menu"
 }
 

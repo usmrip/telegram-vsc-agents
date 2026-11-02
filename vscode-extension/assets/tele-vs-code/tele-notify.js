@@ -35,7 +35,7 @@ for (let i = 0; i < args.length; i++) {
     status = (args[++i] || 'SELESAI').toUpperCase();
   } else if (arg === '--agent' || arg === '-a') {
     if (args[i + 1]) agent = args[++i];
-  } else if (arg === '--media' || arg === '--attachment' || arg === '--image' || arg === '--video') {
+  } else if (arg === '--media' || arg === '--attachment' || arg === '--image' || arg === '--video' || arg === '--file') {
     if (args[i + 1]) mediaUrl = args[++i];
   } else if (arg === '--detail' || arg === '-d') {
     if (args[i + 1]) details.push(args[++i]);
@@ -170,7 +170,46 @@ if (details.length > 0) {
 
 textHtml += `\n🤖 <i>Dikirim via tele-notify</i>`;
 
+async function ensureMediaUploaded() {
+  if (!mediaUrl) return;
+  if (/^https?:\/\//i.test(mediaUrl)) return;
+
+  const localPath = path.isAbsolute(mediaUrl) ? mediaUrl : path.resolve(cwd, mediaUrl);
+  if (fs.existsSync(localPath)) {
+    const secretKey = process.env.AGENTS_TELE_SECRET || cfgVscode.AGENTS_TELE_SECRET || cfgLocal.AGENTS_TELE_SECRET || cfgEnv.AGENTS_TELE_SECRET || '';
+    const projectKey = process.env.AGENTS_TELE_PROJECT_KEY || cfgVscode.AGENTS_TELE_PROJECT_KEY || cfgLocal.AGENTS_TELE_PROJECT_KEY || cfgEnv.AGENTS_TELE_PROJECT_KEY || '';
+    const webhookUrl = process.env.AGENTS_TELE_WEBHOOK_URL || cfgVscode.AGENTS_TELE_WEBHOOK_URL || cfgLocal.AGENTS_TELE_WEBHOOK_URL || 'https://biru.co.id/tele-vs-code/webhook';
+    const baseUrl = webhookUrl.replace(/\/webhook\/?$/, '/').replace(/\/$/, '');
+
+    if (secretKey) {
+      try {
+        console.log(`📤 Mengunggah berkas media "${path.basename(localPath)}" ke Server Biru untuk dokumentasi...`);
+        const fileBuf = fs.readFileSync(localPath);
+        const blob = new Blob([fileBuf]);
+        const formData = new FormData();
+        formData.append('file', blob, path.basename(localPath));
+        if (projectKey) formData.append('project', projectKey);
+        formData.append('caption', title || 'Dokumentasi Tugas');
+        formData.append('uploaded_by', `${os.userInfo().username}@${os.hostname()} (CLI tele-notify)`);
+
+        const uploadUrl = `${baseUrl}/?action=upload_media&secret=${encodeURIComponent(secretKey)}`;
+        const upRes = await fetch(uploadUrl, { method: 'POST', body: formData });
+        const upData = await upRes.json();
+        if (upRes.ok && upData.ok && upData.file_url) {
+          console.log(`✅ [Dokumentasi Tersimpan] Berkas berhasil diunggah ke Server Biru: ${upData.file_url}`);
+          mediaUrl = upData.file_url;
+        } else {
+          console.warn(`⚠️ Gagal unggah media ke Server Biru: ${upData.error || upRes.status}`);
+        }
+      } catch (upErr) {
+        console.warn(`⚠️ Error upload media: ${upErr.message}`);
+      }
+    }
+  }
+}
+
 async function send() {
+  await ensureMediaUploaded();
   try {
     // Jika ada lampiran foto dan panjang pesan muat di caption Telegram (<= 1024 char)
     if (mediaUrl && textHtml.length <= 1024 && (mediaUrl.match(/\.(jpg|jpeg|png|webp)($|\?)/i) || mediaUrl.includes('/uploads/'))) {

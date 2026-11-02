@@ -149,6 +149,8 @@ const I18N = {
     menuAgentHandler: "Pilih AI Agent Handler...",
     menuAgentActiveDesc: "Agent aktif: {agent}",
     menuAgentInactiveDesc: "⚪ Nonaktif / Kosong (Hanya antrean)",
+    menuUploadMedia: "Unggah File / Media Dokumentasi ke Server Biru",
+    menuUploadMediaDesc: "Unggah gambar, tangkapan layar, atau dokumen proyek ke server",
     menuSwitchLang: "Ganti Bahasa / Switch Language (ID / EN)",
     menuTest: "Pengujian (IDE & Telegram)...",
     menuTestDesc: "Uji kirim notifikasi, uji tugas dari IDE, & diagnostik koneksi",
@@ -253,6 +255,8 @@ const I18N = {
     menuAgentHandler: "Select AI Agent Handler...",
     menuAgentActiveDesc: "Active agent: {agent}",
     menuAgentInactiveDesc: "⚪ Inactive / Empty (Queue only)",
+    menuUploadMedia: "Upload File / Media Documentation to Biru Server",
+    menuUploadMediaDesc: "Upload images, screenshots, or project documents to the server",
     menuSwitchLang: "Switch Language / Ganti Bahasa (EN / ID)",
     menuTest: "Testing (IDE & Telegram)...",
     menuTestDesc: "Test notifications, test IDE task creation, & connection diagnostics",
@@ -699,6 +703,50 @@ async function sendTelegramMessage(botToken, chatId, title, status, details = []
   const data = await res.json();
   if (!data.ok) {
     throw new Error(data.description || 'Gagal mengirim pesan Telegram');
+  }
+  return data;
+}
+
+// ==============================================================================
+// Helper: Unggah File / Media Dokumentasi ke Server Biru
+// ==============================================================================
+async function uploadMediaToServer(filePath, caption = '', taskId = '', notifyTelegram = false) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Berkas tidak ditemukan: ${filePath}`);
+  }
+
+  const cur = getEffectiveConfig();
+  const secretKey = cur.secretKey || getEnvVal('AGENTS_TELE_SECRET');
+  if (!secretKey) {
+    throw new Error('API Secret Key belum disetel. Hubungkan workspace ini ke Server Biru melalui Setup Wizard.');
+  }
+
+  const resolved = await getResolvedProject();
+  const projectKey = cur.project || resolved.projectKey || getEnvVal('AGENTS_TELE_PROJECT_KEY') || getEnvVal('AGENTS_TELE_PROJECT');
+  const normalizedWebhook = (cur.webhookUrl || getEnvVal('AGENTS_TELE_WEBHOOK_URL') || 'https://biru.co.id/tele-vs-code/webhook')
+    .replace(/\/webhook\/?$/, '/');
+
+  const fileBuffer = fs.readFileSync(filePath);
+  const fileName = path.basename(filePath);
+  const blob = new Blob([fileBuffer]);
+
+  const formData = new FormData();
+  formData.append('file', blob, fileName);
+  if (caption) formData.append('caption', caption);
+  if (taskId) formData.append('task_id', taskId);
+  if (projectKey) formData.append('project', projectKey);
+  formData.append('uploaded_by', `${os.userInfo().username}@${os.hostname()} (VS Code)`);
+  if (notifyTelegram) formData.append('notify_telegram', '1');
+
+  const uploadUrl = `${normalizedWebhook.replace(/\/$/, '')}/?action=upload_media&secret=${encodeURIComponent(secretKey)}`;
+  const res = await safeFetch(uploadUrl, {
+    method: 'POST',
+    body: formData
+  });
+
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || `Gagal mengunggah berkas (HTTP ${res.status})`);
   }
   return data;
 }
@@ -1977,6 +2025,12 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
           description: t('menuSetupDesc'),
           cmd: 'telegramNotifier.quickSetup'
         },
+        // 9b. Unggah File / Media Dokumentasi ke Server Biru
+        {
+          label: '$(file-media) ' + t('menuUploadMedia'),
+          description: t('menuUploadMediaDesc'),
+          cmd: 'telegramNotifier.uploadMedia'
+        },
         // 10. Whoami
         {
           label: '$(account) ' + t('menuWhoami'),
@@ -2991,6 +3045,68 @@ TIMEZONE="${matchedProject.timezone || 'Asia/Jakarta'}"
     } catch (err) {
       vscode.window.showErrorMessage(`❌ ${err.message}`);
     }
+  }));
+
+  // 8c. Unggah File / Media Dokumentasi ke Server Biru
+  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.uploadMedia', async (resourceUri) => {
+    let targetFilePath = '';
+    if (resourceUri && resourceUri.fsPath) {
+      targetFilePath = resourceUri.fsPath;
+    } else {
+      const selected = await vscode.window.showOpenDialog({
+        title: 'Pilih File / Media Dokumentasi untuk Diunggah ke Server Biru',
+        openLabel: 'Unggah ke Server Biru',
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false
+      });
+      if (!selected || selected.length === 0) return;
+      targetFilePath = selected[0].fsPath;
+    }
+
+    if (!fs.existsSync(targetFilePath)) {
+      vscode.window.showErrorMessage(`File tidak ditemukan: ${targetFilePath}`);
+      return;
+    }
+
+    const caption = await vscode.window.showInputBox({
+      title: 'Keterangan Dokumentasi (Opsional)',
+      prompt: `Masukkan catatan / deskripsi untuk berkas "${path.basename(targetFilePath)}"`,
+      placeHolder: 'Contoh: Screenshot perbaikan bug login, arsitektur v1.0.9, dll.',
+      ignoreFocusOut: true
+    });
+
+    const sendTeleChoice = await vscode.window.showQuickPick([
+      { label: '$(check) Ya, kirim juga notifikasi ke Telegram', send: true },
+      { label: '$(close) Tidak, simpan saja di Server Biru', send: false }
+    ], {
+      title: 'Kirim Notifikasi Dokumentasi ke Telegram?',
+      placeHolder: 'Pilih opsi pengiriman notifikasi'
+    });
+    if (!sendTeleChoice) return;
+
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Mengunggah "${path.basename(targetFilePath)}" ke Server Biru...`,
+      cancellable: false
+    }, async () => {
+      try {
+        const result = await uploadMediaToServer(targetFilePath, caption || '', '', sendTeleChoice.send);
+        const action = await vscode.window.showInformationMessage(
+          `🎉 [Dokumentasi Tersimpan] Berkas "${result.file_name}" berhasil diunggah ke Server Biru!`,
+          'Salin Link Dokumentasi',
+          'Buka di Browser'
+        );
+        if (action === 'Salin Link Dokumentasi') {
+          await vscode.env.clipboard.writeText(result.file_url);
+          vscode.window.showInformationMessage(`📋 Link tersalin ke clipboard: ${result.file_url}`);
+        } else if (action === 'Buka di Browser') {
+          vscode.env.openExternal(vscode.Uri.parse(result.file_url));
+        }
+      } catch (err) {
+        vscode.window.showErrorMessage(`❌ Gagal unggah dokumentasi: ${err.message}`);
+      }
+    });
   }));
 
   // 8b. Tambah Tugas Baru dari IDE ke TASK_QUEUE & Telegram
