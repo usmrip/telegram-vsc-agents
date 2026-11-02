@@ -33,7 +33,11 @@
     "Machine Learning"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "workspaceContains:TASK_QUEUE.md",
+    "workspaceContains:.vscode/tele-vs-code/config.env",
+    "workspaceContains:config.env",
+    "*"
   ],
   "contributes": {
     "configuration": {
@@ -131,16 +135,75 @@
         },
         "telegramNotifier.autoExecuteSimpleTasks": {
           "type": "boolean",
+          "default": true,
+          "description": "Otomatis eksekusi perintah antrean langsung secara mandiri tanpa menunggu interaksi manual",
+          "markdownDescription": "Jika \true (default), tugas mandiri dari Telegram (buat folder, file, hapus, shell command) langsung dieksekusi secara otonom dan otomatis selesai."
+        },
+        "telegramNotifier.language": {
+          "type": "string",
+          "enum": [
+            "id",
+            "en"
+          ],
+          "default": "id",
+          "description": "Bahasa tampilan antarmuka (id = Bahasa Indonesia, en = English)"
+        },
+        "telegramNotifier.agentHandler": {
+          "type": "string",
+          "default": "",
+          "enum": [
+            "",
+            "auto",
+            "agy",
+            "claude",
+            "cline",
+            "roo",
+            "gemini",
+            "copilot",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "(Kosong / Nonaktif) Jangan jalankan apapun secara otomatis, hanya catat ke TASK_QUEUE.md",
+            "(Auto) Deteksi otomatis AI Agent terpasang di sistem",
+            "Google Antigravity CLI (agy)",
+            "Claude Code CLI (claude)",
+            "Cline Autonomous Coding Agent (cline)",
+            "Roo Code Autonomous Agent (roo)",
+            "Gemini CLI / Code Assist (gemini)",
+            "GitHub Copilot (copilot)",
+            "(Isi Manual) Perintah terminal kustom dari customAgentCommand"
+          ],
+          "description": "Pilih AI Agent yang akan mengeksekusi tugas antrean dari Telegram. Jika kosong, tidak ada tugas yang dieksekusi otomatis.",
+          "markdownDescription": "Pilih AI Agent yang akan mengeksekusi tugas antrean dari Telegram. **Jika kosong (default), tidak akan mengeksekusi apapun secara otomatis** (hanya dicatat ke `TASK_QUEUE.md`)."
+        },
+        "telegramNotifier.customAgentCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Perintah CLI manual jika agentHandler disetel ke custom. Tersedia placeholder {prompt}, {instruction}, {task_id}.",
+          "markdownDescription": "Perintah CLI manual (Linux/macOS/Windows) jika `agentHandler` disetel ke `custom`. Gunakan variabel `{prompt}`, `{instruction}`, atau `{task_id}`. Contoh: `agy --dangerously-skip-permissions -p \"{prompt}\"` atau `/usr/local/bin/my-agent --task \"{instruction}\"`."
+        },
+        "telegramNotifier.autoDispatchAgent": {
+          "type": "boolean",
           "default": false,
-          "description": "Otomatis eksekusi perintah sederhana (buat file/folder) langsung tanpa menunggu AI Agent",
-          "markdownDescription": "Jika `false` (default), seluruh perintah Telegram langsung dimasukkan ke `TASK_QUEUE.md` sebagai antrean untuk dieksekusi oleh AI Agent di VS Code."
+          "description": "Otomatis jalankan AI Agent handler yang dipilih saat tugas baru masuk dari Telegram",
+          "markdownDescription": "Jika `true`, AI Agent handler yang dipilih akan otomatis langsung dipanggil di terminal saat tugas baru masuk tanpa harus mengklik toast notification."
         }
       }
     },
     "commands": [
       {
+        "command": "telegramNotifier.copyAiPrompt",
+        "title": "Salin Prompt Pemicu AI Agent (proses antrian)",
+        "category": "Tele-vs-Code"
+      },
+      {
         "command": "telegramNotifier.setPullInterval",
         "title": "Atur Durasi Refresh Polling Worker",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.runAgentAgy",
+        "title": "Jalankan AI Agent Otomatis (Antigravity agy CLI)",
         "category": "Tele-vs-Code"
       },
       {
@@ -211,6 +274,21 @@
       {
         "command": "telegramNotifier.whoami",
         "title": "Siapa Saya? (Identifikasi Workspace & Server)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.switchLanguage",
+        "title": "Switch Language / Ganti Bahasa (ID / EN)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.selectAgentHandler",
+        "title": "Pilih AI Agent Handler (Deteksi Terpasang, Dropdown, atau Manual)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.executeActiveTask",
+        "title": "Jalankan Tugas Aktif via Agent Handler Terpilih",
         "category": "Tele-vs-Code"
       }
     ],

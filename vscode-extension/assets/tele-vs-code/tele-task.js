@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
 // ==============================================================================
 // Task Queue Manager CLI (tele-task)
 // Menjembatani perintah dari IDE Chat / Terminal langsung ke Dashboard Server
@@ -93,7 +98,7 @@ function getNotifyScript() {
   return candidates.find(p => fs.existsSync(p)) || null;
 }
 
-function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', attachmentUrl = '', attachmentType = '', attachmentName = '') {
+function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', attachmentUrl = '', attachmentType = '', attachmentName = '', agent = 'Antigravity AI Agent') {
   try {
     if (!fs.existsSync(queueFile)) {
       fs.writeFileSync(queueFile, '# 📋 TASK QUEUE (Antrean Tugas Agent)\n\n## ⏳ Tugas Aktif\n\n## ✅ Riwayat Tugas Selesai\n', 'utf-8');
@@ -122,7 +127,7 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
       content = content.replace(regexActive, '');
 
       const cleanInstruction = (finalInstruction || 'Perintah dari IDE Chat').replace(/\r?\n/g, ' ');
-      const doneBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${finalSender || 'IDE Chat'}\n- **Instruksi:** ${cleanInstruction}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
+      const doneBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${finalSender || 'IDE Chat'}\n- **Agent:** ${agent || 'Antigravity AI Agent'}\n- **Instruksi:** ${cleanInstruction}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
       const doneMarker = '## ✅ Riwayat Tugas Selesai';
       if (content.includes(doneMarker)) {
         content = content.replace(doneMarker, `${doneMarker}\n\n${doneBlock}`);
@@ -233,6 +238,51 @@ async function run() {
       }
     } catch (err) {
       console.error(`❌ Gagal menarik tugas: ${err.message}`);
+    }
+    } else if (command === 'start' || command === 'proses') {
+    const taskId = args[1] || '';
+    const note = args[2] || 'Sedang dikerjakan oleh AI Agent...';
+
+    if (!taskId) {
+      console.error('[ERROR] Task ID wajib disertakan! Contoh: node tele-task.js start "#TASK-123"');
+      process.exit(1);
+    }
+
+    try {
+      const url = `${normalizedUrl}?action=start&secret=${secretKey}&id=${encodeURIComponent(taskId)}`;
+      const params = new URLSearchParams({ notes: note, status: 'IN_PROGRESS' });
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString()
+      });
+      const data = await res.json();
+      if (data.ok) {
+        console.log(`⚡ [${taskId}] Status di server berhasil diperbarui ke: IN_PROGRESS`);
+
+        // Cari instruksi dari TASK_QUEUE.md lokal
+        let foundInst = '';
+        if (fs.existsSync(queueFile)) {
+          const qText = fs.readFileSync(queueFile, 'utf-8');
+          const m = new RegExp(`### \\[.*?\\]\\s+${taskId}[\\s\\S]*?-\\s+\\*\\*Instruksi:\\*\\*\\s*([^\\r\\n]+)`, 'i').exec(qText);
+          if (m) foundInst = m[1].trim();
+        }
+
+        const notifyJs = getNotifyScript();
+        if (notifyJs) {
+          try {
+            const details = [];
+            if (foundInst) details.push(`--detail "Perintah: ${foundInst.replace(/"/g, '\\"')}"`);
+            details.push(`--detail "Catatan: ${note.replace(/"/g, '\\"')}"`);
+            details.push(`--detail "Status: Sedang dikerjakan oleh AI Agent"`);
+            execSync(`node "${notifyJs}" "Memulai Pekerjaan: ${taskId}" --status PROSES ${details.join(' ')}`, { stdio: 'inherit' });
+          } catch (e) {}
+        }
+      } else {
+        console.error(`❌ Gagal update server: ${data.error}`);
+      }
+    } catch (err) {
+      console.error(`❌ Network error: ${err.message}`);
     }
   } else if (command === 'done' || command === 'failed') {
     const taskId = args[1] || '';

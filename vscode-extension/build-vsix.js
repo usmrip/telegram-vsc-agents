@@ -95,7 +95,7 @@ fs.mkdirSync(stagingDir, { recursive: true });
 const extTargetDir = path.join(stagingDir, 'extension');
 fs.mkdirSync(extTargetDir, { recursive: true });
 
-const filesToCopy = ['package.json', 'extension.js', 'README.md', 'icon.png', 'LICENSE'];
+const filesToCopy = ['package.json', 'package.nls.json', 'package.nls.id.json', 'extension.js', 'README.md', 'icon.png', 'LICENSE'];
 for (const file of filesToCopy) {
   const src = path.join(extDir, file);
   if (fs.existsSync(src)) {

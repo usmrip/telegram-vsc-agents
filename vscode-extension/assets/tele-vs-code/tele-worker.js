@@ -1,4 +1,41 @@
 #!/usr/bin/env node
+
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
+
+// Robust HTTP Fetch dengan Auto-Retry & Connection Close
+async function safeFetch(url, options = {}, maxRetries = 2) {
+  let lastErr = null;
+  const timeoutMs = options.timeout || 15000;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const opt = {
+        ...options,
+        headers: {
+          'Connection': 'close',
+          'User-Agent': 'Tele-vs-Code/1.0.8',
+          ...(options.headers || {})
+        },
+        signal: options.signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined)
+      };
+      return await fetch(url, opt);
+    } catch (err) {
+      lastErr = err;
+      if (err.name === 'AbortError' && options.signal && options.signal.aborted) throw err;
+      if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+  }
+  const causeDetail = lastErr && lastErr.cause ? (lastErr.cause.code || lastErr.cause.message || '') : '';
+  const errorMsg = causeDetail && !lastErr.message.includes(causeDetail) ? `${lastErr.message} (${causeDetail})` : (lastErr ? lastErr.message : 'Network request failed');
+  const wrapped = new Error(errorMsg);
+  if (lastErr && lastErr.cause) wrapped.cause = lastErr.cause;
+  throw wrapped;
+}
+
 // ==============================================================================
 // Autonomous Telegram Task Queue Worker
 // Menjalankan antrean tugas dari server biru.co.id satu per satu secara otomatis
@@ -137,7 +174,7 @@ async function fetchNextTask() {
     if (projectKey) {
       url += `&project=${encodeURIComponent(projectKey)}`;
     }
-    const res = await fetch(url);
+    const res = await safeFetch(url, { timeout: 15000 });
     const data = await res.json();
     if (data.ok && Array.isArray(data.tasks) && data.tasks.length > 0) {
       const task = data.tasks[0];
@@ -147,7 +184,7 @@ async function fetchNextTask() {
           if (!fs.existsSync(attachDir)) fs.mkdirSync(attachDir, { recursive: true });
           const localPath = path.join(attachDir, task.attachment_name || 'lampiran.bin');
           if (!fs.existsSync(localPath)) {
-            const fRes = await fetch(task.attachment_url);
+            const fRes = await safeFetch(task.attachment_url, { timeout: 30000 });
             if (fRes.ok) {
               const buf = Buffer.from(await fRes.arrayBuffer());
               fs.writeFileSync(localPath, buf);
@@ -166,7 +203,7 @@ async function markTaskStatus(taskId, status = 'IN_PROGRESS', notes = '') {
   try {
     const act = (status === 'DONE') ? 'done' : ((status === 'FAILED') ? 'failed' : 'in_progress');
     const url = `${normalizedUrl}?action=${act}&secret=${secretKey}&id=${encodeURIComponent(taskId)}`;
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `notes=${encodeURIComponent(notes)}`
@@ -209,9 +246,11 @@ function recordActiveTask(task) {
     let content = fs.readFileSync(queueFile, 'utf-8');
     if (content.includes(task.id)) return; // sudah tercatat
 
+    const agentName = task.assigned_agent || task.agent || 'Antigravity AI Agent';
     const activeBlock = `### [IN_PROGRESS] ${task.id}
 - **Waktu:** ${task.created_at}
 - **Pengirim:** ${task.sender}
+- **Agent:** ${agentName}
 - **Instruksi:** ${task.instruction.replace(/\r?\n/g, ' ')}
 - **Status:** IN_PROGRESS
 - **Catatan:** Sedang dikerjakan oleh AI Agent...
@@ -262,7 +301,7 @@ function tryExecuteDirectTask(instruction, targetDir) {
 
   // 1. Pembuatan Folder / Direktori
   // Contoh: "buat folder ddfa", "buat foldsr ssf", "mkdir components", "bikin folder src/assets"
-  const mFolder = inst.match(/^(?:buat|bikin|create|make)?\s*(?:folder|foldsr|dir|direktori)\s+(.+)$/i) ||
+  const mFolder = inst.match(/^(?:buat(?:kan)?|bikin(?:kan)?|create|make)?\s*(?:folder|foldsr|dir|direktori)\s+(.+)$/i) ||
                   inst.match(/^mkdir\s+(.+)$/i);
   if (mFolder) {
     const rawName = mFolder[1].trim().replace(/^['"`]|['"`]$/g, '');
@@ -281,7 +320,7 @@ function tryExecuteDirectTask(instruction, targetDir) {
 
   // 2. Pembuatan Dokumen / File
   // Contoh: "buat dokumen dengan nama xyz.txt", "buat file data.json", "touch readme.md"
-  const mFile = inst.match(/^(?:buat|bikin|create|touch)?\s*(?:file|dokumen|document|berkas)\s+(?:dengan\s+nama\s+)?([^\s\r\n]+)(?:\s+(?:isinya|isi|content)\s+([\s\S]*))?$/i) ||
+  const mFile = inst.match(/^(?:buat(?:kan)?|bikin(?:kan)?|create|touch)?\s*(?:file|dokumen|document|berkas)\s+(?:dengan\s+nama\s+)?([^\s\r\n]+)(?:\s+(?:isinya|isi|content)\s+([\s\S]*))?$/i) ||
                 inst.match(/^touch\s+([^\s\r\n]+)$/i);
   if (mFile) {
     const rawName = mFile[1].trim().replace(/^['"`]|['"`]$/g, '');
@@ -301,7 +340,7 @@ function tryExecuteDirectTask(instruction, targetDir) {
   }
 
   // 3. Penghapusan File / Folder Aman
-  const mDelete = inst.match(/^(?:hapus|delete|remove|rm|del)\s*(?:folder|dir|file|dokumen|berkas)?\s+([^\s\r\n]+)$/i);
+  const mDelete = inst.match(/^(?:hapus(?:kan)?|delete|remove|rm|del)\s*(?:folder|dir|file|dokumen|berkas)?\s+([^\s\r\n]+)$/i);
   if (mDelete) {
     const rawName = mDelete[1].trim().replace(/^['"`]|['"`]$/g, '');
     const cleanRel = path.normalize(rawName).replace(/^(\.\.[\/\\])+/, '');

@@ -248,7 +248,8 @@
                 mainNav.scrollLeft = active.offsetLeft - 16;
             }
         }
-        document.querySelectorAll('.auth-segmented').forEach(h => new Liquid(h, '.auth-segmented-btn'));
+        // Do not attach liquid blob to modal .auth-segmented (hidden modal has zero bounds and turns active tab black)
+        // document.querySelectorAll('.auth-segmented').forEach(h => new Liquid(h, '.auth-segmented-btn'));
         document.querySelectorAll('.sub-nav').forEach(h => new Liquid(h, '.sub-pill'));
         initNavigation(tabLiquid);
     }

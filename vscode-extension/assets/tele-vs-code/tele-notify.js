@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
 // ==============================================================================
 // Universal Cross-Platform Telegram Notifier (Node.js Engine)
 // Menjamin UTF-8 sempurna, bebas mojibake dan bebas error batch %0A
@@ -20,12 +25,18 @@ if (args.length === 0 || args[0] === '-h' || args[0] === '--help') {
 
 let title = '';
 let status = 'SELESAI';
+let agent = 'Antigravity AI Agent';
+let mediaUrl = null;
 const details = [];
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
   if (arg === '--status' || arg === '-s') {
     status = (args[++i] || 'SELESAI').toUpperCase();
+  } else if (arg === '--agent' || arg === '-a') {
+    if (args[i + 1]) agent = args[++i];
+  } else if (arg === '--media' || arg === '--attachment' || arg === '--image' || arg === '--video') {
+    if (args[i + 1]) mediaUrl = args[++i];
   } else if (arg === '--detail' || arg === '-d') {
     if (args[i + 1]) details.push(args[++i]);
   } else if (arg === '--title' || arg === '-t') {
@@ -41,6 +52,16 @@ for (let i = 0; i < args.length; i++) {
 
 if (!title) title = 'Laporan Tugas';
 status = status.toUpperCase();
+
+if (!mediaUrl) {
+  for (const d of details) {
+    const m = d.match(/https?:\/\/[^\s"']+\.(?:jpg|jpeg|png|webp|mp4|mov)/i) || d.match(/https?:\/\/biru\.co\.id\/tele-vs-code\/uploads\/[^\s"']+/i);
+    if (m) {
+      mediaUrl = m[0];
+      break;
+    }
+  }
+}
 
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
@@ -137,6 +158,7 @@ function escapeHtml(text) {
 let textHtml = `<b>${emoji} ${escapeHtml(title)}: ${escapeHtml(status)}</b>\n\n`
              + `📁 <b>Proyek:</b> <code>${escapeHtml(projectName)}</code>\n`
              + `🕒 <b>Waktu:</b> ${dateStr} ${timeStr} ${tzLabel}\n`
+             + `🤖 <b>Eksekutor:</b> <code>${escapeHtml(agent)}</code>\n`
              + `👤 <b>Operator:</b> <code>${escapeHtml(userHost)}</code>\n`;
 
 if (details.length > 0) {
@@ -150,15 +172,50 @@ textHtml += `\n🤖 <i>Dikirim via tele-notify</i>`;
 
 async function send() {
   try {
+    // Jika ada lampiran foto dan panjang pesan muat di caption Telegram (<= 1024 char)
+    if (mediaUrl && textHtml.length <= 1024 && (mediaUrl.match(/\.(jpg|jpeg|png|webp)($|\?)/i) || mediaUrl.includes('/uploads/'))) {
+      try {
+        const photoRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            photo: mediaUrl,
+            caption: textHtml,
+            parse_mode: 'HTML'
+          })
+        });
+        const pData = await photoRes.json();
+        if (pData.ok) {
+          console.log('[OK] Notifikasi Telegram dengan foto berhasil terkirim.');
+          return;
+        }
+      } catch (e) {}
+    }
+
+    // Default atau fallback: Kirim sendMessage dengan link preview media jika ada
+    const payload = {
+      chat_id: chatId,
+      text: textHtml,
+      parse_mode: 'HTML'
+    };
+
+    if (mediaUrl) {
+      payload.text = `<a href="${mediaUrl}">&#8205;</a>` + textHtml;
+      payload.link_preview_options = {
+        is_disabled: false,
+        url: mediaUrl,
+        prefer_large_media: true,
+        show_above_text: false
+      };
+    } else {
+      payload.disable_web_page_preview = true;
+    }
+
     const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: textHtml,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true
-      })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (data.ok) {

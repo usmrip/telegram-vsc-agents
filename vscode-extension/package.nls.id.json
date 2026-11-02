@@ -1,0 +1,27 @@
+{
+  "extension.description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
+  "config.title": "Tele-vs-Code",
+  "config.folder.description": "Folder kerja utama tempat AGENTS.md, CLAUDE.md, dan TASK_QUEUE.md dikelola AI Agent (Kosongkan untuk menggunakan workspace saat ini)",
+  "config.language.description": "Bahasa tampilan antarmuka (id = Bahasa Indonesia, en = English)",
+  "config.agentHandler.description": "Pilih AI Agent yang akan mengeksekusi tugas antrean dari Telegram. Jika kosong, tidak ada tugas yang dieksekusi otomatis.",
+  "config.customAgentCommand.description": "Perintah CLI manual jika agentHandler disetel ke custom. Tersedia placeholder {prompt}, {instruction}, {task_id}.",
+  "config.autoDispatchAgent.description": "Otomatis jalankan AI Agent handler yang dipilih saat tugas baru masuk dari Telegram",
+  "command.switchLanguage": "Ganti Bahasa / Switch Language (ID / EN)",
+  "command.selectAgentHandler": "Pilih AI Agent Handler (Deteksi Terpasang, Dropdown, atau Manual)",
+  "command.runAgentAgy": "Jalankan AI Agent Otomatis (Antigravity agy CLI)",
+  "command.runNextTask": "Kerjakan Antrean Tugas Berikutnya (Kirim ke Chat AI)",
+  "command.setFolder": "Atur Folder Workspace / Working Directory",
+  "command.addTask": "Tambah Tugas Baru / Kirim Perintah ke Antrean & Telegram",
+  "command.quickSetup": "Hubungkan ke Server Biru (API Secret & Project Key)",
+  "command.sendSuccess": "Kirim Notifikasi: SELESAI (100% Tuntas)",
+  "command.sendProgress": "Kirim Notifikasi: PROSES (Pekerjaan Berjalan)",
+  "command.sendError": "Kirim Notifikasi: KENDALA (Ada Masalah)",
+  "command.openQueue": "Buka TASK_QUEUE.md",
+  "command.openDashboard": "Buka Web Dashboard (https://biru.co.id/tele-vs-code/)",
+  "command.whoami": "Siapa Saya? (Identifikasi Workspace & Routing)",
+  "command.toggleAutoPull": "Jeda / Nyalakan Worker Otomatis (Auto-Pull)",
+  "command.pullTasks": "Tarik Antrean Sekarang (Manual Webhook Sync)",
+  "command.startCliWorker": "Jalankan Autonomous CLI Worker di Terminal",
+  "command.showMenu": "Buka Menu Utama Tele-vs-Code"
+}
+

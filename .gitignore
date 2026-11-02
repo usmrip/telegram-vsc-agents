@@ -23,6 +23,8 @@ data/
 *.local
 backups/
 *.zip
+attachments/
+coba/
 
 # System & Editor
 .vscode/

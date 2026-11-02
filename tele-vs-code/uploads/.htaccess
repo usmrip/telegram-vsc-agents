@@ -1,8 +1,10 @@
-# Prevent script execution in uploads directory
-<FilesMatch "(?i)\.(php|phtml|phar|phps|inc|shtml|cgi|pl|py|sh|bat|cmd|exe|htaccess)$">
-    Order Deny,Allow
-    Deny from all
-</FilesMatch>
+# ==============================================================================
+# MAXIMUM SECURITY: Anti-Execution & Anti-Injection for Uploads Directory
+# Tele-vs-Code Security System
+# ==============================================================================
+
+# 1. Total Disallow Execution of Scripts
+Options -ExecCGI -Indexes -Includes
 
 <IfModule mod_php.c>
     php_flag engine off
@@ -14,7 +16,24 @@
     php_flag engine off
 </IfModule>
 
-Options -ExecCGI -Indexes
-Header set X-Content-Type-Options "nosniff"
-Header set Content-Disposition "attachment"
+# Remove handler and type mapping for executable script extensions
+RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .php8 .phps .phar .inc .cgi .pl .py .sh .bash .bat .cmd .ps1 .exe
+RemoveType .php .phtml .php3 .php4 .php5 .php7 .php8 .phps .phar .inc .cgi .pl .py .sh .bash .bat .cmd .ps1 .exe
 
+# 2. Deny direct access to all script and sensitive extensions
+<FilesMatch "(?i)\.(php[0-9]*|phtml|phar|phps|inc|shtml|cgi|pl|py|sh|bash|zsh|bat|cmd|ps1|exe|com|scr|msi|vbs|vbe|wsf|wsh|htaccess|htpasswd|ini|config|conf|env|asp|aspx|jsp|jspx|action|do|dll|so|svgz)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order Deny,Allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# 3. Security Headers to Prevent MIME Sniffing and Script Injection
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    Header set X-Frame-Options "DENY"
+</IfModule>

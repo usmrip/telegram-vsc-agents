@@ -1,0 +1,27 @@
+{
+  "extension.description": "Telegram as your VS Code assistant from anywhere - Control, delegate tasks, and monitor AI Agents via Telegram",
+  "config.title": "Tele-vs-Code",
+  "config.folder.description": "Main working directory where AGENTS.md, CLAUDE.md, and TASK_QUEUE.md are managed by AI Agents (Leave empty for current workspace)",
+  "config.language.description": "Interface display language (id = Bahasa Indonesia, en = English)",
+  "config.agentHandler.description": "Select AI Agent to execute tasks from Telegram. If empty, no task is executed automatically.",
+  "config.customAgentCommand.description": "Custom manual terminal command for AI Agent. Supports placeholders {prompt}, {instruction}, {task_id}.",
+  "config.autoDispatchAgent.description": "Automatically run selected AI Agent handler when a new task arrives from Telegram",
+  "command.switchLanguage": "Switch Language / Ganti Bahasa (EN / ID)",
+  "command.selectAgentHandler": "Select AI Agent Handler (Auto-Detect, Dropdown, or Manual)",
+  "command.runAgentAgy": "Run AI Agent (Antigravity agy CLI)",
+  "command.runNextTask": "Execute Next Task in Queue (Send to AI Chat)",
+  "command.setFolder": "Set Workspace / Working Directory",
+  "command.addTask": "Add New Task / Send Command to Queue & Telegram",
+  "command.quickSetup": "Connect to Biru Server (API Secret & Project Key)",
+  "command.sendSuccess": "Send Notification: COMPLETED (100% Done)",
+  "command.sendProgress": "Send Notification: IN_PROGRESS",
+  "command.sendError": "Send Notification: ERROR / ISSUE",
+  "command.openQueue": "Open TASK_QUEUE.md",
+  "command.openDashboard": "Open Web Dashboard (https://biru.co.id/tele-vs-code/)",
+  "command.whoami": "Who am I? (Workspace & Routing Identity)",
+  "command.toggleAutoPull": "Toggle Automation Worker (Pause/Start)",
+  "command.pullTasks": "Pull Tasks Now (Instant Webhook Sync)",
+  "command.startCliWorker": "Run Autonomous CLI Worker in Terminal",
+  "command.showMenu": "Open Tele-vs-Code Main Menu"
+}
+

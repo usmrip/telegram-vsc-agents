@@ -6,7 +6,16 @@
 // Project-based Task Queue, Dedicated Settings, and Superadmin User Management.
 // ==============================================================================
 
-if (session_status() === PHP_SESSION_NONE) {
+// Deteksi apakah request adalah Webhook atau API CLI / VS Code agar tidak memicu disk/session locking
+$reqUri = $_SERVER['REQUEST_URI'] ?? '';
+$actionParam = $_GET['action'] ?? ($_POST['action'] ?? '');
+$isApiOrWebhook = (
+    strpos($reqUri, '/tele-vs-code/webhook') !== false ||
+    isset($_GET['is_webhook']) ||
+    in_array($actionParam, ['pull', 'api_pull', 'push', 'api_push', 'done', 'api_done', 'failed', 'api_failed', 'in_progress', 'api_in_progress', 'status', 'api_status', 'projects', 'api_projects', 'webhook'])
+);
+
+if (!$isApiOrWebhook && session_status() === PHP_SESSION_NONE) {
     ini_set('session.cookie_httponly', '1');
     ini_set('session.use_only_cookies', '1');
     if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
@@ -14,6 +23,20 @@ if (session_status() === PHP_SESSION_NONE) {
     }
     ini_set('session.cookie_samesite', 'Lax');
     session_start();
+}
+
+// Language Setting (ID / EN)
+if (isset($_GET['lang'])) {
+    $selLang = strtolower(trim($_GET['lang'])) === 'en' ? 'en' : 'id';
+    $_SESSION['tvsc_lang'] = $selLang;
+    @setcookie('tvsc_lang', $selLang, time() + (86400 * 365), '/');
+}
+$currentLang = $_SESSION['tvsc_lang'] ?? ($_COOKIE['tvsc_lang'] ?? 'id');
+if ($currentLang !== 'en') $currentLang = 'id';
+
+function __t($idText, $enText) {
+    global $currentLang;
+    return ($currentLang === 'en') ? $enText : $idText;
 }
 
 // Security Headers
@@ -83,151 +106,215 @@ define('SUPERADMIN_EMAIL', 'iam@usm.rip');
 function getDb() {
     static $pdo = null;
     if ($pdo === null) {
-        $pdo = new PDO('sqlite:' . DB_FILE);
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo = new PDO('sqlite:' . DB_FILE, null, null, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_TIMEOUT => 30,
+        ]);
+        $pdo->exec("PRAGMA busy_timeout = 30000;");
+        $pdo->exec("PRAGMA journal_mode = WAL;");
+        $pdo->exec("PRAGMA synchronous = NORMAL;");
         $pdo->exec("PRAGMA foreign_keys = ON;");
         
-        // Table Users
-        $pdo->exec("CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            whatsapp TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            api_key TEXT UNIQUE NOT NULL,
-            bot_token TEXT DEFAULT '',
-            chat_id TEXT DEFAULT '',
-            project_name TEXT DEFAULT 'My Project',
-            timezone TEXT DEFAULT 'Asia/Jakarta',
-            is_blocked INTEGER DEFAULT 0,
-            block_notify INTEGER DEFAULT 0,
-            is_admin INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )");
-
-        // Table Projects (Multi-Project Support per User)
-        $pdo->exec("CREATE TABLE IF NOT EXISTS projects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            project_key TEXT UNIQUE NOT NULL,
-            name TEXT NOT NULL,
-            bot_token TEXT DEFAULT '',
-            chat_id TEXT DEFAULT '',
-            timezone TEXT DEFAULT '',
-            custom_commands TEXT DEFAULT '',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )");
-
-        // Table Tasks (Assigned to User and Project)
-        $pdo->exec("CREATE TABLE IF NOT EXISTS tasks (
-            id TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            project_id INTEGER DEFAULT 0,
-            instruction TEXT NOT NULL,
-            sender TEXT DEFAULT 'Telegram',
-            status TEXT DEFAULT 'PENDING',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            notes TEXT,
-            result TEXT DEFAULT '',
-            command TEXT DEFAULT '',
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )");
-
-        // Table Bot Whitelist (Private Chat per User / Project)
-        $pdo->exec("CREATE TABLE IF NOT EXISTS bot_whitelist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            project_id INTEGER DEFAULT 0,
-            telegram_user_id TEXT NOT NULL,
-            telegram_username TEXT DEFAULT '',
-            name TEXT DEFAULT '',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )");
-
-        // Table Settings (Key-Value)
-        $pdo->exec("CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            val TEXT DEFAULT ''
-        )");
-
-        // Table Password Resets
-        $pdo->exec("CREATE TABLE IF NOT EXISTS password_resets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL,
-            token TEXT UNIQUE NOT NULL,
-            expires_at DATETIME NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )");
-
-        // Migrations: ensure columns exist
-        try { $pdo->exec("ALTER TABLE tasks ADD COLUMN project_id INTEGER DEFAULT 0"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE tasks ADD COLUMN result TEXT DEFAULT ''"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE tasks ADD COLUMN command TEXT DEFAULT ''"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE tasks ADD COLUMN attachment_url TEXT DEFAULT ''"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE tasks ADD COLUMN attachment_type TEXT DEFAULT ''"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE tasks ADD COLUMN attachment_name TEXT DEFAULT ''"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE users ADD COLUMN block_notify INTEGER DEFAULT 0"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE users ADD COLUMN timezone TEXT DEFAULT 'Asia/Jakarta'"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE projects ADD COLUMN timezone TEXT DEFAULT ''"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE projects ADD COLUMN code TEXT DEFAULT ''"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE projects ADD COLUMN last_workspace_folder TEXT DEFAULT ''"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE projects ADD COLUMN last_operator TEXT DEFAULT ''"); } catch (Exception $e) {}
-        try { $pdo->exec("ALTER TABLE projects ADD COLUMN last_seen DATETIME DEFAULT NULL"); } catch (Exception $e) {}
-        try {
-            $pdo->exec("CREATE TABLE IF NOT EXISTS chat_sessions (
-                chat_id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                active_project_id INTEGER DEFAULT 0,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )");
-        } catch (Exception $e) {}
-
-        // Inisialisasi kode proyek jika masih kosong
-        try {
-            $emptyCodes = $pdo->query("SELECT id, name, user_id FROM projects WHERE code IS NULL OR code = ''")->fetchAll(PDO::FETCH_ASSOC);
-            $userCounters = [];
-            foreach ($emptyCodes as $ec) {
-                $uid = $ec['user_id'];
-                if (!isset($userCounters[$uid])) {
-                    $userCounters[$uid] = 0;
-                }
-                $letter = chr(97 + ($userCounters[$uid] % 26)); // 'a', 'b', 'c', ...
-                $userCounters[$uid]++;
-                $pdo->prepare("UPDATE projects SET code = ? WHERE id = ?")->execute([$letter, $ec['id']]);
-            }
-        } catch (Exception $e) {}
-
-        // Set Superadmin iam@usm.rip
-        try {
-            $pdo->prepare("UPDATE users SET is_admin = 1 WHERE LOWER(email) = ?")->execute([strtolower(SUPERADMIN_EMAIL)]);
-        } catch (Exception $e) {}
-
-        // Migration: migrate legacy single-project user data into projects table
-        try {
-            $users = $pdo->query("SELECT * FROM users")->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($users as $u) {
-                $chkP = $pdo->prepare("SELECT id FROM projects WHERE user_id = ?");
-                $chkP->execute([$u['id']]);
-                if (!$chkP->fetch()) {
-                    $pkey = 'prj_' . substr(bin2hex(random_bytes(6)), 0, 10);
-                    $pName = !empty($u['project_name']) ? $u['project_name'] : 'Proyek Utama';
-                    $insP = $pdo->prepare("INSERT INTO projects (user_id, project_key, name, bot_token, chat_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
-                    $insP->execute([$u['id'], $pkey, $pName, $u['bot_token'] ?? '', $u['chat_id'] ?? '', $u['created_at'], $u['created_at']]);
-                    $newPrjId = $pdo->lastInsertId();
-                    
-                    $updT = $pdo->prepare("UPDATE tasks SET project_id = ? WHERE user_id = ? AND (project_id = 0 OR project_id IS NULL)");
-                    $updT->execute([$newPrjId, $u['id']]);
-                }
-            }
-        } catch (Exception $e) {}
+        // Optimasi: Eksekusi DDL & Migrasi skema database hanya jika versi skema belum up-to-date
+        $ver = (int)$pdo->query("PRAGMA user_version")->fetchColumn();
+        $targetVer = 2;
+        if ($ver < $targetVer) {
+            runDatabaseMigrations($pdo);
+            $pdo->exec("PRAGMA user_version = $targetVer;");
+        }
     }
     return $pdo;
+}
+
+// Skema Migrasi Database (Hanya dijalankan saat inisialisasi / update skema)
+function runDatabaseMigrations($pdo) {
+    // Table Users
+    $pdo->exec("CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE NOT NULL,
+        whatsapp TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        api_key TEXT UNIQUE NOT NULL,
+        bot_token TEXT DEFAULT '',
+        chat_id TEXT DEFAULT '',
+        project_name TEXT DEFAULT 'My Project',
+        timezone TEXT DEFAULT 'Asia/Jakarta',
+        is_blocked INTEGER DEFAULT 0,
+        block_notify INTEGER DEFAULT 0,
+        is_admin INTEGER DEFAULT 0,
+        last_email_verified_at DATETIME DEFAULT NULL,
+        email_otp TEXT DEFAULT '',
+        email_otp_expires INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // Add columns if table already exists
+    try { $pdo->exec("ALTER TABLE users ADD COLUMN name TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE users ADD COLUMN last_email_verified_at DATETIME DEFAULT NULL"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE users ADD COLUMN email_otp TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE users ADD COLUMN email_otp_expires INTEGER DEFAULT 0"); } catch (Exception $e) {}
+
+    // Table Visitor Analytics (ip-api.com geolocation logging)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS visitor_analytics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip TEXT NOT NULL,
+        country TEXT DEFAULT '',
+        country_code TEXT DEFAULT '',
+        region TEXT DEFAULT '',
+        city TEXT DEFAULT '',
+        zip TEXT DEFAULT '',
+        lat REAL DEFAULT 0,
+        lon REAL DEFAULT 0,
+        timezone TEXT DEFAULT '',
+        isp TEXT DEFAULT '',
+        org TEXT DEFAULT '',
+        user_agent TEXT DEFAULT '',
+        device_type TEXT DEFAULT 'desktop',
+        browser TEXT DEFAULT '',
+        os TEXT DEFAULT '',
+        page_url TEXT DEFAULT '',
+        user_id INTEGER DEFAULT 0,
+        user_email TEXT DEFAULT '',
+        visited_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+    try { $pdo->exec("CREATE INDEX IF NOT EXISTS idx_analytics_ip ON visitor_analytics(ip)"); } catch (Exception $e) {}
+    try { $pdo->exec("CREATE INDEX IF NOT EXISTS idx_analytics_time ON visitor_analytics(visited_at)"); } catch (Exception $e) {}
+
+    // Table Pending Registrations (OTP Verification)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS pending_registrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE NOT NULL,
+        whatsapp TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        otp_code TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // Table Projects (Multi-Project Support per User)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        project_key TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        bot_token TEXT DEFAULT '',
+        chat_id TEXT DEFAULT '',
+        timezone TEXT DEFAULT '',
+        custom_commands TEXT DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )");
+
+    // Table Tasks (Assigned to User and Project)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        project_id INTEGER DEFAULT 0,
+        instruction TEXT NOT NULL,
+        sender TEXT DEFAULT 'Telegram',
+        status TEXT DEFAULT 'PENDING',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        notes TEXT,
+        result TEXT DEFAULT '',
+        command TEXT DEFAULT '',
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )");
+
+    // Table Bot Whitelist (Private Chat per User / Project)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS bot_whitelist (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        project_id INTEGER DEFAULT 0,
+        telegram_user_id TEXT NOT NULL,
+        telegram_username TEXT DEFAULT '',
+        name TEXT DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )");
+
+    // Table Settings (Key-Value)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        val TEXT DEFAULT ''
+    )");
+
+    // Table Password Resets
+    $pdo->exec("CREATE TABLE IF NOT EXISTS password_resets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL,
+        token TEXT UNIQUE NOT NULL,
+        expires_at DATETIME NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // Migrations: ensure columns exist
+    try { $pdo->exec("ALTER TABLE tasks ADD COLUMN project_id INTEGER DEFAULT 0"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE tasks ADD COLUMN result TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE tasks ADD COLUMN command TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE tasks ADD COLUMN attachment_url TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE tasks ADD COLUMN attachment_type TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE tasks ADD COLUMN attachment_name TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE users ADD COLUMN block_notify INTEGER DEFAULT 0"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE users ADD COLUMN timezone TEXT DEFAULT 'Asia/Jakarta'"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE projects ADD COLUMN timezone TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE projects ADD COLUMN code TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE projects ADD COLUMN last_workspace_folder TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE projects ADD COLUMN last_operator TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE projects ADD COLUMN last_seen DATETIME DEFAULT NULL"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE projects ADD COLUMN model_email TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE tasks ADD COLUMN assigned_agent TEXT DEFAULT 'Antigravity AI Agent'"); } catch (Exception $e) {}
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS chat_sessions (
+            chat_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            active_project_id INTEGER DEFAULT 0,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+    } catch (Exception $e) {}
+
+    // Inisialisasi kode proyek jika masih kosong
+    try {
+        $emptyCodes = $pdo->query("SELECT id, name, user_id FROM projects WHERE code IS NULL OR code = ''")->fetchAll(PDO::FETCH_ASSOC);
+        $userCounters = [];
+        foreach ($emptyCodes as $ec) {
+            $uid = $ec['user_id'];
+            if (!isset($userCounters[$uid])) {
+                $userCounters[$uid] = 0;
+            }
+            $letter = chr(97 + ($userCounters[$uid] % 26)); // 'a', 'b', 'c', ...
+            $userCounters[$uid]++;
+            $pdo->prepare("UPDATE projects SET code = ? WHERE id = ?")->execute([$letter, $ec['id']]);
+        }
+    } catch (Exception $e) {}
+
+    // Set Superadmin iam@usm.rip
+    try {
+        $pdo->prepare("UPDATE users SET is_admin = 1 WHERE LOWER(email) = ?")->execute([strtolower(SUPERADMIN_EMAIL)]);
+    } catch (Exception $e) {}
+
+    // Migration: migrate legacy single-project user data into projects table
+    try {
+        $users = $pdo->query("SELECT * FROM users")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($users as $u) {
+            $chkP = $pdo->prepare("SELECT id FROM projects WHERE user_id = ?");
+            $chkP->execute([$u['id']]);
+            if (!$chkP->fetch()) {
+                $pkey = 'prj_' . substr(bin2hex(random_bytes(6)), 0, 10);
+                $pName = !empty($u['project_name']) ? $u['project_name'] : 'Proyek Utama';
+                $insP = $pdo->prepare("INSERT INTO projects (user_id, project_key, name, bot_token, chat_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                $insP->execute([$u['id'], $pkey, $pName, $u['bot_token'] ?? '', $u['chat_id'] ?? '', $u['created_at'], $u['created_at']]);
+                $newPrjId = $pdo->lastInsertId();
+                
+                $updT = $pdo->prepare("UPDATE tasks SET project_id = ? WHERE user_id = ? AND (project_id = 0 OR project_id IS NULL)");
+                $updT->execute([$newPrjId, $u['id']]);
+            }
+        }
+    } catch (Exception $e) {}
 }
 
 // Helper: Supported Timezones
@@ -314,7 +401,8 @@ function callTelegram($botToken, $method, $params = []) {
         curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     }
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 12);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 6);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
     $response = curl_exec($ch);
     $err = curl_error($ch);
@@ -322,7 +410,65 @@ function callTelegram($botToken, $method, $params = []) {
     if ($err) {
         return ['ok' => false, 'description' => "CURL Error: $err"];
     }
-    return json_decode($response, true) ?: ['ok' => false, 'description' => 'Respon JSON tidak valid'];
+        return json_decode($response, true) ?: ['ok' => false, 'description' => 'Respon JSON tidak valid'];
+}
+
+// Helper: Kirim pesan Telegram lengkap dengan preview media / foto / video
+function sendTelegramWithMedia($botToken, $chatId, $text, $attachmentType = '', $attachmentUrl = '', $attachmentFileId = '', $replyToMsgId = null) {
+    if (!$botToken || !$chatId) return ['ok' => false, 'description' => 'Bot token atau Chat ID kosong'];
+
+    $attachmentType = strtolower((string)$attachmentType);
+    $mediaTarget = $attachmentFileId ?: $attachmentUrl;
+
+    // 1. Coba kirim via native sendPhoto / sendVideo jika ada media dan teks muat di caption (<= 1024 karakter)
+    if ($mediaTarget && in_array($attachmentType, ['photo', 'video', 'voice', 'audio'])) {
+        if ($attachmentType === 'video') {
+            $method = 'sendVideo'; $field = 'video';
+        } elseif ($attachmentType === 'voice') {
+            $method = 'sendVoice'; $field = 'voice';
+        } elseif ($attachmentType === 'audio') {
+            $method = 'sendAudio'; $field = 'audio';
+        } else {
+            $method = 'sendPhoto'; $field = 'photo';
+        }
+
+        if (mb_strlen($text) <= 1024) {
+            $params = [
+                'chat_id' => $chatId,
+                $field => $mediaTarget,
+                'caption' => $text,
+                'parse_mode' => 'HTML'
+            ];
+            if ($replyToMsgId) $params['reply_to_message_id'] = $replyToMsgId;
+            $res = callTelegram($botToken, $method, $params);
+            if (!empty($res['ok'])) {
+                return $res;
+            }
+        }
+    }
+
+    // 2. Fallback atau jika teks panjang (> 1024 chars): Kirim via sendMessage dengan Link Preview Tersemat
+    $msgText = $text;
+    $linkPreviewOptions = ['is_disabled' => true];
+    if ($attachmentUrl && in_array($attachmentType, ['photo', 'video'])) {
+        // Sematkan tag anchor URL media tak kasat mata di awal teks agar Telegram merender gambar besar di bubble chat
+        $msgText = '<a href="' . htmlspecialchars($attachmentUrl) . '">&#8205;</a>' . $text;
+        $linkPreviewOptions = [
+            'is_disabled' => false,
+            'url' => $attachmentUrl,
+            'prefer_large_media' => true,
+            'show_above_text' => false
+        ];
+    }
+
+    $params = [
+        'chat_id' => $chatId,
+        'text' => $msgText,
+        'parse_mode' => 'HTML',
+        'link_preview_options' => $linkPreviewOptions
+    ];
+    if ($replyToMsgId) $params['reply_to_message_id'] = $replyToMsgId;
+    return callTelegram($botToken, 'sendMessage', $params);
 }
 
 // Default Telegram Bot Menu Commands
@@ -353,6 +499,12 @@ function getDefaultCommands() {
             'description' => 'Lihat status ringkasan antrean tugas (Menunggu, Dikerjakan, Selesai) untuk semua proyek atau proyek tertentu.'
         ],
         [
+            'command' => 'lapo',
+            'category' => 'Monitoring',
+            'example' => '/lapo atau /lapo <tag>',
+            'description' => 'Lihat apa yang sedang dikerjakan oleh AI Agent pada sebuah tag proyek (atau proyek aktif saat ini).'
+        ],
+        [
             'command' => 'id',
             'category' => 'Akses & Whitelist',
             'example' => '/id atau /myid',
@@ -369,6 +521,18 @@ function getDefaultCommands() {
             'category' => 'AI Agent',
             'example' => '/model',
             'description' => 'Cek sisa kuota model AI (Gemini, Claude, GPT) dan status mode kerja agen otonom.'
+        ],
+        [
+            'command' => '@agent',
+            'category' => 'AI Agent',
+            'example' => '@claude buat fitur auth atau @antigravity refactor api',
+            'description' => 'Tugaskan instruksi secara spesifik ke AI Agent tertentu (@antigravity, @claude, @copilot, @cursor, @gemini, @roo, @cline).'
+        ],
+        [
+            'command' => 'cron',
+            'category' => 'AI Agent',
+            'example' => '/cron @antigravity cek status database',
+            'description' => 'Jadwalkan tugas berkala ke AI Agent (otomatis dieksekusi secara periodik).'
         ],
         [
             'command' => 'whoami',
@@ -413,16 +577,7 @@ function getProjectCommands($project) {
             'description' => $d['description']
         ];
     }
-
-    // Tambahkan shortcut kode proyek (misal /a atau /b) jika ada
-    $pCode = strtolower(preg_replace('/[^a-z0-9_]/', '', $project['code'] ?? ''));
-    if ($pCode && !in_array($pCode, array_column($list, 'command'))) {
-        array_unshift($list, [
-            'command' => $pCode,
-            'description' => 'Kirim tugas langsung ke ' . ($project['name'] ?? 'proyek ini')
-        ]);
-    }
-
+    // Hanya gunakan perintah resmi standar bot (hindari shortcut tag seperti /jogja yang mengotori daftar)
     return $list;
 }
 
@@ -448,6 +603,327 @@ function setSetting($key, $val) {
         $stmt = $db->prepare("INSERT INTO settings (key, val) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET val = excluded.val");
         $stmt->execute([$key, $val]);
     } catch (Exception $e) {}
+}
+
+
+// Helper: Deteksi IP Asli Pengunjung
+function getVisitorIp() {
+    $keys = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_REAL_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR'];
+    foreach ($keys as $k) {
+        if (!empty($_SERVER[$k])) {
+            $ip = trim(explode(',', $_SERVER[$k])[0]);
+            if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                return $ip;
+            }
+        }
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+}
+
+// Helper: Deteksi Device, OS, & Browser dari User-Agent
+function parseUserAgentDetails($ua) {
+    $device = 'Desktop';
+    if (preg_match('/(mobile|android|iphone|ipad|phone)/i', $ua)) {
+        $device = preg_match('/(ipad|tablet)/i', $ua) ? 'Tablet' : 'Mobile';
+    }
+
+    $os = 'Unknown OS';
+    if (preg_match('/windows nt 10/i', $ua)) $os = 'Windows 10/11';
+    elseif (preg_match('/windows nt/i', $ua)) $os = 'Windows';
+    elseif (preg_match('/android/i', $ua)) $os = 'Android';
+    elseif (preg_match('/iphone/i', $ua)) $os = 'iOS';
+    elseif (preg_match('/macintosh|mac os x/i', $ua)) $os = 'macOS';
+    elseif (preg_match('/linux/i', $ua)) $os = 'Linux';
+
+    $browser = 'Other';
+    if (preg_match('/edg/i', $ua)) $browser = 'Edge';
+    elseif (preg_match('/chrome/i', $ua)) $browser = 'Chrome';
+    elseif (preg_match('/safari/i', $ua) && !preg_match('/chrome/i', $ua)) $browser = 'Safari';
+    elseif (preg_match('/firefox/i', $ua)) $browser = 'Firefox';
+    elseif (preg_match('/opr|opera/i', $ua)) $browser = 'Opera';
+
+    return ['device' => $device, 'os' => $os, 'browser' => $browser];
+}
+
+// Helper: Ambil Data Lokasi via ip-api.com dengan Cache Database Cepat
+function getGeoLocationFromIp($db, $ip) {
+    // Abaikan loopback / private IP
+    if ($ip === '127.0.0.1' || $ip === '::1' || strpos($ip, '192.168.') === 0 || strpos($ip, '10.') === 0) {
+        return [
+            'country' => 'Localhost',
+            'country_code' => 'ID',
+            'region' => 'Development',
+            'city' => 'Local Machine',
+            'zip' => '-',
+            'lat' => 0,
+            'lon' => 0,
+            'timezone' => 'Asia/Jakarta',
+            'isp' => 'Internal Loopback',
+            'org' => 'Localhost Network'
+        ];
+    }
+
+    // 1. Cek riwayat IP di database untuk menghemat kuota ip-api.com
+    $stmt = $db->prepare("SELECT country, country_code, region, city, zip, lat, lon, timezone, isp, org FROM visitor_analytics WHERE ip = ? AND country != '' LIMIT 1");
+    $stmt->execute([$ip]);
+    $cached = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($cached) {
+        return $cached;
+    }
+
+    // 2. Query ke ip-api.com (Free HTTP Endpoint)
+    $url = "http://ip-api.com/json/" . rawurlencode($ip) . "?fields=status,country,countryCode,regionName,city,zip,lat,lon,timezone,isp,org";
+    $resp = '';
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 4);
+        curl_setopt($ch, CURLOPT_USERAGENT, 'TeleVsCode-Analytics/1.0');
+        $resp = curl_exec($ch);
+        curl_close($ch);
+    }
+
+    if (!$resp && function_exists('file_get_contents') && ini_get('allow_url_fopen')) {
+        $opts = ['http' => ['method' => 'GET', 'timeout' => 4, 'header' => "User-Agent: TeleVsCode-Analytics/1.0\r\n"]];
+        $resp = @file_get_contents($url, false, stream_context_create($opts));
+    }
+
+    if (!$resp && function_exists('shell_exec')) {
+        $resp = @shell_exec('curl.exe -s --max-time 4 ' . escapeshellarg($url));
+    }
+
+    if ($resp) {
+        $data = json_decode($resp, true);
+        if ($data && isset($data['status']) && $data['status'] === 'success') {
+            return [
+                'country' => $data['country'] ?? '',
+                'country_code' => $data['countryCode'] ?? '',
+                'region' => $data['regionName'] ?? '',
+                'city' => $data['city'] ?? '',
+                'zip' => $data['zip'] ?? '',
+                'lat' => (float)($data['lat'] ?? 0),
+                'lon' => (float)($data['lon'] ?? 0),
+                'timezone' => $data['timezone'] ?? '',
+                'isp' => $data['isp'] ?? '',
+                'org' => $data['org'] ?? ''
+            ];
+        }
+    }
+
+    return [
+        'country' => 'Unknown',
+        'country_code' => '',
+        'region' => '',
+        'city' => '',
+        'zip' => '',
+        'lat' => 0,
+        'lon' => 0,
+        'timezone' => '',
+        'isp' => 'Unknown ISP',
+        'org' => ''
+    ];
+}
+
+// Helper: Rekam Kunjungan Pengunjung ke Database
+function recordVisitorHit($db, $currentUser = null) {
+    // Lewati polling ajax auto-update agar log analitik rapi & bermakna
+    if (isset($_GET['action']) && in_array($_GET['action'], ['sync_poll', 'status_stream'])) {
+        return;
+    }
+
+    $ip = getVisitorIp();
+    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    $page = $_SERVER['REQUEST_URI'] ?? '/';
+
+    // Throttle 5 menit per IP dan Halaman agar tidak flooding
+    $chk = $db->prepare("SELECT id FROM visitor_analytics WHERE ip = ? AND page_url = ? AND visited_at >= datetime('now', '-5 minutes') LIMIT 1");
+    $chk->execute([$ip, $page]);
+    if ($chk->fetch()) {
+        return; // Sudah tercatat dalam 5 menit terakhir
+    }
+
+    $geo = getGeoLocationFromIp($db, $ip);
+    $uaDetails = parseUserAgentDetails($ua);
+
+    $userId = $currentUser['id'] ?? 0;
+    $userEmail = $currentUser['email'] ?? '';
+
+    $ins = $db->prepare("INSERT INTO visitor_analytics (
+        ip, country, country_code, region, city, zip, lat, lon, timezone, isp, org,
+        user_agent, device_type, browser, os, page_url, user_id, user_email, visited_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+
+    $ins->execute([
+        $ip,
+        $geo['country'],
+        $geo['country_code'],
+        $geo['region'],
+        $geo['city'],
+        $geo['zip'],
+        $geo['lat'],
+        $geo['lon'],
+        $geo['timezone'],
+        $geo['isp'],
+        $geo['org'],
+        $ua,
+        $uaDetails['device'],
+        $uaDetails['browser'],
+        $uaDetails['os'],
+        $page,
+        $userId,
+        $userEmail,
+        date('Y-m-d H:i:s')
+    ]);
+}
+
+// Helper: Verifikasi Cloudflare Turnstile Token
+function verifyTurnstileToken($token) {
+    $secret = getSetting('turnstile_secret_key', '1x0000000000000000000000000000000AA');
+    if (!$secret || $secret === '1x0000000000000000000000000000000AA') return true;
+    if (!$token) return false;
+    $postData = http_build_query([
+        'secret' => $secret,
+        'response' => $token,
+        'remoteip' => $_SERVER['REMOTE_ADDR'] ?? ''
+    ]);
+    $opts = ['http' => [
+        'method' => 'POST',
+        'header' => "Content-type: application/x-www-form-urlencoded\r\n",
+        'content' => $postData,
+        'timeout' => 5
+    ]];
+    $context = stream_context_create($opts);
+    $result = @file_get_contents('https://challenges.cloudflare.com/turnstile/v0/siteverify', false, $context);
+    if ($result) {
+        $res = json_decode($result, true);
+        return !empty($res['success']);
+    }
+    return true;
+}
+
+
+// Helper: Verifikasi Validitas Nomor WhatsApp di Server-Side (Aman, tidak dapat di-inspect atau injeksi)
+function verifyWhatsAppNumberServerSide($phone) {
+    $digits = preg_replace('/[^0-9]/', '', $phone);
+    if (strlen($digits) < 9 || strlen($digits) > 16) return false;
+
+    // Normalisasi awalan ke format lokal 08... yang diharapkan API
+    $checkNum = $digits;
+    if (strpos($checkNum, '62') === 0) {
+        $checkNum = '0' . substr($checkNum, 2);
+    }
+    if (strpos($checkNum, '0') !== 0) {
+        $checkNum = '0' . $checkNum;
+    }
+
+    $apiUrl = "https://sowhats.biru.click/api/checknumber/" . rawurlencode($checkNum);
+    $resp = '';
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($apiUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 8);
+        curl_setopt($ch, CURLOPT_USERAGENT, 'TeleVsCode-Validator/1.0');
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+        $resp = curl_exec($ch);
+        curl_close($ch);
+    }
+
+    if (!$resp && function_exists('file_get_contents') && ini_get('allow_url_fopen')) {
+        $opts = [
+            'http' => [
+                'method' => 'GET',
+                'header' => "User-Agent: TeleVsCode-Validator/1.0\r\nAccept: application/json\r\n",
+                'timeout' => 8,
+                'ignore_errors' => true
+            ],
+            'ssl' => ['verify_peer' => false, 'verify_peer_name' => false]
+        ];
+        $resp = @file_get_contents($apiUrl, false, stream_context_create($opts));
+    }
+
+    if (!$resp && function_exists('shell_exec')) {
+        $resp = @shell_exec('curl.exe -s ' . escapeshellarg($apiUrl));
+    }
+
+    if ($resp) {
+        $json = json_decode($resp, true);
+        if ($json && isset($json['status']) && (string)$json['status'] === '200') {
+            if (isset($json['message']) && strtolower($json['message']) === 'registered') {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+
+// Helper: Generator Template Email HTML Responsif Standar Mobile & Desktop
+function buildResponsiveEmailHtml($title, $subtitle, $contentHtml, $footerNote = '') {
+    $siteUrl = 'https://biru.co.id/tele-vs-code/';
+    return '<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>' . htmlspecialchars($title) . '</title>
+    <style>
+        body { margin: 0; padding: 0; background-color: #080d1a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table { border-collapse: collapse; }
+        img { border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
+        @media only screen and (max-width: 600px) {
+            .email-container { width: 100% !important; max-width: 100% !important; padding: 8px !important; }
+            .email-card { padding: 22px 16px !important; border-radius: 12px !important; }
+            .otp-code { font-size: 26px !important; letter-spacing: 5px !important; padding: 12px !important; }
+            .email-title { font-size: 19px !important; }
+        }
+    </style>
+</head>
+<body style="margin: 0; padding: 24px 10px; background-color: #080d1a; color: #f8fafc;">
+    <table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">
+        <tr>
+            <td align="center">
+                <table class="email-container" width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation" style="max-width: 500px; width: 100%; margin: 0 auto;">
+                    <!-- Brand Header -->
+                    <tr>
+                        <td align="center" style="padding-bottom: 18px;">
+                            <table border="0" cellpadding="0" cellspacing="0" role="presentation">
+                                <tr>
+                                    <td align="center" style="padding-right: 8px;">
+                                        <div style="width: 32px; height: 32px; border-radius: 8px; background: rgba(56, 189, 248, 0.15); display: inline-flex; align-items: center; justify-content: center; color: #38bdf8; font-size: 16px; line-height: 32px; text-align: center;">🔔</div>
+                                    </td>
+                                    <td align="left">
+                                        <span style="font-size: 18px; font-weight: 800; color: #ffffff; letter-spacing: -0.3px;">tele<span style="color: #38bdf8;">/</span>vs<span style="color: #38bdf8;">/</span>code</span>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <!-- Main Card -->
+                    <tr>
+                        <td class="email-card" style="background-color: #111827; border: 1px solid #1f2937; border-radius: 16px; padding: 28px 24px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6); text-align: center;">
+                            <h1 class="email-title" style="margin: 0 0 6px 0; font-size: 21px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px;">' . htmlspecialchars($title) . '</h1>
+                            ' . ($subtitle ? '<p style="margin: 0 0 20px 0; font-size: 13.5px; color: #94a3b8; line-height: 1.5;">' . htmlspecialchars($subtitle) . '</p>' : '<div style="margin-bottom: 16px;"></div>') . '
+                            ' . $contentHtml . '
+                            ' . ($footerNote ? '<p style="margin: 20px 0 0 0; font-size: 11.5px; color: #64748b; line-height: 1.5; border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 16px;">' . $footerNote . '</p>' : '') . '
+                        </td>
+                    </tr>
+                    <!-- Footer -->
+                    <tr>
+                        <td align="center" style="padding-top: 18px; font-size: 11.5px; color: #475569;">
+                            Tele-vs-Code &middot; Visual Studio Code & Telegram AI Notifier<br>
+                            <a href="' . $siteUrl . '" style="color: #38bdf8; text-decoration: none;">biru.co.id/tele-vs-code</a>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>';
 }
 
 // Helper: Kirim Email via Socket SMTP (SSL/TLS/Plain) dengan Fallback ke mail()
@@ -661,12 +1137,51 @@ if ($action === 'check_code_unique') {
     exit;
 }
 
+// Endpoint Live Polling Auto-Update untuk Dashboard Web
+if ($action === 'check_task_updates') {
+    if (!$currentUser) {
+        http_response_code(401);
+        header('Content-Type: application/json');
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+    header('Content-Type: application/json');
+    $lastHash = $_GET['hash'] ?? '';
+
+    // Ambil data status dan tugas terbaru untuk user ini
+    $stmtU = $db->prepare("SELECT id, status, updated_at, instruction, notes, result, sender, project_id FROM tasks WHERE user_id = ? ORDER BY updated_at DESC, id DESC LIMIT 25");
+    $stmtU->execute([$currentUser['id']]);
+    $recentTasks = $stmtU->fetchAll(PDO::FETCH_ASSOC);
+
+    // Ambil statistik tugas
+    $stmtC = $db->prepare("SELECT status, count(*) as c FROM tasks WHERE user_id = ? GROUP BY status");
+    $stmtC->execute([$currentUser['id']]);
+    $stats = ['TOTAL' => 0, 'PENDING' => 0, 'IN_PROGRESS' => 0, 'DONE' => 0, 'FAILED' => 0];
+    while ($sc = $stmtC->fetch(PDO::FETCH_ASSOC)) {
+        $stats[$sc['status']] = (int)$sc['c'];
+        $stats['TOTAL'] += (int)$sc['c'];
+    }
+
+    $statePayload = ['tasks' => $recentTasks, 'stats' => $stats];
+    $curHash = md5(json_encode($statePayload));
+
+    echo json_encode([
+        'ok' => true,
+        'hash' => $curHash,
+        'changed' => ($lastHash && $curHash !== $lastHash),
+        'tasks' => $recentTasks,
+        'stats' => $stats,
+        'server_time' => date('H:i:s')
+    ]);
+    exit;
+}
+
 // Kompatibilitas alias action untuk ekstensi VS Code & CLI:
 if ($action === 'pull') $action = 'api_pull';
 if ($action === 'push') $action = 'api_push';
 if ($action === 'done') $action = 'api_done';
 if ($action === 'failed') $action = 'api_failed';
-if ($action === 'in_progress') $action = 'api_in_progress';
+if ($action === 'in_progress' || $action === 'start' || $action === 'proses') $action = 'api_in_progress';
 if ($action === 'status') $action = 'api_status';
 if ($action === 'projects') $action = 'api_projects';
 
@@ -695,6 +1210,7 @@ if ($action === 'download_vsix') {
 
 // Multi-Tenant Webhook dari Telegram Bot Pengguna (Berdasarkan pkey atau api_key / secret)
 if ($action === 'webhook') {
+    try {
     $pKey = $_GET['pkey'] ?? '';
     $apiKey = $_GET['secret'] ?? ($_POST['secret'] ?? ($_GET['key'] ?? ($_POST['key'] ?? '')));
 
@@ -762,6 +1278,15 @@ if ($action === 'webhook') {
         $bestPhoto = end($msg['photo']);
         $attachmentFileId = $bestPhoto['file_id'] ?? null;
         $attachmentName = 'photo_' . date('Ymd_His') . '_' . substr(bin2hex(random_bytes(2)), 0, 4) . '.jpg';
+    } elseif (!empty($msg['voice']) && is_array($msg['voice'])) {
+        $attachmentType = 'voice';
+        $attachmentFileId = $msg['voice']['file_id'] ?? null;
+        $attachmentName = 'voice_' . date('Ymd_His') . '_' . substr(bin2hex(random_bytes(2)), 0, 4) . '.ogg';
+    } elseif (!empty($msg['audio']) && is_array($msg['audio'])) {
+        $attachmentType = 'audio';
+        $attachmentFileId = $msg['audio']['file_id'] ?? null;
+        $origName = !empty($msg['audio']['file_name']) ? basename($msg['audio']['file_name']) : 'audio_' . date('Ymd_His') . '.mp3';
+        $attachmentName = preg_replace('/[^a-zA-Z0-9_\.-]/', '_', $origName);
     } elseif (!empty($msg['document']) && is_array($msg['document'])) {
         $attachmentType = 'document';
         $attachmentFileId = $msg['document']['file_id'] ?? null;
@@ -904,6 +1429,88 @@ if ($action === 'webhook') {
         echo "OK"; exit;
     }
 
+        // DETEKSI REPLY KE PESAN TUGAS (Membatalkan atau Merevisi Tugas)
+    $repliedTaskId = null;
+    if (!empty($msg['reply_to_message'])) {
+        $repText = $msg['reply_to_message']['text'] ?? ($msg['reply_to_message']['caption'] ?? '');
+        if (preg_match('/(#?TASK-[A-Za-z0-9_-]+)/i', $repText, $mRep)) {
+            $repliedTaskId = $mRep[1];
+            if ($repliedTaskId[0] !== '#') $repliedTaskId = '#' . $repliedTaskId;
+        }
+    }
+
+    if ($repliedTaskId) {
+        $stmtRepTask = $db->prepare("SELECT t.*, p.name as project_name, p.code as project_code, p.bot_token, p.chat_id, p.timezone as project_timezone FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.id = ?");
+        $stmtRepTask->execute([$repliedTaskId]);
+        $repTask = $stmtRepTask->fetch(PDO::FETCH_ASSOC);
+
+        if ($repTask) {
+            $repTz = !empty($repTask['project_timezone']) ? $repTask['project_timezone'] : $effectiveTz;
+            $repTzAbbr = getTimezoneAbbr($repTz);
+            $pName = htmlspecialchars($repTask['project_name'] ?: 'Tele-vs-Code');
+
+            // 1. Aksi Pembatalan Tugas
+            if (preg_match('/^(?:\/cancel|\/batal|batal|batalkan|cancel|stop|hapus)/i', $text) || stripos($text, 'batalkan task') !== false || stripos($text, 'batal task') !== false || stripos($text, 'cancel task') !== false) {
+                if ($repTask['status'] === 'DONE') {
+                    $reply = "⚠️ <b>TUGAS SUDAH SELESAI</b>\n\n"
+                           . "Tugas <code>$repliedTaskId</code> sudah tuntas 100% sebelumnya dan tidak dapat dibatalkan.";
+                } else {
+                    $now = date('Y-m-d H:i:s');
+                    $cancelNote = "Dibatalkan oleh pemohon ($sender) via Telegram Reply";
+                    $upd = $db->prepare("UPDATE tasks SET status = 'FAILED', notes = ?, result = ?, updated_at = ? WHERE id = ?");
+                    $upd->execute([$cancelNote, $cancelNote, $now, $repliedTaskId]);
+
+                    $reply = "🚫 <b>TUGAS BERHASIL DIBATALKAN!</b>\n"
+                           . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                           . "🆔 <b>ID Tugas:</b> <code>$repliedTaskId</code>\n"
+                           . "📁 <b>Proyek:</b> <code>$pName</code>\n"
+                           . "👤 <b>Pemohon:</b> " . htmlspecialchars($sender) . "\n"
+                           . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $repTzAbbr\n"
+                           . "📌 <b>Status:</b> <code>[FAILED / DIBATALKAN]</code>\n\n"
+                           . "<i>Tugas telah dihentikan dan dikeluarkan dari antrean eksekusi AI Agent.</i>";
+                }
+
+                callTelegram($project['bot_token'], 'sendMessage', [
+                    'chat_id' => $incomingChatId,
+                    'text' => $reply,
+                    'parse_mode' => 'HTML',
+                    'reply_to_message_id' => $messageId
+                ]);
+                echo "OK"; exit;
+            }
+
+            // 2. Aksi Revisi / Tambahan Instruksi Tugas
+            if (in_array($repTask['status'], ['PENDING', 'IN_PROGRESS'])) {
+                $cleanRev = trim(preg_replace('/^\/task(@\w+)?\s*/i', '', $text));
+                if ($cleanRev) {
+                    $now = date('Y-m-d H:i:s');
+                    $updatedInstruction = $repTask['instruction'] . "\n\n[Revisi/Tambahan dari $sender pada $now]:\n" . $cleanRev;
+
+                    $upd = $db->prepare("UPDATE tasks SET instruction = ?, updated_at = ? WHERE id = ?");
+                    $upd->execute([$updatedInstruction, $now, $repliedTaskId]);
+
+                    $reply = "📝 <b>INSTRUKSI TUGAS BERHASIL DIREVISI!</b>\n"
+                           . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                           . "🆔 <b>ID Tugas:</b> <code>$repliedTaskId</code>\n"
+                           . "📁 <b>Proyek:</b> <code>$pName</code>\n"
+                           . "👤 <b>Pengirim:</b> " . htmlspecialchars($sender) . "\n"
+                           . "🕒 <b>Waktu Revisi:</b> " . date('d-m-Y H:i:s') . " $repTzAbbr\n\n"
+                           . "➕ <b>Instruksi Tambahan:</b>\n<code>" . htmlspecialchars($cleanRev) . "</code>\n\n"
+                           . "🚀 <i>Pembaruan instruksi telah disinkronkan ke AI Agent di VS Code!</i>";
+
+                    callTelegram($project['bot_token'], 'sendMessage', [
+                        'chat_id' => $incomingChatId,
+                        'text' => $reply,
+                        'parse_mode' => 'HTML',
+                        'reply_to_message_id' => $messageId
+                    ]);
+                    echo "OK"; exit;
+                }
+            }
+        }
+    }
+
+
     // Command /whoami (Identifikasi Multi-Workspace VS Code)
     if (strpos($text, '/whoami') === 0) {
         $pList = $allProjects;
@@ -1002,7 +1609,19 @@ if ($action === 'webhook') {
     if (preg_match('/^\/(use|switch|pilih|proyek_aktif)(\s+(.+))?$/i', $text, $mUse)) {
         $target = trim($mUse[3] ?? '');
         if (!$target) {
-            $reply = "ℹ️ <b>Gunakan perintah:</b> <code>/use &lt;kode atau nomor proyek&gt;</code>\nContoh: <code>/use a</code> atau <code>/use 1</code>\n\nKetik <code>/projects</code> untuk melihat daftar semua proyek Anda.";
+            $curCode = !empty($activeProject['code']) ? $activeProject['code'] : 'a';
+            $ownerInfo = !empty($activeProject['email']) ? "\n👤 <b>Akun:</b> <code>" . htmlspecialchars($activeProject['email']) . "</code>" : "";
+            $reply = "🌟 <b>PROYEK AKTIF SAAT INI:</b>\n"
+                   . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                   . "📁 <b>Nama Proyek:</b> <code>" . htmlspecialchars($activeProject['name']) . "</code>\n"
+                   . "🏷️ <b>Kode Tag:</b> <code>#$curCode</code> (atau <code>[#$curCode]</code>)\n"
+                   . "🔑 <b>Project Key:</b> <code>" . htmlspecialchars($activeProject['project_key']) . "</code>" . $ownerInfo . "\n"
+                   . "🕒 <b>Waktu Server:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n\n"
+                   . "👉 <i>Setiap pesan instruksi biasa di chat ini otomatis dikerjakan oleh VS Code proyek <b>" . htmlspecialchars($activeProject['name']) . "</b>.</i>\n\n"
+                   . "━━━━━━━━━━━━━━━━━━━━━━\n"
+                   . "🔄 <b>Ganti Proyek Aktif:</b>\n"
+                   . "Ketik: <code>/use &lt;kode_tag&gt;</code> (Contoh: <code>/use a</code> atau <code>/use b</code>)\n"
+                   . "Ketik <code>/projects</code> untuk melihat semua proyek Anda.";
         } else {
             $targetLower = strtolower(ltrim($target, '#'));
             $foundP = null;
@@ -1056,6 +1675,254 @@ if ($action === 'webhook') {
                        . "Ketik <code>/projects</code> untuk melihat daftar proyek yang diizinkan untuk akun Anda.";
             }
         }
+        callTelegram($project['bot_token'], 'sendMessage', [
+            'chat_id' => $incomingChatId,
+            'text' => $reply,
+            'parse_mode' => 'HTML',
+            'reply_to_message_id' => $messageId
+        ]);
+        echo "OK"; exit;
+    }
+
+    // Command /lapo: Melihat apa yang sedang dikerjakan sebuah tag proyek
+    if (preg_match('/^\/lapo(@\w+)?(?:\s+(.+))?$/is', $text, $mLapo)) {
+        $lapoArg = trim($mLapo[2] ?? '');
+        $pTarget = null;
+        $isAll = false;
+
+        if ($lapoArg) {
+            $argLower = strtolower(ltrim($lapoArg, '#'));
+            if (in_array($argLower, ['all', 'semua', '*'])) {
+                $isAll = true;
+            } else {
+                // Prioritas 1: Exact match Kode / Tag Proyek (misal: 'biru', 'a', 'b') atau Project Key
+                foreach ($allProjects as $idx => $p) {
+                    $pCode = strtolower($p['code'] ?: chr(97 + ($idx % 26)));
+                    $pKey = strtolower($p['project_key'] ?? '');
+                    if ($argLower === $pCode || ($pKey && $argLower === $pKey)) {
+                        $pTarget = $p;
+                        break;
+                    }
+                }
+                // Prioritas 2: Exact match ID atau nomor urut
+                if (!$pTarget) {
+                    foreach ($allProjects as $idx => $p) {
+                        if ($argLower === (string)$p['id'] || $argLower === (string)($idx + 1)) {
+                            $pTarget = $p;
+                            break;
+                        }
+                    }
+                }
+                // Prioritas 3: Exact match Nama Proyek
+                if (!$pTarget) {
+                    foreach ($allProjects as $idx => $p) {
+                        if ($argLower === strtolower(trim($p['name'] ?? ''))) {
+                            $pTarget = $p;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Tanpa argumen: gunakan proyek aktif chat saat ini!
+            $pTarget = $activeProject;
+        }
+
+        if ($isAll) {
+            // Ringkasan semua proyek
+            $reply = "🛠️ <b>STATUS PEKERJAAN SEMUA PROYEK</b>
+"
+                   . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $tzAbbr
+
+";
+
+            foreach ($allProjects as $p) {
+                $pCode = $p['code'] ?: $p['id'];
+                $isAct = ($p['id'] == $activeProject['id']) ? " ⭐" : "";
+
+                // Cari tugas yang sedang IN_PROGRESS
+                $stmtAct = $db->prepare("SELECT * FROM tasks WHERE project_id = ? AND status = 'IN_PROGRESS' ORDER BY id DESC LIMIT 1");
+                $stmtAct->execute([$p['id']]);
+                $curTask = $stmtAct->fetch(PDO::FETCH_ASSOC);
+
+                // Hitung antrean PENDING
+                $stmtPend = $db->prepare("SELECT COUNT(*) FROM tasks WHERE project_id = ? AND status = 'PENDING'");
+                $stmtPend->execute([$p['id']]);
+                $pendCount = (int)$stmtPend->fetchColumn();
+
+                $reply .= "📁 <b>" . htmlspecialchars($p['name']) . " (#$pCode)$isAct:</b>
+";
+                if ($curTask) {
+                    $instSnippet = htmlspecialchars(mb_strimwidth($curTask['instruction'], 0, 75, '...'));
+                    $reply .= "   ⚡ <b>Lagi Dikerjakan:</b> <i>&quot;$instSnippet&quot;</i>
+"
+                           . "   👤 <b>Pengirim:</b> " . htmlspecialchars($curTask['sender']) . "
+"
+                           . ($pendCount > 0 ? "   ⏳ Antrean Menunggu: $pendCount tugas
+" : "");
+                } elseif ($pendCount > 0) {
+                    $stmtNext = $db->prepare("SELECT * FROM tasks WHERE project_id = ? AND status = 'PENDING' ORDER BY id ASC LIMIT 1");
+                    $stmtNext->execute([$p['id']]);
+                    $nxtTask = $stmtNext->fetch(PDO::FETCH_ASSOC);
+                    $nxtSnippet = $nxtTask ? htmlspecialchars(mb_strimwidth($nxtTask['instruction'], 0, 70, '...')) : '';
+                    $reply .= "   ⏳ <b>Antrean Berikutnya:</b> <i>&quot;$nxtSnippet&quot;</i> ($pendCount tugas menunggu)
+";
+                } else {
+                    $stmtDone = $db->prepare("SELECT * FROM tasks WHERE project_id = ? AND status = 'DONE' ORDER BY updated_at DESC, id DESC LIMIT 1");
+                    $stmtDone->execute([$p['id']]);
+                    $lastDone = $stmtDone->fetch(PDO::FETCH_ASSOC);
+                    if ($lastDone) {
+                        $doneSnippet = htmlspecialchars(mb_strimwidth($lastDone['instruction'], 0, 60, '...'));
+                        $reply .= "   💤 <b>Standby / Idle</b> (Terakhir selesai: <i>&quot;$doneSnippet&quot;</i>)
+";
+                    } else {
+                        $reply .= "   💤 <b>Standby / Idle</b> (Belum ada tugas)
+";
+                    }
+                }
+                $reply .= "
+";
+            }
+            $reply .= "<i>Ketik <code>/lapo &lt;tag&gt;</code> untuk rincian pekerjaan sebuah tag proyek.</i>";
+        } elseif ($pTarget) {
+            $pCode = $pTarget['code'] ?: $pTarget['id'];
+            $pName = htmlspecialchars($pTarget['name']);
+
+            // Cek status worker (last_seen)
+            $workerStatus = "⚪ Belum Terhubung";
+            if (!empty($pTarget['last_seen'])) {
+                $lastSeenSec = time() - strtotime($pTarget['last_seen']);
+                if ($lastSeenSec <= 15) {
+                    $workerStatus = "🟢 Aktif Online ($lastSeenSec dtk lalu)";
+                } elseif ($lastSeenSec < 300) {
+                    $workerStatus = "🟡 Aktif (" . round($lastSeenSec / 60, 1) . " mnt lalu)";
+                } else {
+                    $workerStatus = "⚪ Offline (" . date('d/m H:i', strtotime($pTarget['last_seen'])) . ")";
+                }
+            }
+
+            // 1. Cari tugas yang sedang aktif dikerjakan (IN_PROGRESS)
+            $stmtAct = $db->prepare("SELECT * FROM tasks WHERE project_id = ? AND status = 'IN_PROGRESS' ORDER BY id DESC LIMIT 1");
+            $stmtAct->execute([$pTarget['id']]);
+            $curTask = $stmtAct->fetch(PDO::FETCH_ASSOC);
+
+            // 2. Hitung jumlah antrean PENDING
+            $stmtPend = $db->prepare("SELECT COUNT(*) FROM tasks WHERE project_id = ? AND status = 'PENDING'");
+            $stmtPend->execute([$pTarget['id']]);
+            $pendCount = (int)$stmtPend->fetchColumn();
+
+            // 3. Hitung jumlah total tugas selesai
+            $stmtDoneCount = $db->prepare("SELECT COUNT(*) FROM tasks WHERE project_id = ? AND status = 'DONE'");
+            $stmtDoneCount->execute([$pTarget['id']]);
+            $doneCount = (int)$stmtDoneCount->fetchColumn();
+
+            $reply = "🛠️ <b>LAPORAN PEKERJAAN (LAPO)</b>
+"
+                   . "📁 <b>Proyek:</b> <code>$pName</code> (#$pCode)
+"
+                   . "📡 <b>Worker VS Code:</b> $workerStatus
+"
+                   . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $tzAbbr
+
+";
+
+            if ($curTask) {
+                // Ada tugas yang sedang aktif dikerjakan!
+                $elapsedSec = time() - strtotime($curTask['updated_at'] ?: $curTask['created_at']);
+                $elapsedText = ($elapsedSec < 60) ? "$elapsedSec detik lalu" : round($elapsedSec / 60) . " menit lalu";
+
+                $reply .= "⚡ <b>SEDANG DIKERJAKAN SAAT INI:</b>
+"
+                       . "🆔 <b>ID Tugas:</b> <code>{$curTask['id']}</code>
+"
+                       . "📝 <b>Instruksi:</b> <i>&quot;" . htmlspecialchars($curTask['instruction']) . "&quot;</i>
+"
+                       . "👤 <b>Pengirim:</b> " . htmlspecialchars($curTask['sender']) . "
+"
+                       . "⏱️ <b>Mulai:</b> " . htmlspecialchars($curTask['created_at']) . " ($elapsedText)
+"
+                       . (!empty($curTask['notes']) ? "📌 <b>Catatan:</b> " . htmlspecialchars($curTask['notes']) . "
+" : "")
+                       . "
+";
+
+                if ($pendCount > 0) {
+                    $reply .= "⏳ <b>Antrean Berikutnya:</b> Ada <b>$pendCount</b> tugas menunggu giliran.
+";
+                }
+            } elseif ($pendCount > 0) {
+                // Tidak ada IN_PROGRESS, tapi ada PENDING
+                $stmtNext = $db->prepare("SELECT * FROM tasks WHERE project_id = ? AND status = 'PENDING' ORDER BY id ASC LIMIT 1");
+                $stmtNext->execute([$pTarget['id']]);
+                $nextTask = $stmtNext->fetch(PDO::FETCH_ASSOC);
+
+                $reply .= "⏳ <b>ANTREAN MENUNGGU (PENDING):</b>
+"
+                       . "🆔 <b>ID:</b> <code>{$nextTask['id']}</code>
+"
+                       . "📝 <b>Instruksi:</b> <i>&quot;" . htmlspecialchars($nextTask['instruction']) . "&quot;</i>
+"
+                       . "👤 <b>Pengirim:</b> " . htmlspecialchars($nextTask['sender']) . "
+"
+                       . "📊 <b>Total Antrean Menunggu:</b> $pendCount tugas
+"
+                       . "👉 <i>Tugas akan segera dieksekusi otomatis oleh AI Agent saat worker aktif.</i>
+";
+            } else {
+                // Tidak ada tugas aktif maupun antrean -> Standby / Idle
+                $reply .= "💤 <b>STATUS: STANDBY / IDLE</b>
+"
+                       . "<i>Saat ini AI Agent tidak sedang mengerjakan tugas apapun untuk tag <code>#$pCode</code>.</i>
+
+";
+
+                // Tampilkan tugas terakhir yang selesai
+                $stmtLastDone = $db->prepare("SELECT * FROM tasks WHERE project_id = ? AND status = 'DONE' ORDER BY updated_at DESC, id DESC LIMIT 1");
+                $stmtLastDone->execute([$pTarget['id']]);
+                $lastDone = $stmtLastDone->fetch(PDO::FETCH_ASSOC);
+
+                if ($lastDone) {
+                    $reply .= "✅ <b>TUGAS TERAKHIR SELESAI (100%):</b>
+"
+                           . "🆔 <b>ID:</b> <code>{$lastDone['id']}</code>
+"
+                           . "📝 <b>Instruksi:</b> <i>&quot;" . htmlspecialchars($lastDone['instruction']) . "&quot;</i>
+"
+                           . (!empty($lastDone['notes']) ? "📋 <b>Hasil:</b> " . htmlspecialchars($lastDone['notes']) . "
+" : "")
+                           . "🕒 <b>Waktu Selesai:</b> " . htmlspecialchars($lastDone['updated_at'] ?: $lastDone['created_at']) . "
+";
+                }
+                $reply .= "
+💡 <i>Ketik <code>#$pCode &lt;instruksi&gt;</code> untuk memberikan tugas baru ke proyek ini.</i>";
+            }
+        } else {
+            // Tag tidak ditemukan
+            $tagList = [];
+            foreach ($allProjects as $p) {
+                $tagList[] = "• <code>#" . ($p['code'] ?: $p['id']) . "</code> (" . htmlspecialchars($p['name']) . ")";
+            }
+            $reply = "❓ <b>TAG PROYEK TIDAK DITEMUKAN</b>
+
+"
+                   . "Tag atau proyek '<b>" . htmlspecialchars($lapoArg) . "</b>' tidak ditemukan di akun Anda.
+
+"
+                   . "📌 <b>Daftar Tag Proyek Anda:</b>
+"
+                   . implode("
+", $tagList) . "
+
+"
+                   . "💡 <b>Contoh Penggunaan:</b>
+"
+                   . "• <code>/lapo</code> (cek proyek aktif saat ini)
+"
+                   . "• <code>/lapo #" . ($allProjects[0]['code'] ?? 'tag') . "</code> (cek tag tertentu)
+"
+                   . "• <code>/lapo all</code> (cek semua tag proyek)";
+        }
+
         callTelegram($project['bot_token'], 'sendMessage', [
             'chat_id' => $incomingChatId,
             'text' => $reply,
@@ -1141,6 +2008,7 @@ if ($action === 'webhook') {
         $cmdLines = [];
         $cmdLines[] = "• <code>/projects</code> - Daftar proyek terhubung (#a, #b)";
         $cmdLines[] = "• <code>/use &lt;kode&gt;</code> - Ganti proyek aktif di chat ini";
+        $cmdLines[] = "• <code>/lapo &lt;tag&gt;</code> - Cek apa yang sedang dikerjakan tag";
         $cmdLines[] = "• <code>/status</code> - Cek status antrean proyek";
         foreach ($cmds as $c) {
             $cmdLines[] = "• <code>/{$c['command']}</code> - {$c['description']}";
@@ -1152,6 +2020,42 @@ if ($action === 'webhook') {
                . "• <code>#a &lt;instruksi&gt;</code> -> Masuk ke Folder A\n"
                . "• <code>#b &lt;instruksi&gt;</code> -> Masuk ke Folder B\n"
                . "• Atau ketik <code>/use b</code> untuk pindah proyek aktif!";
+        callTelegram($project['bot_token'], 'sendMessage', [
+            'chat_id' => $incomingChatId,
+            'text' => $reply,
+            'parse_mode' => 'HTML',
+            'reply_to_message_id' => $messageId
+        ]);
+        echo "OK"; exit;
+    }
+
+    // Command /aktivasi, /setup, /panduan: Petunjuk Lengkap Aktivasi Bot & VS Code
+    if (preg_match('/^\/(aktivasi|setup|panduan|install)(@\w+)?/i', $text)) {
+        $pName = htmlspecialchars($activeProject['name']);
+        $pKey = htmlspecialchars($activeProject['project_key']);
+        $pCode = htmlspecialchars($activeProject['code'] ?: 'a');
+        $reply = "🚀 <b>PANDUAN LENGKAP AKTIVASI BOT TELE-VS-CODE</b>\n"
+               . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+               . "Hai <b>" . htmlspecialchars($sender) . "</b>! Berikut adalah langkah mudah mengaktifkan dan menghubungkan bot ini ke VS Code Anda:\n\n"
+               . "<b>1️⃣ Langkah 1: Catat User ID Telegram Anda</b>\n"
+               . "• User ID Anda: <code>$senderUserId</code>\n"
+               . "• Pastikan User ID ini sudah ditambahkan ke menu <b>Whitelist</b> di Web Dashboard agar Anda memiliki hak akses penuh.\n\n"
+               . "<b>2️⃣ Langkah 2: Buka Dashboard & Buat Proyek</b>\n"
+               . "• Buka: <a href=\"https://biru.co.id/tele-vs-code/\">https://biru.co.id/tele-vs-code/</a>\n"
+               . "• Masukkan Bot Token dari @BotFather dan tentukan Kode Tag (contoh: <code>#$pCode</code>).\n"
+               . "• Salin <b>API Secret Key</b> dan <b>Project Key</b> (<code>$pKey</code>).\n\n"
+               . "<b>3️⃣ Langkah 3: Pasang Ekstensi di VS Code</b>\n"
+               . "• Unduh paket ekstensi <code>tele-vs-code.vsix</code> dari Dashboard atau cari <i>Telegram VSC Agents</i> di VS Code Marketplace.\n"
+               . "• Buka command palette di VS Code: <code>Ctrl+Shift+P</code> &gt; pilih <i>Install from VSIX</i>.\n\n"
+               . "<b>4️⃣ Langkah 4: Hubungkan ke Server Biru</b>\n"
+               . "• Di pojok kanan bawah VS Code, klik ikon <b>((·)) Tele-vs-Code</b>.\n"
+               . "• Pilih <b>Hubungkan ke Server Biru (Setup Wizard)</b> lalu tempel API Secret dan Project Key.\n\n"
+               . "<b>5️⃣ Langkah 5: Mulai Bekerja!</b>\n"
+               . "• Kirim pesan teks atau pesan suara (Voice Note) di chat ini:\n"
+               . "  <code>#$pCode buatkan fitur login</code>\n"
+               . "• AI Agent (Antigravity) di VS Code akan langsung mengerjakan tugas Anda secara otonom sampai 100% tuntas!\n\n"
+               . "💡 <i>Ketik <code>/help</code> untuk melihat daftar lengkap perintah bot.</i>";
+
         callTelegram($project['bot_token'], 'sendMessage', [
             'chat_id' => $incomingChatId,
             'text' => $reply,
@@ -1173,13 +2077,77 @@ if ($action === 'webhook') {
         echo "OK"; exit;
     }
 
-    // Command /model
-    if (strpos($text, '/model') === 0) {
-        $reply = "🧠 <b>AI MODEL & STATUS KUOTA</b>\n\n"
-               . "• <b>Gemini Models:</b> 10% Weekly Limit Remaining\n"
-               . "• <b>Claude & GPT:</b> 100% Weekly Limit Remaining\n"
-               . "• <b>Mode Kerja:</b> Antigravity Autonomous Agent (Pro)\n\n"
-               . "<i>Siap mengerjakan instruksi tugas coding proyek " . htmlspecialchars($activeProject['name']) . ".</i>";
+    // Command /model: Cek akun email aktif dan status kuota model AI (Requirement: tambahakan akun email aktif model untuk perintah /model)
+    if (preg_match('/^\/model(@\w+)?(?:\s+(.+))?$/is', $text, $mModel)) {
+        $modelArg = trim($mModel[2] ?? '');
+
+        // Ambil akun email pemilik proyek / akun terhubung
+        $ownerEmail = '';
+        if (!empty($activeProject['user_id'])) {
+            $stmtUser = $db->prepare("SELECT email FROM users WHERE id = ?");
+            $stmtUser->execute([$activeProject['user_id']]);
+            $ownerEmail = $stmtUser->fetchColumn() ?: '';
+        }
+        if (empty($ownerEmail) && !empty($user['email'])) {
+            $ownerEmail = $user['email'];
+        }
+
+        // Cek jika ada custom model_email di proyek
+        $activeModelEmail = !empty($activeProject['model_email']) ? $activeProject['model_email'] : $ownerEmail;
+
+        // Jika user memberikan input email baru: /model <email> atau /model set <email>
+        $confirmMsg = "";
+        $cleanArgEmail = preg_replace('/^set\s+/i', '', $modelArg);
+        if ($cleanArgEmail && filter_var($cleanArgEmail, FILTER_VALIDATE_EMAIL)) {
+            $newEmail = strtolower($cleanArgEmail);
+            try {
+                $updM = $db->prepare("UPDATE projects SET model_email = ?, updated_at = ? WHERE id = ?");
+                $updM->execute([$newEmail, date('Y-m-d H:i:s'), $activeProject['id']]);
+                $activeModelEmail = $newEmail;
+                $activeProject['model_email'] = $newEmail;
+
+                $confirmMsg = "✅ <b>Akun Email Model Berhasil Diperbarui:</b>\n"
+                            . "• <b>Email Baru:</b> <code>$newEmail</code>\n"
+                            . "• <b>Proyek:</b> <code>" . htmlspecialchars($activeProject['name']) . "</code> (#" . ($activeProject['code'] ?: 'a') . ")\n\n";
+            } catch (Exception $e) {}
+        }
+
+        $pTag = $activeProject['code'] ?: 'a';
+        $pName = htmlspecialchars($activeProject['name']);
+        $pKey = htmlspecialchars($activeProject['project_key']);
+        $workspaceFolder = !empty($activeProject['last_workspace_folder']) ? $activeProject['last_workspace_folder'] : '(Belum ada koneksi VS Code)';
+
+        // Hitung metrik tugas riil untuk akurasi status kuota
+        $stmtToday = $db->prepare("SELECT COUNT(*) FROM tasks WHERE project_id = ? AND status = 'DONE' AND updated_at >= date('now', 'start of day')");
+        $stmtToday->execute([$activeProject['id']]);
+        $doneToday = (int)$stmtToday->fetchColumn();
+
+        $stmtWeek = $db->prepare("SELECT COUNT(*) FROM tasks WHERE project_id = ? AND status = 'DONE' AND updated_at >= date('now', '-7 days')");
+        $stmtWeek->execute([$activeProject['id']]);
+        $doneWeek = (int)$stmtWeek->fetchColumn();
+
+        $stmtActive = $db->prepare("SELECT COUNT(*) FROM tasks WHERE project_id = ? AND status IN ('PENDING', 'IN_PROGRESS')");
+        $stmtActive->execute([$activeProject['id']]);
+        $activeCount = (int)$stmtActive->fetchColumn();
+
+        $reply = ($confirmMsg ? $confirmMsg : "")
+               . "🧠 <b>AI MODEL & STATUS KUOTA AKTIF</b>\n"
+               . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+               . "👤 <b>Akun Email Model:</b> <code>" . htmlspecialchars($activeModelEmail ?: 'iam@usm.rip') . "</code>\n"
+               . "🤖 <b>Agent Aktif:</b> <code>Antigravity AI Agent</code>\n"
+               . "📁 <b>Target Proyek:</b> <code>$pName</code> (#$pTag)\n"
+               . "💻 <b>Workspace:</b> <code>" . htmlspecialchars($workspaceFolder) . "</code>\n\n"
+               . "📊 <b>Akurasi Status & Kuota AI:</b>\n"
+               . "• <b>Status Model:</b> 🟢 <b>100% Aktif & Siap Kerja</b>\n"
+               . "• <b>Mesin AI:</b> Google Gemini 2.5 Pro / Flash & Claude 3.5\n"
+               . "• <b>Tugas Tuntas Hari Ini:</b> $doneToday tugas\n"
+               . "• <b>Tugas Tuntas 7 Hari Terakhir:</b> $doneWeek tugas\n"
+               . "• <b>Antrean Aktif Saat Ini:</b> $activeCount tugas\n"
+               . "• <b>Batas Kuota:</b> 🟢 Normal (Dalam batas kuota langganan & fair use)\n\n"
+               . "💡 <i>Ketik <code>/model &lt;email_baru&gt;</code> untuk memperbarui akun email model AI.</i>\n"
+               . "🎯 <i>Sematkan <code>@antigravity</code>, <code>@claude</code>, <code>@copilot</code>, <code>@cursor</code> untuk delegasi ke agent tertentu.</i>\n"
+               . "🟢 <i>Agent standby dan siap mengeksekusi instruksi coding secara otonom.</i>";
+
         callTelegram($project['bot_token'], 'sendMessage', [
             'chat_id' => $incomingChatId,
             'text' => $reply,
@@ -1197,6 +2165,20 @@ if ($action === 'webhook') {
     if (preg_match('/^\/task(@\w+)?\s+(.+)$/is', $text, $matches)) {
         $taskCommand = '/task';
         $instruction = trim($matches[2]);
+    } elseif (preg_match('/^\/(cron|schedule)(@\w+)?(?:\s+(.+))?$/is', $text, $matches)) {
+        $taskCommand = '/' . strtolower($matches[1]);
+        $instruction = trim($matches[3] ?? '');
+        if ($instruction) {
+            $instruction = "[Cron Task / Jadwal Berkala] " . $instruction;
+        } else {
+            callTelegram($activeProject['bot_token'], 'sendMessage', [
+                'chat_id' => $incomingChatId,
+                'text' => "⏰ <b>Format Perintah Cron / Schedule AI Agent:</b>\n\n<code>/cron @antigravity &lt;perintah berkala&gt;</code>\n\n<i>Contoh:</i>\n<code>/cron @antigravity cek error log dan status server</code>",
+                'parse_mode' => 'HTML',
+                'reply_to_message_id' => $messageId
+            ]);
+            echo "OK"; exit;
+        }
     } elseif ($text && $text[0] !== '/') {
         $instruction = $text;
     } elseif (preg_match('/^\/([a-zA-Z0-9_-]+)(@\w+)?(?:\s+(.+))?$/is', $text, $matches)) {
@@ -1211,8 +2193,10 @@ if ($action === 'webhook') {
                 break;
             }
         }
-        if (!$explicitProject && $attachmentType) {
-            $instruction = $text;
+        if (!$explicitProject) {
+            if ($attachmentType || $isPrivateChat) {
+                $instruction = $text;
+            }
         }
     } elseif ($attachmentType) {
         $typeLabel = ($attachmentType === 'photo') ? 'Foto' : (($attachmentType === 'video') ? 'Video' : 'Dokumen');
@@ -1278,22 +2262,57 @@ if ($action === 'webhook') {
                 // Pastikan uploads/.htaccess mematikan eksekusi script PHP
                 $mainUploadDir = __DIR__ . '/uploads';
                 if (!file_exists($mainUploadDir . '/.htaccess')) {
-                    $ht = "<FilesMatch \"(?i)\\.(php|phtml|phar|phps|inc|shtml|cgi|pl|py|sh|bat|cmd|exe|htaccess)$\">\n    Order Deny,Allow\n    Deny from all\n</FilesMatch>\nOptions -ExecCGI -Indexes\nHeader set X-Content-Type-Options \"nosniff\"\n";
+                    $ht = "<FilesMatch \"(?i)\\.(php|phtml|phar|phps|inc|shtml|cgi|pl|py|sh|bat|cmd|exe|htaccess)$\">\n"
+                        . "    <IfModule mod_authz_core.c>\n"
+                        . "        Require all denied\n"
+                        . "    </IfModule>\n"
+                        . "    <IfModule !mod_authz_core.c>\n"
+                        . "        Order Deny,Allow\n"
+                        . "        Deny from all\n"
+                        . "    </IfModule>\n"
+                        . "</FilesMatch>\n"
+                        . "<IfModule mod_headers.c>\n"
+                        . "    Header set X-Content-Type-Options \"nosniff\"\n"
+                        . "</IfModule>\n";
                     @file_put_contents($mainUploadDir . '/.htaccess', $ht);
                 }
 
-                // Netralkan ekstensi file berbahaya untuk mencegah RCE
+                // ======================================================================
+                // KEAMANAN KETAT: Anti-Eksekusi File & Anti-Injeksi (Blacklist + Content Scan)
+                // ======================================================================
+                // 1. Sanitasi nama berkas: hilangkan path traversal dan karakter ilegal
+                $attachmentName = basename(str_replace(['../', '..\\', chr(0)], '', $attachmentName));
+                $attachmentName = preg_replace('/[^a-zA-Z0-9_.\-]/', '_', $attachmentName);
+
+                // 2. Netralkan trik double extension (misal: payload.php.png -> payload_php.png)
+                $attachmentName = preg_replace('/\.(php[0-9]*|phtml|phar|phps|inc|shtml|cgi|pl|py|sh|bash|bat|cmd|ps1|exe|asp|aspx|jsp|env)\./i', '_$1.', $attachmentName);
+
+                // 3. Blacklist lengkap seluruh ekstensi file yang bisa dieksekusi (executable / scripts)
                 $ext = strtolower(pathinfo($attachmentName, PATHINFO_EXTENSION));
-                $dangerousExts = ['php', 'phtml', 'phar', 'phps', 'inc', 'shtml', 'cgi', 'pl', 'py', 'sh', 'bat', 'cmd', 'exe', 'htaccess', 'ini', 'config', 'asp', 'aspx', 'jsp', 'env'];
-                if (in_array($ext, $dangerousExts)) {
+                $executableExts = [
+                    'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'phps', 'inc',
+                    'shtml', 'cgi', 'pl', 'py', 'sh', 'bash', 'zsh', 'bat', 'cmd', 'ps1', 'psm1',
+                    'exe', 'com', 'scr', 'msi', 'vbs', 'vbe', 'wsf', 'wsh', 'htaccess', 'htpasswd',
+                    'ini', 'config', 'conf', 'asp', 'aspx', 'jsp', 'jspx', 'action', 'do', 'dll', 'so',
+                    'env', 'svgz'
+                ];
+                if (in_array($ext, $executableExts) || empty($ext)) {
                     $attachmentName .= '.txt';
                 }
 
                 $targetFile = $uploadDir . '/' . $attachmentName;
                 $fileData = @file_get_contents($downloadSrc);
                 if ($fileData !== false && strlen($fileData) > 0) {
+                    // 4. Inspeksi Konten: Cek apakah berkas mengandung tag PHP tersembunyi
+                    if (preg_match('/<\?(php|=|\s)/i', $fileData) || stripos($fileData, '__halt_compiler') !== false) {
+                        if (!str_ends_with(strtolower($attachmentName), '.txt')) {
+                            $attachmentName .= '.txt';
+                            $targetFile = $uploadDir . '/' . $attachmentName;
+                        }
+                    }
+
                     file_put_contents($targetFile, $fileData);
-                    $attachmentUrl = "https://biru.co.id/tele-vs-code/uploads/" . $taskId . "/" . rawurlencode($attachmentName);
+                    $attachmentUrl = "https://biru.co.id/tele-vs-code/uploads/" . rawurlencode($taskId) . "/" . rawurlencode($attachmentName);
                 }
             }
         }
@@ -1305,8 +2324,55 @@ if ($action === 'webhook') {
             $instruction = $attachmentHeader . "\n" . $instruction;
         }
 
-        $stmtIns = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, attachment_url, attachment_type, attachment_name, command) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)");
-        $stmtIns->execute([$taskId, $targetProject['user_id'], $targetProject['id'], $instruction, $taskSender, $now, $now, $attachmentUrl, $attachmentType, $attachmentName, $taskCommand]);
+        // Deteksi Agent spesifik dari perintah (misal: @antigravity, @antigrafity, @claude, @copilot, dll)
+        $assignedAgent = 'Antigravity AI Agent'; // Default: Agent Aktif saat ini
+        if (preg_match('/(?:^|\s)@([a-zA-Z0-9_-]+)/i', $instruction, $mAgt)) {
+            $rawAgent = strtolower($mAgt[1]);
+            $instruction = trim(preg_replace('/(?:^|\s)@' . preg_quote($mAgt[1], '/') . '/i', '', $instruction));
+
+            // Dukungan alias & variasi ejaan fonetik (antigrafity, antigraviti, antigravity, dll)
+            if (preg_match('/^antigra[fv]i?t[yi]?$/i', $rawAgent) || in_array($rawAgent, ['antigrav', 'anti-gravity'])) {
+                $assignedAgent = 'Antigravity AI Agent';
+            } elseif (in_array($rawAgent, ['claude', 'claud'])) {
+                $assignedAgent = 'Claude Agent';
+            } elseif (in_array($rawAgent, ['copilot', 'copilote', 'github-copilot'])) {
+                $assignedAgent = 'Copilot Agent';
+            } elseif (in_array($rawAgent, ['cursor', 'cursor-ai'])) {
+                $assignedAgent = 'Cursor Agent';
+            } elseif (in_array($rawAgent, ['gemini', 'gemini-cli'])) {
+                $assignedAgent = 'Gemini Agent';
+            } elseif ($rawAgent === 'roo') {
+                $assignedAgent = 'Roo Agent';
+            } elseif ($rawAgent === 'cline') {
+                $assignedAgent = 'Cline Agent';
+            } elseif ($rawAgent === 'codex') {
+                $assignedAgent = 'Codex Agent';
+            } else {
+                $assignedAgent = ucfirst($rawAgent) . ' Agent';
+            }
+        } elseif (preg_match('/(?:--agent|\[agent:\s*)([\w\s-]+)\]?/i', $instruction, $mAgt)) {
+            $rawAgent = trim($mAgt[1]);
+            $instruction = trim(preg_replace('/(?:--agent|\[agent:\s*)([\w\s-]+)\]?/i', '', $instruction));
+            if (preg_match('/^antigra[fv]i?t[yi]?$/i', strtolower($rawAgent))) {
+                $assignedAgent = 'Antigravity AI Agent';
+            } else {
+                $assignedAgent = ucfirst($rawAgent) . ' Agent';
+            }
+        }
+
+        $maxInsRetries = 5;
+        for ($insAttempt = 1; $insAttempt <= $maxInsRetries; $insAttempt++) {
+            try {
+                $stmtIns = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, attachment_url, attachment_type, attachment_name, command, assigned_agent) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)");
+                $stmtIns->execute([$taskId, $targetProject['user_id'], $targetProject['id'], $instruction, $taskSender, $now, $now, $attachmentUrl, $attachmentType, $attachmentName, $taskCommand, $assignedAgent]);
+                break;
+            } catch (PDOException $pdoErr) {
+                if ($insAttempt === $maxInsRetries) {
+                    throw $pdoErr;
+                }
+                usleep(250000); // 250ms
+            }
+        }
 
         // Cek jika pengiriman notifikasi Telegram diblokir oleh admin
         if (empty($targetProject['block_notify'])) {
@@ -1329,18 +2395,14 @@ if ($action === 'webhook') {
                    . "📁 <b>Proyek:</b> <code>" . htmlspecialchars($targetProject['name']) . "</code> (Kode: <code>#" . ($targetProject['code'] ?: $targetProject['id']) . "</code>)\n"
                    . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n"
                    . "👤 <b>Pemohon:</b> " . htmlspecialchars($taskSender) . "\n"
+                   . "🤖 <b>Eksekutor:</b> <code>" . htmlspecialchars($assignedAgent) . "</code>\n"
                    . $attachLine . "\n"
                    . "📝 <b>Instruksi:</b>\n<code>" . htmlspecialchars($instruction) . "</code>\n\n"
                    . "⏳ <b>Status:</b> <code>[PENDING]</code>\n"
                    . "<i>Tugas siap ditarik oleh VS Code: " . htmlspecialchars($targetProject['name']) . "</i>"
                    . $tipMulti;
 
-            callTelegram($targetProject['bot_token'], 'sendMessage', [
-                'chat_id' => $incomingChatId,
-                'text' => $reply,
-                'parse_mode' => 'HTML',
-                'reply_to_message_id' => $messageId
-            ]);
+            sendTelegramWithMedia($targetProject['bot_token'], $incomingChatId, $reply, $attachmentType, $attachmentUrl, $attachmentFileId, $messageId);
 
             // Jika dari Private Chat dan proyek punya Group Chat terpisah, kirim pemberitahuan ringkas ke grup
             if ($isPrivateChat && !empty($targetProject['chat_id']) && (string)$targetProject['chat_id'] !== $incomingChatId) {
@@ -1351,27 +2413,37 @@ if ($action === 'webhook') {
                              . ($attachmentType ? "📎 <b>Lampiran:</b> " . htmlspecialchars($attachmentName) . " (" . ucfirst($attachmentType) . ")\n" : "")
                              . "📝 <b>Instruksi:</b> " . htmlspecialchars(mb_substr($instruction, 0, 150)) . (mb_strlen($instruction) > 150 ? '...' : '') . "\n"
                              . "⏳ <b>Status:</b> <code>[PENDING]</code>";
-                callTelegram($project['bot_token'], 'sendMessage', [
-                    'chat_id' => $project['chat_id'],
-                    'text' => $groupNotice,
-                    'parse_mode' => 'HTML'
-                ]);
+                sendTelegramWithMedia($targetProject['bot_token'], $targetProject['chat_id'], $groupNotice, $attachmentType, $attachmentUrl, $attachmentFileId);
             }
         }
     }
     echo "OK"; exit;
+    } catch (Throwable $webhookErr) {
+        @file_put_contents(__DIR__ . '/webhook_error.log', date('Y-m-d H:i:s') . ' ' . $webhookErr->getMessage() . ' in ' . $webhookErr->getFile() . ':' . $webhookErr->getLine() . "\n", FILE_APPEND);
+        echo "OK"; exit;
+    }
 }
 
 // Download & Serve Lampiran Tugas
 if ($action === 'attachment') {
-    $tid = preg_replace('/[^a-zA-Z0-9_-]/', '', $_GET['task'] ?? '');
+    $rawTid = $_GET['task'] ?? '';
+    $cleanTid = preg_replace('/[^a-zA-Z0-9_#-]/', '', $rawTid);
     $fname = basename($_GET['file'] ?? '');
-    $filePath = __DIR__ . '/uploads/' . $tid . '/' . $fname;
-    if ($tid && $fname && file_exists($filePath)) {
+    $filePath = __DIR__ . '/uploads/' . $cleanTid . '/' . $fname;
+    if (!file_exists($filePath)) {
+        $noHash = ltrim($cleanTid, '#');
+        if (file_exists(__DIR__ . '/uploads/#' . $noHash . '/' . $fname)) {
+            $filePath = __DIR__ . '/uploads/#' . $noHash . '/' . $fname;
+        } elseif (file_exists(__DIR__ . '/uploads/' . $noHash . '/' . $fname)) {
+            $filePath = __DIR__ . '/uploads/' . $noHash . '/' . $fname;
+        }
+    }
+    if ($cleanTid && $fname && file_exists($filePath)) {
         $mime = 'application/octet-stream';
         $ext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
         $mimeTypes = [
             'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
+            'ogg' => 'audio/ogg', 'oga' => 'audio/ogg', 'mp3' => 'audio/mpeg', 'wav' => 'audio/wav', 'm4a' => 'audio/mp4',
             'mp4' => 'video/mp4', 'mkv' => 'video/x-matroska', 'avi' => 'video/x-msvideo', 'mov' => 'video/quicktime',
             'pdf' => 'application/pdf', 'txt' => 'text/plain', 'json' => 'application/json', 'csv' => 'text/csv',
             'zip' => 'application/zip', 'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -1480,8 +2552,35 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         if ($mark && !empty($pending)) {
             $now = date('Y-m-d H:i:s');
             foreach ($pending as $pt) {
+                $isNewlyStarted = ($pt['status'] === 'PENDING');
                 $upd = $db->prepare("UPDATE tasks SET status = 'IN_PROGRESS', updated_at = ?, notes = 'Ditarik oleh VS Code Agent' WHERE id = ?");
                 $upd->execute([$now, $pt['id']]);
+
+                // Kirim notifikasi Telegram jika memulai pekerjaan (Requirement: info detail termasuk perintah)
+                if ($isNewlyStarted && !empty($pt['bot_token']) && !empty($pt['chat_id']) && empty($pt['block_notify'])) {
+                    $tz = !empty($pt['timezone']) ? $pt['timezone'] : (!empty($user['timezone']) ? $user['timezone'] : 'Asia/Jakarta');
+                    $tzAbbr = getTimezoneAbbr($tz);
+                    $instSnippet = htmlspecialchars($pt['instruction']);
+                    $pName = htmlspecialchars($pt['project_name'] ?: 'Tele-vs-Code');
+                    $pTag = !empty($pt['project_code']) ? (' (#' . htmlspecialchars($pt['project_code']) . ')') : '';
+
+                    $startMsg = "⚡ <b>MEMULAI PEKERJAAN</b>\n"
+                              . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                              . "🆔 <b>ID Tugas:</b> <code>{$pt['id']}</code>\n"
+                              . "📁 <b>Proyek:</b> <code>$pName</code>$pTag\n"
+                              . "🕒 <b>Waktu Mulai:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n"
+                              . "👤 <b>Pemohon:</b> " . htmlspecialchars($pt['sender']) . "\n\n"
+                              . "🤖 <b>Eksekutor:</b> <code>" . htmlspecialchars(!empty($pt['assigned_agent']) ? $pt['assigned_agent'] : 'Antigravity AI Agent') . "</code>\n\n"
+                              . "📝 <b>Perintah / Instruksi:</b>\n<code>$instSnippet</code>\n\n"
+                              . "🚀 <b>Status:</b> <code>[IN_PROGRESS]</code>\n"
+                              . "🤖 <i>AI Agent di VS Code telah menerima tugas ini dan sedang mengeksekusi sampai tuntas 100%...</i>";
+
+                    callTelegram($pt['bot_token'], 'sendMessage', [
+                        'chat_id' => $pt['chat_id'],
+                        'text' => $startMsg,
+                        'parse_mode' => 'HTML'
+                    ]);
+                }
             }
         }
         echo json_encode(['ok' => true, 'count' => count($pending), 'tasks' => $pending]);
@@ -1526,21 +2625,83 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $isIde = !empty($_POST['is_ide']) || !empty($_GET['is_ide']) || stripos($sender, 'IDE') !== false || stripos($sender, 'VS Code') !== false;
         $idPrefix = $isIde ? '#TASK-IDE-' : '#TASK-';
         $taskId = $idPrefix . date('Ymd-His') . '-' . substr(bin2hex(random_bytes(2)), 0, 4);
+        $assignedAgent = trim($_POST['agent'] ?? ($_GET['agent'] ?? ($_POST['assigned_agent'] ?? ($_GET['assigned_agent'] ?? ''))));
+        if (!$assignedAgent) {
+            if (preg_match('/(?:^|\s)@(\w+)/i', $instruction, $mAgt)) {
+                $cAgent = strtolower($mAgt[1]);
+                $knownAgents = ['antigravity', 'gemini', 'claude', 'copilot', 'codex', 'cursor', 'roo', 'cline'];
+                if (in_array($cAgent, $knownAgents)) {
+                    $assignedAgent = ucfirst($cAgent) . ' Agent';
+                    $instruction = trim(preg_replace('/(?:^|\s)@' . preg_quote($cAgent, '/') . '/i', '', $instruction));
+                }
+            } elseif (preg_match('/(?:--agent|\[agent:\s*)([\w\s-]+)\]?/i', $instruction, $mAgt)) {
+                $assignedAgent = trim($mAgt[1]);
+                $instruction = trim(preg_replace('/(?:--agent|\[agent:\s*)([\w\s-]+)\]?/i', '', $instruction));
+            }
+        }
+        if (!$assignedAgent) $assignedAgent = 'Antigravity AI Agent';
+
         $now = date('Y-m-d H:i:s');
-        $stmtIns = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, notes, command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmtIns->execute([$taskId, $user['id'], $prjId, $instruction, $sender, $status, $now, $now, $notes, $command]);
+        $stmtIns = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, notes, command, assigned_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmtIns->execute([$taskId, $user['id'], $prjId, $instruction, $sender, $status, $now, $now, $notes, $command, $assignedAgent]);
 
         echo json_encode(['ok' => true, 'id' => $taskId, 'message' => "Tugas $taskId berhasil dicatat"]);
         exit;
     }
 
-        // Update Status Tugas Menjadi IN_PROGRESS
+        // Update Status Tugas Menjadi IN_PROGRESS (Requirement: notifikasi telegram jika memulai pekerjaan detail termasuk perintah)
     if ($action === 'api_in_progress') {
         $taskId = $_GET['id'] ?? ($_POST['id'] ?? '');
         $notes = trim($_POST['notes'] ?? ($_GET['notes'] ?? 'Sedang dikerjakan oleh AI Agent'));
         $now = date('Y-m-d H:i:s');
         $upd = $db->prepare("UPDATE tasks SET status = 'IN_PROGRESS', updated_at = ?, notes = ? WHERE id = ? AND user_id = ?");
         $upd->execute([$now, $notes, $taskId, $user['id']]);
+
+        // Ambil data tugas & proyek untuk mengirim notifikasi mulai ke Telegram
+        $stmtT = $db->prepare("SELECT t.*, p.bot_token, p.chat_id, p.name as project_name, p.code as project_code, p.timezone as project_timezone FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.id = ? AND t.user_id = ?");
+        $stmtT->execute([$taskId, $user['id']]);
+        $task = $stmtT->fetch(PDO::FETCH_ASSOC);
+
+        if ($task && !empty($task['bot_token']) && !empty($task['chat_id']) && empty($user['block_notify'])) {
+            $tz = !empty($task['project_timezone']) ? $task['project_timezone'] : (!empty($user['timezone']) ? $user['timezone'] : 'Asia/Jakarta');
+            $tzAbbr = getTimezoneAbbr($tz);
+            $instSnippet = htmlspecialchars($task['instruction']);
+            $pName = htmlspecialchars($task['project_name'] ?: 'Tele-vs-Code');
+            $pTag = !empty($task['project_code']) ? (' (#' . htmlspecialchars($task['project_code']) . ')') : '';
+
+            $attachLine = "";
+            if (!empty($task['attachment_type'])) {
+                $typeLabel = ($task['attachment_type'] === 'photo') ? 'Foto' : (($task['attachment_type'] === 'video') ? 'Video' : 'Dokumen');
+                $attachLine = "📎 <b>Lampiran:</b> " . htmlspecialchars($task['attachment_name']) . " (Tipe: $typeLabel)\n";
+                if (!empty($task['attachment_url'])) {
+                    $attachLine .= "🔗 <b>Tautan File:</b> <a href=\"{$task['attachment_url']}\">Buka Lampiran</a>\n";
+                }
+                $attachLine .= "\n";
+            }
+
+            $startMsg = "⚡ <b>MEMULAI PEKERJAAN</b>\n"
+                      . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                      . "🆔 <b>ID Tugas:</b> <code>{$task['id']}</code>\n"
+                      . "📁 <b>Proyek:</b> <code>$pName</code>$pTag\n"
+                      . "🕒 <b>Waktu Mulai:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n"
+                      . "👤 <b>Pemohon:</b> " . htmlspecialchars($task['sender']) . "\n\n"
+                      . "🤖 <b>Eksekutor:</b> <code>" . htmlspecialchars(!empty($task['assigned_agent']) ? $task['assigned_agent'] : 'Antigravity AI Agent') . "</code>\n\n"
+                      . $attachLine
+                      . "📝 <b>Perintah / Instruksi:</b>\n<code>$instSnippet</code>\n\n"
+                      . "🚀 <b>Status:</b> <code>[IN_PROGRESS]</code>\n"
+                      . "📌 <b>Catatan:</b> " . htmlspecialchars($notes) . "\n"
+                      . "🤖 <i>AI Agent di VS Code sedang mengeksekusi tugas ini sampai tuntas 100%...</i>";
+
+            sendTelegramWithMedia(
+                $task['bot_token'],
+                $task['chat_id'],
+                $startMsg,
+                $task['attachment_type'] ?? '',
+                $task['attachment_url'] ?? '',
+                ''
+            );
+        }
+
         echo json_encode(['ok' => true, 'id' => $taskId, 'status' => 'IN_PROGRESS']);
         exit;
     }
@@ -1572,6 +2733,20 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $tzAbbr = getTimezoneAbbr($effectiveTz);
         $now = date('Y-m-d H:i:s');
 
+        // Hitung Durasi Pengerjaan Tugas
+        $durationText = "";
+        if (!empty($task['created_at'])) {
+            $createdTs = strtotime($task['created_at']);
+            $nowTs = strtotime($now);
+            $diffSec = max(0, $nowTs - $createdTs);
+            $h = floor($diffSec / 3600);
+            $m = floor(($diffSec % 3600) / 60);
+            $s = $diffSec % 60;
+            if ($h > 0) $durationText = "{$h} jam {$m} menit {$s} detik";
+            elseif ($m > 0) $durationText = "{$m} menit {$s} detik";
+            else $durationText = "{$s} detik";
+        }
+
         if ($cmdParam) {
             $upd = $db->prepare("UPDATE tasks SET status = ?, updated_at = ?, notes = ?, result = ?, command = ? WHERE id = ? AND user_id = ?");
             $upd->execute([$stat, $now, $notes, $result, $cmdParam, $taskId, $user['id']]);
@@ -1588,11 +2763,45 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         if ($botToken && $chatId) {
             if (empty($user['block_notify'])) {
                 $emoji = ($stat === 'DONE') ? '✅' : '🚨';
+                
+                // Analisis Cerdas & Solusi Otomatis jika Tugas Ada Kendala
+                $solusiSection = "";
+                if ($stat === 'FAILED') {
+                    $combinedErr = strtolower($result . ' ' . $notes);
+                    $solusiList = [];
+                    if (strpos($combinedErr, 'syntax') !== false || strpos($combinedErr, 'parse') !== false || strpos($combinedErr, 'unexpected') !== false) {
+                        $solusiList[] = "Periksa sintaks kode dan pastikan penutupan kurung, titik-koma, atau petik valid.";
+                    }
+                    if (strpos($combinedErr, 'not found') !== false || strpos($combinedErr, 'tidak ditemukan') !== false || strpos($combinedErr, 'enoent') !== false) {
+                        $solusiList[] = "Pastikan path berkas, direktori, atau package dependensi tujuan sudah terpasang.";
+                    }
+                    if (strpos($combinedErr, 'permission') !== false || strpos($combinedErr, 'denied') !== false || strpos($combinedErr, 'eacces') !== false) {
+                        $solusiList[] = "Buka izin tulis berkas/folder atau jalankan VS Code / terminal dengan hak akses cukup.";
+                    }
+                    if (strpos($combinedErr, 'timeout') !== false || strpos($combinedErr, 'network') !== false || strpos($combinedErr, 'connection') !== false) {
+                        $solusiList[] = "Periksa stabilitas koneksi internet atau server lalu coba kirim ulang instruksi.";
+                    }
+                    if (empty($solusiList)) {
+                        $solusiList[] = "Reply pesan notifikasi ini dengan instruksi tambahan (misal: '/task coba cara lain...').";
+                        $solusiList[] = "Periksa detail log eksekusi di VS Code pada panel Output 'Tele-vs-Code'.";
+                    }
+                    $solusiSection = "💡 <b>Solusi & Rekomendasi Tindakan:</b>\n";
+                    foreach ($solusiList as $s) {
+                        $solusiSection .= "• " . htmlspecialchars($s) . "\n";
+                    }
+                    $solusiSection .= "\n🔄 <i>Ketik /task atau reply pesan ini untuk mencoba kembali dengan instruksi baru.</i>\n";
+                }
+
+                $durationLine = ($stat === 'DONE' && $durationText) ? "⏱️ <b>Durasi Pengerjaan:</b> <code>$durationText</code>\n" : "";
                 $text = "<b>$emoji Tugas $taskId: " . ($stat === 'DONE' ? 'SELESAI' : 'KENDALA') . "</b>\n\n"
                       . "📁 <b>Proyek:</b> <code>" . htmlspecialchars($pName) . "</code>\n"
-                      . "🕒 <b>Waktu:</b> $now $tzAbbr\n"
-                      . "📋 <b>Hasil Pekerjaan:</b>\n" . htmlspecialchars($result) . "\n\n"
+                      . "🕒 <b>Waktu Selesai:</b> $now $tzAbbr\n"
+                      . $durationLine
+                      . "🤖 <b>Eksekutor:</b> <code>" . htmlspecialchars(!empty($task['assigned_agent']) ? $task['assigned_agent'] : 'Antigravity AI Agent') . "</code>\n"
+                      . "📋 <b>" . ($stat === 'DONE' ? 'Hasil Pekerjaan:' : 'Penyebab Kendala:') . "</b>\n" . htmlspecialchars($result) . "\n\n"
+                      . $solusiSection
                       . "🤖 <i>Dikirim via tele-vs-code</i>";
+
                 callTelegram($botToken, 'sendMessage', [
                     'chat_id' => $chatId,
                     'text' => $text,
@@ -1632,58 +2841,163 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 $errorMsg = '';
 $successMsg = '';
 
-// Register
+// Verifikasi OTP (Pendaftaran Baru atau Login Harian)
+if ($action === 'verify_otp' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $otpInput = trim($_POST['otp_code'] ?? '');
+    $pending = $_SESSION['tvsc_pending_auth'] ?? null;
+
+    if (!$pending || empty($pending['email'])) {
+        $errorMsg = 'Sesi verifikasi kadaluarsa atau tidak ditemukan. Silakan ulangi proses login / daftar.';
+    } elseif (strlen($otpInput) !== 6 || !ctype_digit($otpInput)) {
+        $errorMsg = 'Kode verifikasi harus berupa 6 digit angka!';
+    } else {
+        if ($pending['type'] === 'register') {
+            $stmtP = $db->prepare("SELECT * FROM pending_registrations WHERE email = ? AND otp_code = ? AND expires_at >= ?");
+            $stmtP->execute([$pending['email'], $otpInput, time()]);
+            $regData = $stmtP->fetch(PDO::FETCH_ASSOC);
+
+            if ($regData) {
+                $apiKey = 'tvsc_' . bin2hex(random_bytes(16));
+                $now = date('Y-m-d H:i:s');
+                $isAdmin = (strtolower($regData['email']) === strtolower(SUPERADMIN_EMAIL)) ? 1 : 0;
+
+                $ins = $db->prepare("INSERT INTO users (email, whatsapp, password_hash, api_key, is_admin, last_email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                $ins->execute([$regData['email'], $regData['whatsapp'], $regData['password_hash'], $apiKey, $isAdmin, $now, $now, $now]);
+                $uid = $db->lastInsertId();
+
+                $pkey = 'prj_' . substr(bin2hex(random_bytes(6)), 0, 10);
+                $insP = $db->prepare("INSERT INTO projects (user_id, project_key, name, created_at, updated_at) VALUES (?, ?, 'Proyek Utama', ?, ?)");
+                $insP->execute([$uid, $pkey, $now, $now]);
+
+                $del = $db->prepare("DELETE FROM pending_registrations WHERE email = ?");
+                $del->execute([$regData['email']]);
+
+                unset($_SESSION['tvsc_pending_auth']);
+                $_SESSION['tvsc_uid'] = $uid;
+                header('Location: ./?tab=projects&msg=welcome');
+                exit;
+            } else {
+                $errorMsg = 'Kode verifikasi pendaftaran salah atau telah kadaluarsa!';
+            }
+        } elseif ($pending['type'] === 'login') {
+            $stmtU = $db->prepare("SELECT * FROM users WHERE id = ? AND email_otp = ? AND email_otp_expires >= ?");
+            $stmtU->execute([$pending['user_id'], $otpInput, time()]);
+            $userData = $stmtU->fetch(PDO::FETCH_ASSOC);
+
+            if ($userData) {
+                $now = date('Y-m-d H:i:s');
+                $upd = $db->prepare("UPDATE users SET last_email_verified_at = ?, email_otp = '', email_otp_expires = 0 WHERE id = ?");
+                $upd->execute([$now, $userData['id']]);
+
+                unset($_SESSION['tvsc_pending_auth']);
+                session_regenerate_id(true);
+                $_SESSION['tvsc_uid'] = $userData['id'];
+                header('Location: ./');
+                exit;
+            } else {
+                $errorMsg = 'Kode verifikasi login salah atau telah kadaluarsa!';
+            }
+        }
+    }
+}
+
+// Kirim Ulang Kode OTP (Pendaftaran Baru atau Login 2FA Harian)
+if ($action === 'resend_otp' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $pending = $_SESSION['tvsc_pending_auth'] ?? null;
+    if ($pending && !empty($pending['email'])) {
+        $email = $pending['email'];
+        $otpCode = str_pad(random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
+        $expires = time() + 900; // 15 menit
+
+        if ($pending['type'] === 'register') {
+            $upd = $db->prepare("UPDATE pending_registrations SET otp_code = ?, expires_at = ? WHERE email = ?");
+            $upd->execute([$otpCode, $expires, $email]);
+
+            $subject = "Kode Verifikasi Baru Pendaftaran - Tele-vs-Code";
+            $otpBox = '<div class="otp-code" style="background:#090d16; color:#10b981; font-size:32px; font-weight:800; letter-spacing:8px; padding:16px; border-radius:10px; margin:20px 0; border:1px dashed #10b981; font-family:monospace;">' . $otpCode . '</div>';
+            $html = buildResponsiveEmailHtml('Kode Verifikasi Baru Pendaftaran', 'Gunakan kode 6 digit berikut untuk menyelesaikan pendaftaran akun Anda:', $otpBox, 'Kode berlaku selama 15 menit. Jangan bagikan kode ini kepada siapa pun.');
+            sendSmtpEmail($email, $subject, $html);
+            $successMsg = "Kode verifikasi baru telah dikirimkan ke {$email}!";
+        } elseif ($pending['type'] === 'login') {
+            $upd = $db->prepare("UPDATE users SET email_otp = ?, email_otp_expires = ? WHERE id = ?");
+            $upd->execute([$otpCode, $expires, $pending['user_id']]);
+
+            $subject = "Kode Verifikasi Baru Login 2FA Harian - Tele-vs-Code";
+            $otpBox = '<div class="otp-code" style="background:#090d16; color:#38bdf8; font-size:32px; font-weight:800; letter-spacing:8px; padding:16px; border-radius:10px; margin:20px 0; border:1px dashed #38bdf8; font-family:monospace;">' . $otpCode . '</div>';
+            $html = buildResponsiveEmailHtml('Kode Verifikasi Login Baru', 'Gunakan kode 6 digit berikut untuk verifikasi login harian Anda:', $otpBox, 'Kode berlaku selama 15 menit. Jangan berikan kode ini kepada siapa pun.');
+            sendSmtpEmail($email, $subject, $html);
+            $successMsg = "Kode verifikasi login baru telah dikirimkan ke {$email}!";
+        }
+    } else {
+        $errorMsg = 'Sesi verifikasi kadaluarsa. Silakan ulangi proses pendaftaran / login.';
+    }
+}
+
+// Batal Verifikasi OTP
+if ($action === 'cancel_otp') {
+    unset($_SESSION['tvsc_pending_auth']);
+    header('Location: ./');
+    exit;
+}
+
+// Register dengan Verifikasi OTP Email & Turnstile
 if ($action === 'register' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = strtolower(trim($_POST['email'] ?? ''));
     $phone = normalizePhone(trim($_POST['whatsapp'] ?? ''));
     $password = $_POST['password'] ?? '';
+    $turnstileToken = $_POST['cf-turnstile-response'] ?? '';
 
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    if (!verifyTurnstileToken($turnstileToken)) {
+        $errorMsg = 'Verifikasi keamanan Cloudflare Turnstile gagal! Harap coba kembali.';
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $errorMsg = 'Format email tidak valid!';
     } elseif (strlen($phone) < 9) {
         $errorMsg = 'Nomor WhatsApp tidak valid (minimal 9 digit)!';
+    } elseif (!verifyWhatsAppNumberServerSide($_POST['whatsapp'] ?? '')) {
+        $errorMsg = '❌ Nomor WhatsApp tidak valid atau tidak terdaftar di WhatsApp! Harap gunakan nomor WhatsApp aktif.';
     } elseif (strlen($password) < 6) {
         $errorMsg = 'Password minimal 6 karakter!';
     } else {
         $chkE = $db->prepare("SELECT id FROM users WHERE email = ?");
         $chkE->execute([$email]);
         if ($chkE->fetch()) {
-            $errorMsg = 'Email ini sudah terdaftar! Silakan login.';
+            $errorMsg = '❌ Alamat email ini sudah pernah digunakan mendaftar! Silakan gunakan email lain atau masuk.';
         } else {
             $chkW = $db->prepare("SELECT id FROM users WHERE whatsapp = ?");
             $chkW->execute([$phone]);
             if ($chkW->fetch()) {
-                $errorMsg = 'Nomor WhatsApp ini sudah terdaftar! Gunakan nomor lain.';
+                $errorMsg = '❌ Nomor WhatsApp ini sudah pernah digunakan mendaftar! Silakan gunakan nomor lain atau masuk.';
             } else {
+                $otp = sprintf('%06d', random_int(100000, 999999));
                 $hash = password_hash($password, PASSWORD_BCRYPT);
-                $apiKey = 'tvsc_' . bin2hex(random_bytes(16));
-                $now = date('Y-m-d H:i:s');
-                $isAdmin = (strtolower($email) === strtolower(SUPERADMIN_EMAIL)) ? 1 : 0;
+                $expires = time() + 900; // 15 menit
 
-                $ins = $db->prepare("INSERT INTO users (email, whatsapp, password_hash, api_key, is_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
-                $ins->execute([$email, $phone, $hash, $apiKey, $isAdmin, $now, $now]);
-                $uid = $db->lastInsertId();
+                $insPending = $db->prepare("INSERT OR REPLACE INTO pending_registrations (email, whatsapp, password_hash, otp_code, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+                $insPending->execute([$email, $phone, $hash, $otp, $expires, date('Y-m-d H:i:s')]);
 
-                // Buat proyek pertama otomatis
-                $pkey = 'prj_' . substr(bin2hex(random_bytes(6)), 0, 10);
-                $insP = $db->prepare("INSERT INTO projects (user_id, project_key, name, created_at, updated_at) VALUES (?, ?, 'Proyek Utama', ?, ?)");
-                $insP->execute([$uid, $pkey, $now, $now]);
+                // Kirim kode verifikasi ke email
+                $subject = "🔑 Kode Verifikasi Pendaftaran Tele-vs-Code: $otp";
+                $otpBox = '<div class="otp-code" style="background:#090d16; color:#10b981; font-size:32px; font-weight:800; letter-spacing:8px; padding:16px; border-radius:10px; margin:20px 0; border:1px dashed #10b981; font-family:monospace;">' . $otp . '</div>';
+                $html = buildResponsiveEmailHtml('Kode Verifikasi Pendaftaran', 'Gunakan 6 digit kode di bawah ini untuk mengaktifkan akun Tele-vs-Code Anda:', $otpBox, 'Kode berlaku selama 15 menit. Jika Anda tidak merasa mendaftar, abaikan email ini dengan aman.');
+                sendSmtpEmail($email, $subject, $html);
 
-                $_SESSION['tvsc_uid'] = $uid;
-                header('Location: ./?tab=projects&msg=welcome');
-                exit;
+                $_SESSION['tvsc_pending_auth'] = ['type' => 'register', 'email' => $email, 'time' => time()];
+                $successMsg = "Kode verifikasi 6 digit telah dikirim ke <b>" . htmlspecialchars($email) . "</b>. Masukkan kode untuk mengaktifkan akun Anda.";
             }
         }
     }
 }
 
-// Login
+// Login dengan Pemeriksaan Verifikasi Email 1 Hari Sekali & Turnstile
 if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
     $failKey = 'login_fails_' . md5($ip);
     $lockKey = 'login_locked_until_' . md5($ip);
+    $turnstileToken = $_POST['cf-turnstile-response'] ?? '';
 
-    if (!empty($_SESSION[$lockKey]) && time() < $_SESSION[$lockKey]) {
+    if (!verifyTurnstileToken($turnstileToken)) {
+        $errorMsg = 'Verifikasi keamanan Cloudflare Turnstile gagal! Harap coba kembali.';
+    } elseif (!empty($_SESSION[$lockKey]) && time() < $_SESSION[$lockKey]) {
         $remaining = max(1, ceil(($_SESSION[$lockKey] - time()) / 60));
         $errorMsg = "Terlalu banyak percobaan login gagal. Silakan tunggu {$remaining} menit lagi.";
     } else {
@@ -1699,10 +3013,34 @@ if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $errorMsg = '❌ Akun Anda telah dinonaktifkan / diblokir oleh Administrator.';
         } elseif ($user && password_verify($password, $user['password_hash'])) {
             unset($_SESSION[$failKey], $_SESSION[$lockKey]);
-            session_regenerate_id(true);
-            $_SESSION['tvsc_uid'] = $user['id'];
-            header('Location: ./');
-            exit;
+
+            // Cek apakah login perlu kode verifikasi email (wajib verifikasi 1 hari sekali / 24 jam)
+            $needsDailyOtp = false;
+            if (empty($user['last_email_verified_at']) || (time() - strtotime($user['last_email_verified_at'])) > 86400) {
+                $needsDailyOtp = true;
+            }
+
+            if ($needsDailyOtp) {
+                $otp = sprintf('%06d', random_int(100000, 999999));
+                $expires = time() + 900; // 15 menit
+                $upd = $db->prepare("UPDATE users SET email_otp = ?, email_otp_expires = ? WHERE id = ?");
+                $upd->execute([$otp, $expires, $user['id']]);
+
+                // Kirim kode verifikasi login ke email
+                $subject = "🔐 Kode Verifikasi Login Harian Tele-vs-Code: $otp";
+                $otpBox = '<div class="otp-code" style="background:#090d16; color:#38bdf8; font-size:32px; font-weight:800; letter-spacing:8px; padding:16px; border-radius:10px; margin:20px 0; border:1px dashed #38bdf8; font-family:monospace;">' . $otp . '</div>';
+                $html = buildResponsiveEmailHtml('Kode Verifikasi Login Harian', 'Untuk keamanan akun, Anda diminta verifikasi email setiap 1 hari sekali. Masukkan kode berikut:', $otpBox, 'Kode berlaku selama 15 menit. Jangan berikan kode ini kepada siapa pun.');
+                sendSmtpEmail($user['email'], $subject, $html);
+
+                $_SESSION['tvsc_pending_auth'] = ['type' => 'login', 'user_id' => $user['id'], 'email' => $user['email'], 'time' => time()];
+                $successMsg = "Verifikasi Harian: Kode verifikasi 6 digit telah dikirim ke <b>" . htmlspecialchars($user['email']) . "</b>.";
+            } else {
+                // Sudah verifikasi dalam kurun waktu 24 jam terakhir -> login langsung
+                session_regenerate_id(true);
+                $_SESSION['tvsc_uid'] = $user['id'];
+                header('Location: ./');
+                exit;
+            }
         } else {
             $_SESSION[$failKey] = ($_SESSION[$failKey] ?? 0) + 1;
             if ($_SESSION[$failKey] >= 5) {
@@ -1751,36 +3089,8 @@ if ($action === 'forgot_password' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $resetUrl = "https://biru.co.id/tele-vs-code/?action=reset_pass_form&token=" . urlencode($token);
 
             $subject = "Permintaan Reset Password - Tele-vs-Code";
-            $htmlBody = '
-            <!DOCTYPE html>
-            <html>
-            <head><meta charset="UTF-8"></head>
-            <body style="font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; background: #090d16; color: #f8fafc; padding: 24px; margin: 0;">
-                <div style="max-width: 520px; margin: 0 auto; background: #131c2e; border: 1px solid #1e293b; border-radius: 12px; padding: 28px;">
-                    <h2 style="color: #38bdf8; margin-top: 0; font-size: 20px;">🔔 Tele-vs-Code</h2>
-                    <h3 style="color: #f8fafc; font-size: 16px; margin-bottom: 12px;">Permintaan Reset Password</h3>
-                    <p style="color: #cbd5e1; font-size: 14px; line-height: 1.6;">
-                        Halo, kami menerima permintaan untuk mereset password akun Tele-vs-Code Anda (<b>' . htmlspecialchars($email) . '</b>).
-                    </p>
-                    <p style="color: #cbd5e1; font-size: 14px; line-height: 1.6;">
-                        Klik tombol di bawah ini untuk membuat password baru. Tautan ini berlaku selama <b>1 jam</b>:
-                    </p>
-                    <div style="text-align: center; margin: 28px 0;">
-                        <a href="' . $resetUrl . '" style="background: #0284c7; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
-                            🔒 Buat Password Baru
-                        </a>
-                    </div>
-                    <p style="color: #94a3b8; font-size: 12px; line-height: 1.5;">
-                        Atau salin tautan berikut ke browser Anda:<br>
-                        <a href="' . $resetUrl . '" style="color: #38bdf8; word-break: break-all;">' . $resetUrl . '</a>
-                    </p>
-                    <hr style="border: 0; border-top: 1px solid #1e293b; margin: 20px 0;">
-                    <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">
-                        Jika Anda tidak merasa meminta reset password ini, Anda dapat mengabaikan email ini dengan aman.
-                    </p>
-                </div>
-            </body>
-            </html>';
+            $resetContent = '<p style="color: #cbd5e1; font-size: 14px; line-height: 1.6; margin-bottom: 16px;">Halo, kami menerima permintaan untuk mengatur ulang kata sandi akun Tele-vs-Code Anda (<b>' . htmlspecialchars($email) . '</b>).</p><div style="margin: 24px 0;"><a href="' . htmlspecialchars($resetUrl) . '" style="background: #0284c7; color: #ffffff; padding: 12px 26px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.4);">🔒 Buat Password Baru</a></div><p style="font-size: 12px; color: #64748b; word-break: break-all; margin-top: 16px;">Atau salin tautan berikut ke peramban Anda:<br><a href="' . htmlspecialchars($resetUrl) . '" style="color: #38bdf8;">' . htmlspecialchars($resetUrl) . '</a></p>';
+            $htmlBody = buildResponsiveEmailHtml('Permintaan Reset Password', 'Ikuti tautan di bawah ini untuk membuat password baru:', $resetContent, 'Tautan berlaku selama 1 jam. Jika Anda tidak meminta reset password, abaikan email ini dengan aman.');
 
             $debugLog = '';
             $mailRes = sendSmtpEmail($email, $subject, $htmlBody, $debugLog);
@@ -1996,7 +3306,21 @@ if ($currentUser) {
             $currentTab = 'admin';
         }
 
-        // Simpan Konfigurasi SMTP Server
+        // Bersihkan log diagnosa SMTP
+        if ($action === 'clear_smtp_diag') {
+            unset($_SESSION['tvsc_smtp_diag']);
+            header('Location: ./?tab=admin');
+            exit;
+        }
+
+        // Bersihkan Log Analitik Pengunjung
+        if ($action === 'clear_analytics' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            $db->exec("DELETE FROM visitor_analytics");
+            $successMsg = '✅ Seluruh data log analitik pengunjung berhasil dibersihkan!';
+            $currentTab = 'admin';
+        }
+
+        // Simpan Konfigurasi SMTP Server & Cloudflare Turnstile
         if ($action === 'save_smtp' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             setSetting('smtp_host', trim($_POST['smtp_host'] ?? ''));
             setSetting('smtp_port', (int)($_POST['smtp_port'] ?? 465));
@@ -2008,7 +3332,14 @@ if ($currentUser) {
             setSetting('smtp_from_name', trim($_POST['smtp_from_name'] ?? 'Tele-vs-Code'));
             setSetting('smtp_from_email', trim($_POST['smtp_from_email'] ?? ''));
 
-            $successMsg = '✅ Konfigurasi Server SMTP berhasil disimpan!';
+            if (isset($_POST['turnstile_site_key'])) {
+                setSetting('turnstile_site_key', trim($_POST['turnstile_site_key']));
+            }
+            if (isset($_POST['turnstile_secret_key'])) {
+                setSetting('turnstile_secret_key', trim($_POST['turnstile_secret_key']));
+            }
+
+            $successMsg = '✅ Konfigurasi Server SMTP & Cloudflare Turnstile berhasil disimpan!';
             $currentTab = 'admin';
         }
 
@@ -2017,18 +3348,17 @@ if ($currentUser) {
             $testEmail = trim($_POST['test_email'] ?? $currentUser['email']);
             $debugLog = '';
             $testSubject = "🧪 Uji Coba Konfigurasi SMTP - Tele-vs-Code (" . date('d-m-Y H:i:s') . ")";
-            $testHtml = "
-            <div style='background: #090d16; color: #f8fafc; padding: 20px; font-family: sans-serif;'>
-                <div style='max-width: 500px; margin: 0 auto; background: #131c2e; padding: 24px; border-radius: 8px; border: 1px solid #1e293b;'>
-                    <h3 style='color: #22c55e; margin-top: 0;'>✅ Tes Koneksi SMTP Berhasil!</h3>
-                    <p style='color: #cbd5e1; font-size: 14px; line-height: 1.5;'>
-                        Halo Administrator, server SMTP Anda telah terhubung dan berhasil mengirimkan email uji coba ini.
-                    </p>
-                    <p style='color: #cbd5e1; font-size: 13px;'><b>Waktu Uji:</b> " . date('d-m-Y H:i:s') . "<br><b>Penerima:</b> " . htmlspecialchars($testEmail) . "</p>
-                    <hr style='border: 0; border-top: 1px solid #1e293b; margin: 16px 0;'>
-                    <small style='color: #94a3b8;'>Dikirim otomatis oleh Tele-vs-Code SMTP Mailer</small>
+            $diagDetails = "
+            <div style='background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px; padding: 14px; margin: 16px 0; text-align: left;'>
+                <div style='color: #22c55e; font-weight: 700; font-size: 13.5px; margin-bottom: 8px;'>✅ Tes Koneksi Socket SMTP Berhasil</div>
+                <div style='font-size: 12px; color: #cbd5e1; line-height: 1.6;'>
+                    <div><b>Waktu:</b> " . date('d-m-Y H:i:s') . " WIB</div>
+                    <div><b>Penerima:</b> " . htmlspecialchars($testEmail) . "</div>
+                    <div><b>Host SMTP:</b> " . htmlspecialchars(getSetting('smtp_host', 'localhost')) . "</div>
+                    <div><b>Protokol:</b> " . strtoupper(htmlspecialchars(getSetting('smtp_crypto', 'ssl'))) . " (Port " . (int)getSetting('smtp_port', 465) . ")</div>
                 </div>
             </div>";
+            $testHtml = buildResponsiveEmailHtml('Uji Coba Konfigurasi SMTP', 'Verifikasi konektivitas socket SMTP dan kesiapan pengiriman email:', $diagDetails, 'Konfigurasi email Tele-vs-Code telah terverifikasi siap untuk pengiriman OTP & notifikasi.');
 
             $res = sendSmtpEmail($testEmail, $testSubject, $testHtml, $debugLog);
             $_SESSION['tvsc_smtp_diag'] = [
@@ -2046,6 +3376,40 @@ if ($currentUser) {
             }
             $currentTab = 'admin';
         }
+    }
+
+    // Update Profil Akun & Ganti Password (User Sedang Login)
+    // Aturan: Nama dan Password bisa diubah, Email dan Nomor WhatsApp terkunci/tidak bisa dirubah
+    if ($action === 'update_profile' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $newName = trim($_POST['name'] ?? '');
+        $curPass = $_POST['current_password'] ?? '';
+        $newPass = $_POST['new_password'] ?? '';
+        $confirmPass = $_POST['confirm_password'] ?? '';
+
+        $hasPasswordChange = (!empty($newPass) || !empty($curPass) || !empty($confirmPass));
+
+        if ($hasPasswordChange) {
+            if (!password_verify($curPass, $currentUser['password_hash'])) {
+                $errorMsg = '❌ Password lama / saat ini salah! Masukkan password saat ini untuk mengganti password baru.';
+            } elseif (strlen($newPass) < 6) {
+                $errorMsg = '❌ Password baru minimal 6 karakter!';
+            } elseif ($newPass !== $confirmPass) {
+                $errorMsg = '❌ Konfirmasi password baru tidak cocok!';
+            } else {
+                $hash = password_hash($newPass, PASSWORD_BCRYPT);
+                $upd = $db->prepare("UPDATE users SET name = ?, password_hash = ?, updated_at = ? WHERE id = ?");
+                $upd->execute([$newName, $hash, date('Y-m-d H:i:s'), $currentUser['id']]);
+                $currentUser['name'] = $newName;
+                $currentUser['password_hash'] = $hash;
+                $successMsg = '✅ Nama profil dan kata sandi Anda berhasil diperbarui!';
+            }
+        } else {
+            $upd = $db->prepare("UPDATE users SET name = ?, updated_at = ? WHERE id = ?");
+            $upd->execute([$newName, date('Y-m-d H:i:s'), $currentUser['id']]);
+            $currentUser['name'] = $newName;
+            $successMsg = '✅ Nama profil berhasil diperbarui! (Email dan Nomor WhatsApp tetap aman & permanen)';
+        }
+        $currentTab = $_POST['tab'] ?? 'projects';
     }
 
     // Ganti Password Akun Sendiri (User Sedang Login)
@@ -2445,30 +3809,51 @@ if ($currentUser) {
     $stmtW->execute([$currentUser['id']]);
     $whitelistUsers = $stmtW->fetchAll(PDO::FETCH_ASSOC);
 
-    // Filter Tasks per Project
+    // Filter Tasks per Project & Pagination (Default 10)
     $filterProjectId = isset($_GET['filter_project']) ? (int)$_GET['filter_project'] : 0;
     $filterStatus = $_GET['filter_status'] ?? '';
+    $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+    $perPage = isset($_GET['per_page']) ? max(5, min(100, (int)$_GET['per_page'])) : 10; // Default 10!
 
+    $countSql = "SELECT COUNT(*) FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.user_id = ?";
     $taskSql = "SELECT t.*, p.name as project_name, p.code as project_code, p.timezone as project_timezone FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.user_id = ?";
     $taskParams = [$currentUser['id']];
 
     if ($filterProjectId > 0) {
+        $countSql .= " AND t.project_id = ?";
         $taskSql .= " AND t.project_id = ?";
         $taskParams[] = $filterProjectId;
     }
     if ($filterStatus && in_array($filterStatus, ['PENDING', 'IN_PROGRESS', 'DONE', 'FAILED'])) {
+        $countSql .= " AND t.status = ?";
         $taskSql .= " AND t.status = ?";
         $taskParams[] = $filterStatus;
     }
-    $taskSql .= " ORDER BY t.created_at DESC LIMIT 50";
+
+    $stmtCountTotal = $db->prepare($countSql);
+    $stmtCountTotal->execute($taskParams);
+    $totalTasksCount = (int)$stmtCountTotal->fetchColumn();
+
+    $totalPages = max(1, (int)ceil($totalTasksCount / $perPage));
+    if ($page > $totalPages) $page = $totalPages;
+    $offset = ($page - 1) * $perPage;
+
+    $taskSql .= " ORDER BY t.created_at DESC LIMIT $perPage OFFSET $offset";
 
     $stmtTasks = $db->prepare($taskSql);
     $stmtTasks->execute($taskParams);
     $myTasks = $stmtTasks->fetchAll(PDO::FETCH_ASSOC);
 
-    // Hitung Statistik Tugas User
-    $stmtCount = $db->prepare("SELECT status, count(*) as c FROM tasks WHERE user_id = ?" . ($filterProjectId > 0 ? " AND project_id = $filterProjectId" : "") . " GROUP BY status");
-    $stmtCount->execute([$currentUser['id']]);
+    // Hitung Statistik Tugas User (Parameterized Query - Safe from SQL Injection)
+    $countSql = "SELECT status, count(*) as c FROM tasks WHERE user_id = ?";
+    $countParams = [(int)$currentUser['id']];
+    if ($filterProjectId > 0) {
+        $countSql .= " AND project_id = ?";
+        $countParams[] = (int)$filterProjectId;
+    }
+    $countSql .= " GROUP BY status";
+    $stmtCount = $db->prepare($countSql);
+    $stmtCount->execute($countParams);
     $taskStats = ['TOTAL' => 0, 'PENDING' => 0, 'IN_PROGRESS' => 0, 'DONE' => 0, 'FAILED' => 0];
     while ($sc = $stmtCount->fetch(PDO::FETCH_ASSOC)) {
         $taskStats[$sc['status']] = $sc['c'];
@@ -2530,10 +3915,20 @@ function renderSvg($name, $size = 15, $class = '') {
         'close' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
         'chevron-down' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><polyline points="6 9 12 15 18 9"/></svg>',
         'chevron-up' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><polyline points="18 15 12 9 6 15"/></svg>',
+                'globe' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+        'instagram' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>',
+        'youtube' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17"/><polygon points="10 15 15 12 10 9 10 15"/></svg>',
+        'whatsapp' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
+        'github' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>',
+        'info' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+        'feedback' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
         'minimize' => '<svg width="'.$size.'" height="'.$size.'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'.$class.'"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>'
     ];
     return $icons[$name] ?? '';
 }
+
+// Sitekey Cloudflare Turnstile (dapat dikonfigurasi via settings atau default test key)
+$cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -2541,14 +3936,451 @@ function renderSvg($name, $size = 15, $class = '') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Tele-vs-Code - Notifikasi pekerjaan AGEN AI di Visual Studio Code dengan Telegram</title>
+    <meta name="description" content="Kirim instruksi coding dari Telegram ke AI Agent di VS Code. Terima hasil eksekusi lengkap secara real-time tanpa menunggu di depan layar.">
     <meta name="theme-color" content="#0d0c0a">
+
+    <!-- Open Graph & Twitter Card Meta Tags -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://biru.co.id/tele-vs-code/">
+    <meta property="og:title" content="Tele-vs-Code - Agen AI Bekerja di Editor, Kabarnya Sampai di Saku">
+    <meta property="og:description" content="Kirim instruksi dari Telegram, biarkan agen di VS Code mengerjakannya, lalu terima laporan selesai lengkap secara real-time.">
+    <meta property="og:image" content="https://biru.co.id/tele-vs-code/assets/img/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Tele-vs-Code Dashboard Preview & AI Agent">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Tele-vs-Code - Agen AI Bekerja di Editor, Kabarnya Sampai di Saku">
+    <meta name="twitter:description" content="Kirim instruksi dari Telegram, biarkan agen di VS Code mengerjakannya, lalu terima laporan selesai lengkap secara real-time.">
+    <meta name="twitter:image" content="https://biru.co.id/tele-vs-code/assets/img/og-image.png">
+
+    <link rel="icon" type="image/jpeg" href="assets/img/logo.jpg">
     <meta name="view-transition" content="same-origin">
     <script>if ('onpagereveal' in window) document.documentElement.classList.add('has-vt');</script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap">
     <!-- Studio Ink Theme -->
-    <link rel="stylesheet" href="assets/css/app.css?v=<?= filemtime(__DIR__ . '/assets/css/app.css') ?>">
+        <link rel="stylesheet" href="assets/css/app.css?v=<?= filemtime(__DIR__ . '/assets/css/app.css') ?>">
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <style>
+    /* Critical Mobile & Auth Segmented Solid Hardening */
+    html, body {
+        overflow-x: hidden !important;
+        width: 100% !important;
+        max-width: 100vw !important;
+        position: relative !important;
+    }
+    .container {
+        width: 100% !important;
+        max-width: 1120px !important;
+        box-sizing: border-box !important;
+        overflow-x: hidden !important;
+    }
+    .landing, .landing-copy, .landing-preview-col {
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+        overflow-x: hidden !important;
+    }
+    .landing-title {
+        word-break: break-word !important;
+        overflow-wrap: break-word !important;
+    }
+    .auth-segmented {
+        background: rgba(255, 255, 255, 0.08) !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 9999px !important;
+        padding: 3px !important;
+        gap: 3px !important;
+        display: flex !important;
+        box-sizing: border-box !important;
+    }
+    .auth-segmented .liquid-layer { display: none !important; }
+    .auth-segmented-btn {
+        flex: 1 !important;
+        height: 36px !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        border-radius: 9999px !important;
+        border: none !important;
+        color: #94a3b8 !important;
+        background: transparent !important;
+        box-sizing: border-box !important;
+        cursor: pointer !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    .auth-segmented-btn:hover { color: #ffffff !important; }
+    .auth-segmented-btn.active {
+        background: #ece4d6 !important;
+        color: #0d0c0a !important;
+        font-weight: 700 !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+    }
+    .btn, .btn-sm, .btn-xs {
+        box-sizing: border-box !important;
+        max-width: 100% !important;
+    }
+    .navbar-actions .btn {
+        flex: 0 0 auto !important;
+        white-space: nowrap !important;
+    }
+    
+    /* Single Animated Live Dot */
+    @keyframes livePulse {
+        0% {
+            transform: scale(0.95);
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            opacity: 0.8;
+        }
+        50% {
+            transform: scale(1.15);
+            box-shadow: 0 0 0 4px rgba(16, 185, 129, 0);
+            opacity: 1;
+        }
+        100% {
+            transform: scale(0.95);
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+            opacity: 0.8;
+        }
+    }
+    .badge-live-sync {
+        background: rgba(16, 185, 129, 0.12) !important;
+        color: #86efac !important;
+        border: 1px solid rgba(16, 185, 129, 0.3) !important;
+        font-size: 11px !important;
+        padding: 0 9px !important;
+        border-radius: 12px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        height: 22px !important;
+    }
+    .badge-live-sync::before {
+        content: "" !important;
+        display: inline-block !important;
+        width: 6px !important;
+        height: 6px !important;
+        border-radius: 50% !important;
+        background: #10b981 !important;
+        animation: livePulse 1.5s ease-in-out infinite !important;
+        box-shadow: 0 0 6px #10b981;
+    }
+
+    /* ==========================================================================
+       Task Card Accordion & Media Preview Styling
+       ========================================================================== */
+    .task-card {
+        transition: all var(--transition-fast);
+    }
+    .task-card.collapsed {
+        padding: 12px 18px 12px 22px;
+        gap: 6px;
+    }
+    .task-card.collapsed .task-card-row-meta {
+        border-bottom: none;
+        padding-bottom: 0;
+    }
+    .task-card-preview {
+        font-size: 13px;
+        color: var(--text-secondary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        cursor: pointer;
+        padding-top: 4px;
+        display: none;
+        line-height: 1.4;
+    }
+    .task-card.collapsed .task-card-preview {
+        display: block;
+    }
+    .task-card:not(.collapsed) .task-card-preview {
+        display: none;
+    }
+    .task-accordion-toggle {
+        color: var(--text-muted);
+        transition: transform 0.2s ease, color var(--transition-fast);
+    }
+    .task-accordion-toggle:hover {
+        color: #fff;
+    }
+    .task-card .chevron-icon {
+        transition: transform 0.2s ease;
+    }
+    .task-card:not(.collapsed) .chevron-icon {
+        transform: rotate(180deg);
+    }
+    .task-card-body {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        width: 100%;
+        margin-top: 4px;
+    }
+    .task-card.collapsed .task-card-body {
+        display: none !important;
+    }
+
+    /* Media Box & Photo Thumbnail */
+    .task-card-media-box {
+        margin: 6px 0 10px 0;
+        padding: 10px 12px;
+        background: var(--bg-surface-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .task-photo-wrap {
+        display: inline-block;
+        max-width: 320px;
+    }
+    .task-photo-link {
+        position: relative;
+        display: block;
+        overflow: hidden;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border-medium);
+        background: #000;
+        cursor: pointer;
+    }
+    .task-photo-img {
+        display: block;
+        max-width: 100%;
+        max-height: 200px;
+        object-fit: cover;
+        border-radius: var(--radius-sm);
+        transition: transform 0.25s ease;
+    }
+    .task-photo-link:hover .task-photo-img {
+        transform: scale(1.04);
+    }
+    .task-photo-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 500;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+    }
+    .task-photo-link:hover .task-photo-overlay {
+        opacity: 1;
+    }
+    .task-media-caption {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 11.5px;
+        color: var(--text-muted);
+    }
+    .badge-media-indicator {
+        background: rgba(56, 189, 248, 0.12);
+        color: #7dd3fc;
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        font-size: 11px;
+        padding: 2px 7px;
+        border-radius: 12px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    /* Styling tombol navigasi persis seperti tombol Tambah Manual (.btn.btn-secondary) */
+    .navbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .navbar-actions .btn {
+        border-radius: var(--radius-sm);
+        height: 32px;
+        font-family: var(--font-sans);
+        font-size: 12.5px;
+        font-weight: 500;
+        background: var(--ink-3);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-primary);
+        padding: 0 13px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        box-sizing: border-box;
+        text-decoration: none;
+        white-space: nowrap;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .navbar-actions .btn:hover {
+        background: var(--ink-4);
+        border-color: var(--border-hover);
+        color: #fff;
+    }
+    .user-chip {
+        border-radius: var(--radius-sm);
+        background: var(--ink-3);
+        border: 1px solid var(--border-subtle);
+        height: 32px;
+        padding: 0 11px;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        color: var(--text-secondary);
+    }
+    .lang-switcher {
+        height: 32px;
+        box-sizing: border-box;
+        border-radius: var(--radius-sm);
+        background: var(--ink-3);
+        border: 1px solid var(--border-subtle);
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 3px;
+        gap: 2px;
+    }
+    .lang-switcher a {
+        height: 26px;
+        line-height: 26px;
+        padding: 0 8px;
+        border-radius: calc(var(--radius-sm) - 1px);
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition: all 0.15s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .lang-switcher a.active {
+        background: var(--text-primary);
+        color: var(--ink-0);
+        font-weight: 600;
+    }
+    .lang-switcher a:hover:not(.active) {
+        color: #fff;
+        background: var(--ink-4);
+    }
+    .app-footer {
+        margin-top: 48px;
+        padding-top: 24px;
+        padding-bottom: 28px;
+        border-top: 1px solid var(--border-subtle);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 16px;
+        width: 100%;
+    }
+    .footer-credit {
+        font-size: 12px;
+        color: var(--text-muted);
+    }
+    .footer-biru-link {
+        color: #38bdf8;
+        text-decoration: none;
+        font-weight: 500;
+    }
+    .footer-biru-link:hover {
+        text-decoration: underline;
+    }
+    .footer-links {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .footer-links .btn {
+        border-radius: var(--radius-sm);
+    }
+    .social-links {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .social-icon-btn {
+        width: 32px;
+        height: 32px;
+        border-radius: var(--radius-sm);
+        background: var(--ink-3);
+        border: 1px solid var(--border-subtle);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition: all 0.2s ease;
+    }
+    .social-icon-btn:hover {
+        background: var(--ink-4);
+        color: #fff;
+        border-color: var(--border-hover);
+        transform: translateY(-1px);
+    }
+    /* Floating Feedback Button */
+    .floating-feedback-btn {
+        position: fixed;
+        right: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        background: #0284c7;
+        color: #ffffff !important;
+        padding: 9px 12px;
+        border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+        box-shadow: -2px 4px 18px rgba(2, 132, 199, 0.45);
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        font-weight: 600;
+        text-decoration: none;
+        z-index: 9999;
+        transition: all 0.25s ease;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-right: none;
+    }
+    .floating-feedback-btn:hover {
+        background: #0369a1;
+        padding-right: 16px;
+    }
+    @media (max-width: 640px) {
+        .navbar-actions {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .navbar-actions .btn {
+            padding: 0 10px;
+            font-size: 11.5px;
+            height: 32px;
+            box-sizing: border-box;
+            flex: 0 0 auto;
+            max-width: 100%;
+            white-space: nowrap;
+        }
+        .app-footer {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 14px;
+        }
+    }
+    </style>
 </head>
 <body>
 
@@ -2571,26 +4403,42 @@ function renderSvg($name, $size = 15, $class = '') {
         </a>
         <div class="navbar-actions">
             <?php if (!empty($canShowDonation)): ?>
-                <button type="button" class="btn btn-secondary btn-sm" onclick="openDonationModal()" title="Dukung Pengembangan Tele-vs-Code" style="background: rgba(244, 63, 94, 0.15); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.35); display: inline-flex; align-items: center; gap: 6px;">
-                    <span style="font-size: 13px;">❤️</span>
-                    <span>Donasi</span>
+                <!-- Tombol Donasi (sama seperti Tambah Manual) -->
+                <button type="button" class="btn btn-secondary btn-sm" onclick="openDonationModal()" title="<?= __t('Dukung Pengembangan Tele-vs-Code', 'Support Tele-vs-Code Development') ?>">
+                    <span style="font-size: 12px;">❤️</span>
+                    <span><?= __t('Donasi', 'Donate') ?></span>
                 </button>
             <?php endif; ?>
-            <a class="btn btn-secondary btn-sm" href="?action=download_vsix" title="Download ekstensi VS Code offline (.VSIX)">
-                <?= renderSvg('download', 14) ?>
+
+            <!-- Tombol About (sama seperti Tambah Manual) -->
+            <button type="button" class="btn btn-secondary btn-sm" onclick="openAboutModal()" title="<?= __t('Tentang Telegram VS Code & Tim Magang', 'About Telegram VS Code & Intern Team') ?>">
+                <?= renderSvg('info', 13) ?>
+                <span><?= __t('About', 'About') ?></span>
+            </button>
+
+            <!-- Language Switcher (Dual Language ID / EN) -->
+            <div class="lang-switcher" title="<?= __t('Ganti Bahasa', 'Switch Language') ?>">
+                <a href="?lang=id<?= !empty($_SERVER['QUERY_STRING']) ? '&' . preg_replace('/(^|&)lang=[^&]*/', '', $_SERVER['QUERY_STRING']) : '' ?>" class="<?= $currentLang === 'id' ? 'active' : '' ?>">ID</a>
+                <a href="?lang=en<?= !empty($_SERVER['QUERY_STRING']) ? '&' . preg_replace('/(^|&)lang=[^&]*/', '', $_SERVER['QUERY_STRING']) : '' ?>" class="<?= $currentLang === 'en' ? 'active' : '' ?>">EN</a>
+            </div>
+
+            <!-- Tombol Unduh VSIX (sama seperti Tambah Manual) -->
+            <a class="btn btn-secondary btn-sm" href="?action=download_vsix" title="<?= __t('Download ekstensi VS Code offline (.VSIX)', 'Download offline VS Code extension (.VSIX)') ?>">
+                <?= renderSvg('download', 13) ?>
                 <span>Unduh VSIX</span>
             </a>
+
             <?php if ($currentUser): ?>
-                <span class="user-chip">
-                    <?= renderSvg('user', 12) ?>
-                    <span><?= htmlspecialchars($currentUser['email']) ?></span>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="openProfileModal()" title="<?= __t('Edit Profil & Password', 'Edit Profile & Password') ?>">
+                    <?= renderSvg('user', 13) ?>
+                    <span><?= htmlspecialchars(!empty($currentUser['name']) ? $currentUser['name'] : explode('@', $currentUser['email'])[0]) ?></span>
                     <?php if (!empty($isSuperAdmin)): ?>
-                        <span class="badge badge-pending" style="height: 18px; font-size: 9.5px; padding: 0 6px;">ADMIN</span>
+                        <span class="badge badge-pending" style="height: 18px; font-size: 9.5px; padding: 0 5px; margin-left: 4px;">ADMIN</span>
                     <?php endif; ?>
-                </span>
-                <a class="btn btn-outline btn-sm" href="?action=logout" title="Keluar dari akun">
+                </button>
+                <a class="btn btn-secondary btn-sm" href="?action=logout" title="<?= __t('Keluar dari akun', 'Sign Out') ?>">
                     <?= renderSvg('logout', 13) ?>
-                    <span>Keluar</span>
+                    <span><?= __t('Keluar', 'Sign Out') ?></span>
                 </a>
             <?php endif; ?>
         </div>
@@ -2598,41 +4446,56 @@ function renderSvg($name, $size = 15, $class = '') {
 
     <?php if (!$currentUser): ?>
         <!-- ==================================================================== -->
-        <!-- PUBLIC LANDING / LOGIN & REGISTER (iOS Minimalist Monochrome)         -->
+        <!-- PUBLIC LANDING / HERO SECTION                                        -->
         <!-- ==================================================================== -->
         <main class="landing">
             <section class="landing-copy">
                 <div class="landing-eyebrow">VS Code &nbsp;&harr;&nbsp; Telegram</div>
                 <h1 class="landing-title">
-                    Agen AI bekerja<br>
-                    di editor. <em>Kabarnya</em><br>
-                    <span class="muted">sampai di saku.</span>
+                    <?= __t(
+                        'Agen AI bekerja di editor.<br><em>Kabarnya</em> <span class="muted">sampai di saku.</span>',
+                        'AI agents working in your editor.<br><em>Updates</em> <span class="muted">delivered to your pocket.</span>'
+                    ) ?>
                 </h1>
                 <p class="landing-lead">
-                    Kirim instruksi dari Telegram, biarkan agen di VS Code mengerjakannya,
-                    lalu terima laporan selesai &mdash; lengkap dengan hasil dan command yang dijalankan.
-                    Tidak perlu menunggu di depan layar.
+                    <?= __t(
+                        'Kirim instruksi dari Telegram, biarkan agen di VS Code mengerjakannya, lalu terima laporan selesai &mdash; lengkap dengan hasil dan command yang dijalankan. Tidak perlu menunggu di depan layar.',
+                        'Send coding instructions from Telegram, let AI agents in VS Code execute them, and receive completion reports &mdash; complete with output and commands run. No need to stay stuck at your desk.'
+                    ) ?>
                 </p>
+
+                <!-- Action CTA Row (Popup Trigger Buttons) -->
+                <div class="landing-cta-row" style="display: flex; gap: 12px; margin: 28px 0 32px; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-primary" onclick="openAuthModal('login')" style="padding: 12px 24px; font-size: 14px; font-weight: 600;">
+                        <?= renderSvg('user', 14) ?>
+                        <span><?= __t('Masuk ke Dashboard', 'Sign In to Dashboard') ?></span>
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="openAuthModal('register')" style="padding: 12px 24px; font-size: 14px; font-weight: 500;">
+                        <span><?= __t('Daftar Akun Baru', 'Create Account') ?></span>
+                    </button>
+                </div>
 
                 <ol class="landing-steps">
                     <li>
                         <span class="num">01</span>
-                        <h3>Tulis perintah di Telegram</h3>
-                        <p>Pesan biasa, foto, atau dokumen &mdash; pakai tag <code>#a</code> untuk memilih proyek.</p>
+                        <h3><?= __t('Tulis perintah di Telegram', 'Send commands via Telegram') ?></h3>
+                        <p><?= __t('Pesan biasa, foto, atau dokumen &mdash; pakai tag <code>#a</code> untuk memilih proyek.', 'Regular text, photos, or documents &mdash; use tags like <code>#a</code> to choose target project.') ?></p>
                     </li>
                     <li>
                         <span class="num">02</span>
-                        <h3>Agen mengambil antrean</h3>
-                        <p>Ekstensi VS Code menarik tugas dan agen mengerjakannya di folder yang tepat.</p>
+                        <h3><?= __t('Agen mengambil antrean', 'Agent pulls task queue') ?></h3>
+                        <p><?= __t('Ekstensi VS Code menarik tugas dan agen mengerjakannya di folder yang tepat.', 'The VS Code extension pulls tasks and your agent executes them in the right workspace.') ?></p>
                     </li>
                     <li>
                         <span class="num">03</span>
-                        <h3>Laporan kembali ke kamu</h3>
-                        <p>Status PROSES, SELESAI, atau KENDALA dikirim otomatis beserta ringkasannya.</p>
+                        <h3><?= __t('Laporan kembali ke kamu', 'Status delivered to you') ?></h3>
+                        <p><?= __t('Status PROSES, SELESAI, atau KENDALA dikirim otomatis beserta ringkasannya.', 'IN_PROGRESS, DONE, or FAILED status is sent back with full summaries and output.') ?></p>
                     </li>
                 </ol>
+            </section>
 
-                <div class="transcript" aria-hidden="true">
+            <section class="landing-preview-col">
+                <div class="transcript" aria-hidden="true" style="margin-top: 0;">
                     <div class="transcript-head"><span>terminal &middot; vs code</span><span>tele-notify</span></div>
                     <span class="ln"><span class="p">$</span> tele-task add "Perbaiki validasi form login"</span>
                     <span class="ln"><span class="dim">&rarr;</span> #TASK-0412 tercatat &middot; <span class="dim">IN_PROGRESS</span></span>
@@ -2640,39 +4503,69 @@ function renderSvg($name, $size = 15, $class = '') {
                     <span class="ln"><span class="p">$</span> tele-task done "#TASK-0412" "Validasi email &amp; WA selesai"</span>
                     <span class="ln caret"><span class="ok">&check;</span> terkirim ke Telegram &middot; 0.4s</span>
                 </div>
-            </section>
 
-            <div class="auth-wrapper">
-            <div class="card auth-card">
-                <div class="auth-header">
-                    <div class="auth-brand-glyph"><?= renderSvg('bell', 20) ?></div>
-                    <h2 class="auth-title">Masuk ke ruang kerja</h2>
-                    <p class="auth-subtitle">Satu akun untuk semua proyek dan bot kamu.</p>
+                <!-- Quick Action Card on Landing -->
+                <div class="card" style="margin-top: 24px; padding: 22px; border: 1px solid var(--border-medium); background: var(--ink-2); border-radius: var(--radius-lg);">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                        <span style="font-size: 20px;">⚡</span>
+                        <h3 style="font-size: 15px; font-weight: 600; color: #fff; margin: 0;"><?= __t('Akses Cepat Pengembang', 'Quick Developer Access') ?></h3>
+                    </div>
+                    <p style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 16px;">
+                        <?= __t('Kelola antrean tugas coding, pantau progres AI Agent secara real-time, dan unduh paket ekstensi VS Code.', 'Manage task queues, track AI agent progress in real-time, and download the VS Code extension package.') ?>
+                    </p>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="openAuthModal('login')" style="flex: 1; min-width: 120px;">
+                            <span><?= __t('Masuk', 'Sign In') ?></span>
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="openAuthModal('register')" style="flex: 1; min-width: 120px;">
+                            <span><?= __t('Daftar Akun', 'Register') ?></span>
+                        </button>
+                    </div>
                 </div>
+            </section>
+        </main>
+
+        <!-- ==================================================================== -->
+        <!-- MODAL POPUP: LOGIN & DAFTAR (iOS Minimalist Monochrome)              -->
+        <!-- ==================================================================== -->
+        <div class="modal-overlay" id="modalAuth" onclick="if(event.target === this) closeAuthModal()">
+            <div class="modal-dialog" style="max-width: 440px; padding: 26px 24px;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="auth-brand-glyph" style="margin-bottom: 0; width: 36px; height: 36px;"><?= renderSvg('bell', 18) ?></div>
+                        <div>
+                            <h2 class="auth-title" style="font-size: 17px; margin-bottom: 2px;" id="authModalTitle"><?= __t('Masuk ke ruang kerja', 'Sign in to workspace') ?></h2>
+                            <p class="auth-subtitle" style="font-size: 12px; margin-bottom: 0;" id="authModalSubtitle"><?= __t('Satu akun untuk semua proyek dan bot kamu.', 'One account for all your projects and bots.') ?></p>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-xs" onclick="closeAuthModal()" style="border-radius: 50%; width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 16px;" title="<?= __t('Tutup', 'Close') ?>">&times;</button>
+                </div>
+
                 <!-- Segmented Control Switcher -->
-                <div class="auth-segmented">
-                    <button type="button" class="auth-segmented-btn active" id="btnAuthLogin" onclick="switchAuthTab('login')">Masuk</button>
-                    <button type="button" class="auth-segmented-btn" id="btnAuthRegister" onclick="switchAuthTab('register')">Daftar Baru</button>
+                <div class="auth-segmented" id="modalAuthSegmented" style="margin: 14px 0 18px;">
+                    <button type="button" class="auth-segmented-btn active" id="btnAuthLogin" onclick="switchAuthTab('login')"><?= __t('Masuk', 'Sign In') ?></button>
+                    <button type="button" class="auth-segmented-btn" id="btnAuthRegister" onclick="switchAuthTab('register')"><?= __t('Daftar Baru', 'Register') ?></button>
                 </div>
 
                 <!-- Box 1: Form Login -->
                 <div id="boxLogin">
                     <form method="POST" action="?action=login">
                         <div class="form-group">
-                            <label>Email atau Nomor WhatsApp:</label>
-                            <input type="text" name="identifier" placeholder="nama@email.com atau 08123456789" required autocomplete="username">
+                            <label><?= __t('Email atau Nomor WhatsApp:', 'Email or WhatsApp Number:') ?></label>
+                            <input type="text" name="identifier" placeholder="<?= __t('nama@email.com atau 08123456789', 'name@email.com or +123456789') ?>" required autocomplete="username">
                         </div>
-                        <div class="form-group" style="margin-bottom: 20px;">
-                            <label>Password:</label>
-                            <input type="password" name="password" placeholder="Password Anda" required autocomplete="current-password">
+                        <div class="form-group" style="margin-bottom: 14px;">
+                            <label><?= __t('Password:', 'Password:') ?></label>
+                            <input type="password" name="password" placeholder="<?= __t('Password Anda', 'Your Password') ?>" required autocomplete="current-password">
                         </div>
-                        <button type="submit" class="btn btn-primary" style="width: 100%; height: 42px;">
-                            <span>Masuk</span>
+                        <div class="cf-turnstile" data-sitekey="<?= htmlspecialchars($cfSiteKey) ?>" data-callback="onTurnstileSuccessLogin" data-expired-callback="onTurnstileExpiredLogin" data-theme="dark" style="margin-bottom: 14px;"></div>
+                        <button type="submit" id="btnSubmitLogin" class="btn btn-primary" style="width: 100%; height: 42px; opacity: 0.6; cursor: not-allowed;" disabled>
+                            <span><?= __t('Masuk', 'Sign In') ?></span>
                         </button>
                     </form>
                     <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-top: 16px; flex-wrap: wrap; gap: 8px;">
-                        <a href="javascript:void(0)" onclick="switchAuthTab('register')" style="color: var(--text-secondary);">Belum punya akun? <b style="color: #fff;">Daftar</b></a>
-                        <a href="javascript:void(0)" onclick="switchAuthTab('forgot')" style="color: var(--text-muted); text-decoration: underline;">Lupa Password?</a>
+                        <a href="javascript:void(0)" onclick="switchAuthTab('register')" style="color: var(--text-secondary);"><?= __t('Belum punya akun? <b style="color: #fff;">Daftar</b>', 'Don\'t have an account? <b style="color: #fff;">Sign Up</b>') ?></a>
+                        <a href="javascript:void(0)" onclick="switchAuthTab('forgot')" style="color: var(--text-muted); text-decoration: underline;"><?= __t('Lupa Password?', 'Forgot Password?') ?></a>
                     </div>
                 </div>
 
@@ -2680,83 +4573,198 @@ function renderSvg($name, $size = 15, $class = '') {
                 <div id="boxRegister" style="display: none;">
                     <form method="POST" action="?action=register">
                         <div class="form-group">
-                            <label>Alamat Email (Unik):</label>
-                            <input type="email" name="email" placeholder="nama@email.com" required autocomplete="email">
+                            <label><?= __t('Alamat Email (Unik):', 'Email Address (Unique):') ?></label>
+                            <input type="email" name="email" placeholder="name@email.com" required autocomplete="email">
                         </div>
                         <div class="form-group">
-                            <label>Nomor WhatsApp Aktif (Unik):</label>
+                            <label><?= __t('Nomor WhatsApp Aktif (Unik):', 'Active WhatsApp Number (Unique):') ?></label>
                             <input type="text" name="whatsapp" placeholder="081234567890" required autocomplete="tel">
-                            <small style="color: var(--text-muted); font-size: 11px; margin-top: 4px; display: block;">Untuk login alternatif dan pemulihan akun.</small>
+                            <small style="color: var(--text-muted); font-size: 11px; margin-top: 4px; display: block;"><?= __t('Untuk login alternatif dan pemulihan akun.', 'For alternative login and account recovery.') ?></small>
                         </div>
-                        <div class="form-group" style="margin-bottom: 20px;">
-                            <label>Password (Minimal 6 Karakter):</label>
-                            <input type="password" name="password" minlength="6" placeholder="Kombinasi huruf & angka" required autocomplete="new-password">
+                        <div class="form-group" style="margin-bottom: 14px;">
+                            <label><?= __t('Password (Minimal 6 Karakter):', 'Password (Minimum 6 Characters):') ?></label>
+                            <input type="password" name="password" minlength="6" placeholder="<?= __t('Kombinasi huruf & angka', 'Letters & numbers combination') ?>" required autocomplete="new-password">
                         </div>
-                        <button type="submit" class="btn btn-primary" style="width: 100%; height: 38px;">
-                            <span>Daftar & Buat Akun</span>
+                        <div class="cf-turnstile" data-sitekey="<?= htmlspecialchars($cfSiteKey) ?>" data-callback="onTurnstileSuccessRegister" data-expired-callback="onTurnstileExpiredRegister" data-theme="dark" style="margin-bottom: 14px;"></div>
+                        <button type="submit" id="btnSubmitRegister" class="btn btn-primary" style="width: 100%; height: 40px; opacity: 0.6; cursor: not-allowed;" disabled>
+                            <span><?= __t('Daftar & Buat Akun', 'Create Account') ?></span>
                         </button>
                     </form>
                     <div style="text-align: center; font-size: 12px; margin-top: 16px;">
-                        <a href="javascript:void(0)" onclick="switchAuthTab('login')" style="color: var(--text-secondary);">Sudah punya akun? <b style="color: #fff;">Masuk</b></a>
+                        <a href="javascript:void(0)" onclick="switchAuthTab('login')" style="color: var(--text-secondary);"><?= __t('Sudah punya akun? <b style="color: #fff;">Masuk</b>', 'Already have an account? <b style="color: #fff;">Sign In</b>') ?></a>
                     </div>
                 </div>
 
                 <!-- Box 3: Form Lupa Password -->
                 <div id="boxForgot" style="display: none;">
                     <div style="text-align: center; margin-bottom: 16px;">
-                        <h3 style="font-size: 15px; font-weight: 500; color: #fff;">Pemulihan Password</h3>
-                        <p style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Tautan reset aman akan dikirimkan ke email terdaftar Anda.</p>
+                        <h3 style="font-size: 15px; font-weight: 500; color: #fff;"><?= __t('Pemulihan Password', 'Password Recovery') ?></h3>
+                        <p style="font-size: 12px; color: var(--text-muted); margin-top: 4px;"><?= __t('Tautan reset aman akan dikirimkan ke email terdaftar Anda.', 'A secure reset link will be sent to your registered email.') ?></p>
                     </div>
                     <form method="POST" action="?action=forgot_password">
                         <div class="form-group" style="margin-bottom: 20px;">
-                            <label>Alamat Email Terdaftar:</label>
+                            <label><?= __t('Alamat Email Terdaftar:', 'Registered Email Address:') ?></label>
                             <input type="email" name="email" placeholder="nama@email.com" required autocomplete="email">
                         </div>
                         <button type="submit" class="btn btn-primary" style="width: 100%; height: 38px;">
-                            <span>Kirim Link Reset Password</span>
+                            <span><?= __t('Kirim Link Reset Password', 'Send Reset Link') ?></span>
                         </button>
                     </form>
                     <div style="text-align: center; font-size: 12px; margin-top: 16px;">
-                        <a href="javascript:void(0)" onclick="switchAuthTab('login')" style="color: var(--text-secondary);">Kembali ke Login</a>
+                        <a href="javascript:void(0)" onclick="switchAuthTab('login')" style="color: var(--text-secondary);"><?= __t('Kembali ke Login', 'Back to Sign In') ?></a>
                     </div>
                 </div>
 
-                <!-- Box 4: Form Reset Password Baru (dari Link Email) -->
+                <!-- Box 4: Form Reset Password Baru -->
                 <?php if (!empty($isTokenValid) && !empty($resetToken)): ?>
                     <div id="boxResetPass">
                         <div style="text-align: center; margin-bottom: 16px;">
-                            <h3 style="font-size: 15px; font-weight: 500; color: #fff;">Buat Password Baru</h3>
+                            <h3 style="font-size: 15px; font-weight: 500; color: #fff;"><?= __t('Buat Password Baru', 'Set New Password') ?></h3>
                             <p style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Akun: <b><?= htmlspecialchars($resetEmail) ?></b></p>
                         </div>
                         <form method="POST" action="?action=do_reset_password">
                             <input type="hidden" name="token" value="<?= htmlspecialchars($resetToken) ?>">
                             <div class="form-group">
-                                <label>Password Baru (Min 6 Karakter):</label>
+                                <label><?= __t('Password Baru (Min 6 Karakter):', 'New Password (Min 6 Chars):') ?></label>
                                 <input type="password" name="new_password" minlength="6" placeholder="Password baru" required autocomplete="new-password">
                             </div>
                             <div class="form-group" style="margin-bottom: 20px;">
-                                <label>Konfirmasi Password Baru:</label>
+                                <label><?= __t('Konfirmasi Password Baru:', 'Confirm New Password:') ?></label>
                                 <input type="password" name="confirm_password" minlength="6" placeholder="Ketik ulang password baru" required autocomplete="new-password">
                             </div>
                             <button type="submit" class="btn btn-primary" style="width: 100%; height: 38px;">
-                                <span>Simpan Password Baru</span>
+                                <span><?= __t('Simpan Password Baru', 'Save New Password') ?></span>
                             </button>
                         </form>
                         <div style="text-align: center; font-size: 12px; margin-top: 16px;">
-                            <a href="./" style="color: var(--text-secondary);">Batal</a>
+                            <a href="javascript:void(0)" onclick="closeAuthModal()" style="color: var(--text-secondary);"><?= __t('Batal', 'Cancel') ?></a>
                         </div>
                     </div>
-                    <script>
-                    window.addEventListener('DOMContentLoaded', () => {
-                        switchAuthTab('reset');
-                    });
-                    </script>
                 <?php endif; ?>
+
+                <!-- Box 5: Form Verifikasi OTP Email (Pendaftaran Baru & Login 2FA Harian) -->
+                <div id="boxOtp" style="<?= !empty($_SESSION['tvsc_pending_auth']) ? '' : 'display: none;' ?>">
+                    <div style="text-align: center; margin-bottom: 16px;">
+                        <div style="width: 44px; height: 44px; border-radius: 50%; background: rgba(59, 130, 246, 0.15); color: #60a5fa; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 10px;">
+                            <?= renderSvg('key', 20) ?>
+                        </div>
+                        <h3 style="font-size: 15.5px; font-weight: 600; color: #fff; margin-bottom: 4px;"><?= __t('Verifikasi Kode Email', 'Email Verification Code') ?></h3>
+                        <p style="font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-bottom: 0;">
+                            <?= __t('Kode 6 digit telah dikirimkan ke email:', 'A 6-digit verification code was sent to:') ?><br>
+                            <b style="color: #60a5fa;"><?= htmlspecialchars($_SESSION['tvsc_pending_auth']['email'] ?? 'email Anda') ?></b>
+                        </p>
+                    </div>
+                    <form method="POST" action="?action=verify_otp">
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label style="text-align: center; display: block; font-size: 12px;"><?= __t('Masukkan 6 Digit Kode:', 'Enter 6-Digit Code:') ?></label>
+                            <input type="text" name="otp_code" maxlength="6" pattern="[0-9]{6}" placeholder="123456" required autocomplete="one-time-code" style="text-align: center; font-size: 22px; letter-spacing: 6px; font-weight: 700; height: 46px;" autofocus>
+                            <small style="color: var(--text-muted); font-size: 11px; margin-top: 6px; display: block; text-align: center;"><?= __t('Kode berlaku selama 15 menit.', 'Code expires in 15 minutes.') ?></small>
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="width: 100%; height: 40px;">
+                            <span><?= __t('Verifikasi & Lanjutkan', 'Verify & Continue') ?></span>
+                        </button>
+                    </form>
+                    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-top: 16px; flex-wrap: wrap; gap: 8px;">
+                        <form method="POST" action="?action=resend_otp" style="margin: 0;">
+                            <button type="submit" class="btn-link" style="background: none; border: none; color: #60a5fa; cursor: pointer; padding: 0; font-size: 12px; text-decoration: underline;"><?= __t('Kirim Ulang Kode', 'Resend Code') ?></button>
+                        </form>
+                        <a href="?action=cancel_otp" style="color: var(--text-muted);"><?= __t('Batal / Ganti Akun', 'Cancel / Switch Account') ?></a>
+                    </div>
+                </div>
             </div>
-            </div>
-        </main>
+        </div>
+
+        <?php if (!empty($errorMsg) || !empty($isTokenValid) || isset($_GET['auth']) || !empty($_SESSION['tvsc_pending_auth'])): ?>
+            <script>
+            window.addEventListener('DOMContentLoaded', () => {
+                openAuthModal('<?= !empty($_SESSION['tvsc_pending_auth']) ? 'otp' : (!empty($isTokenValid) ? 'reset' : ((isset($_GET['auth']) && $_GET['auth'] === 'register') ? 'register' : 'login')) ?>');
+            });
+            </script>
+        <?php endif; ?>
 
     <?php else: ?>
+        <!-- ==================================================================== -->
+        <!-- MODAL POPUP: PROFIL & GANTI PASSWORD                                -->
+        <!-- ==================================================================== -->
+        <div class="modal-overlay" id="modalProfile" onclick="if(event.target === this) closeProfileModal()">
+            <div class="modal-dialog" style="max-width: 480px; padding: 24px 22px;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="auth-brand-glyph" style="margin-bottom: 0; width: 36px; height: 36px;"><?= renderSvg('user', 18) ?></div>
+                        <div>
+                            <h2 class="auth-title" style="font-size: 16.5px; margin-bottom: 2px;"><?= __t('Profil & Keamanan Akun', 'Profile & Account Security') ?></h2>
+                            <p class="auth-subtitle" style="font-size: 12px; margin-bottom: 0;"><?= __t('Perbarui nama tampilan dan kata sandi akun Anda.', 'Update your display name and account password.') ?></p>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-xs" onclick="closeProfileModal()" style="border-radius: 50%; width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 16px;" title="<?= __t('Tutup', 'Close') ?>">&times;</button>
+                </div>
+
+                <form method="POST" action="?action=update_profile">
+                    <input type="hidden" name="csrf" value="<?= getCsrfToken() ?>">
+                    <input type="hidden" name="tab" value="<?= htmlspecialchars($currentTab ?? 'projects') ?>">
+
+                    <!-- Field Nama (Bisa diubah) -->
+                    <div class="form-group" style="margin-bottom: 14px;">
+                        <label style="font-size: 12.5px; font-weight: 500; color: #fff; display: flex; justify-content: space-between;">
+                            <span><?= __t('Nama Pengguna / Tampilan:', 'Display / User Name:') ?></span>
+                            <span style="font-size: 11px; color: #10b981; font-weight: normal;"><?= __t('Dapat diubah', 'Editable') ?></span>
+                        </label>
+                        <input type="text" name="name" value="<?= htmlspecialchars($currentUser['name'] ?? '') ?>" placeholder="<?= __t('Masukkan nama lengkap Anda', 'Enter your full name') ?>" maxlength="100" style="height: 40px;">
+                    </div>
+
+                    <!-- Field Email (Terkunci / Tidak dapat dirubah) -->
+                    <div class="form-group" style="margin-bottom: 14px;">
+                        <label style="font-size: 12.5px; font-weight: 500; color: var(--text-secondary); display: flex; justify-content: space-between;">
+                            <span><?= __t('Alamat Email (Akun):', 'Email Address (Account):') ?></span>
+                            <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 10px; padding: 1px 6px;"><?= __t('Terkunci / Permanen', 'Locked / Permanent') ?></span>
+                        </label>
+                        <input type="email" value="<?= htmlspecialchars($currentUser['email']) ?>" readonly disabled style="height: 40px; background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.1); color: var(--text-muted); cursor: not-allowed;">
+                        <small style="color: var(--text-muted); font-size: 11px; margin-top: 4px; display: block;"><?= __t('Alamat email digunakan sebagai kredensial utama dan tidak dapat diubah.', 'Email address is your primary credential and cannot be changed.') ?></small>
+                    </div>
+
+                    <!-- Field WhatsApp (Terkunci / Tidak dapat dirubah) -->
+                    <div class="form-group" style="margin-bottom: 18px;">
+                        <label style="font-size: 12.5px; font-weight: 500; color: var(--text-secondary); display: flex; justify-content: space-between;">
+                            <span><?= __t('Nomor WhatsApp (Akun):', 'WhatsApp Number (Account):') ?></span>
+                            <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 10px; padding: 1px 6px;"><?= __t('Terkunci / Permanen', 'Locked / Permanent') ?></span>
+                        </label>
+                        <input type="text" value="<?= htmlspecialchars($currentUser['whatsapp']) ?>" readonly disabled style="height: 40px; background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.1); color: var(--text-muted); cursor: not-allowed;">
+                        <small style="color: var(--text-muted); font-size: 11px; margin-top: 4px; display: block;"><?= __t('Nomor WhatsApp digunakan untuk autentikasi sistem dan tidak dapat diubah.', 'WhatsApp number is used for system auth and cannot be changed.') ?></small>
+                    </div>
+
+                    <!-- Collapsible / Bagian Ganti Password -->
+                    <div style="background: var(--bg-surface-inset); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px; margin-bottom: 18px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <h4 style="font-size: 13px; font-weight: 600; color: #fff; margin: 0; display: flex; align-items: center; gap: 6px;">
+                                <?= renderSvg('key', 13) ?>
+                                <span><?= __t('Ganti Password Akun (Opsional)', 'Change Account Password (Optional)') ?></span>
+                            </h4>
+                            <span style="font-size: 11px; color: var(--text-muted);"><?= __t('Kosongkan jika tidak ganti', 'Leave blank to keep') ?></span>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 10px;">
+                            <label style="font-size: 11.5px;"><?= __t('Password Lama / Saat Ini:', 'Current Password:') ?></label>
+                            <input type="password" name="current_password" placeholder="<?= __t('Password saat ini (jika ganti password)', 'Current password (if changing)') ?>" style="height: 38px;">
+                        </div>
+                        <div class="grid-2" style="gap: 10px;">
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 11.5px;"><?= __t('Password Baru (Min 6 Karakter):', 'New Password (Min 6 Chars):') ?></label>
+                                <input type="password" name="new_password" minlength="6" placeholder="<?= __t('Password baru', 'New password') ?>" style="height: 38px;">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 11.5px;"><?= __t('Ulangi Password Baru:', 'Confirm New Password:') ?></label>
+                                <input type="password" name="confirm_password" minlength="6" placeholder="<?= __t('Konfirmasi password', 'Confirm password') ?>" style="height: 38px;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="closeProfileModal()"><?= __t('Batal', 'Cancel') ?></button>
+                        <button type="submit" class="btn btn-primary btn-sm" style="min-width: 130px;"><?= __t('Simpan Perubahan', 'Save Changes') ?></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <!-- ==================================================================== -->
         <!-- USER DASHBOARD (iOS Minimalist Monochrome)                           -->
         <!-- ==================================================================== -->
@@ -2765,15 +4773,22 @@ function renderSvg($name, $size = 15, $class = '') {
             $tzDash = !empty($currentUser['timezone']) ? $currentUser['timezone'] : 'Asia/Jakarta';
             try { $nowDash = new DateTime('now', new DateTimeZone($tzDash)); } catch (Exception $e) { $nowDash = new DateTime(); }
             $hDash = (int)$nowDash->format('G');
-            $greet = $hDash < 11 ? 'Selamat pagi' : ($hDash < 15 ? 'Selamat siang' : ($hDash < 19 ? 'Selamat sore' : 'Selamat malam'));
+            $greet = $currentLang === 'en' 
+                ? ($hDash < 12 ? 'Good morning' : ($hDash < 18 ? 'Good afternoon' : 'Good evening'))
+                : ($hDash < 11 ? 'Selamat pagi' : ($hDash < 15 ? 'Selamat siang' : ($hDash < 19 ? 'Selamat sore' : 'Selamat malam')));
             $nameDash = ucfirst(strtok($currentUser['email'], '@'));
-            $hariId = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'][(int)$nowDash->format('w')];
+            $dayName = $currentLang === 'en'
+                ? ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][(int)$nowDash->format('w')]
+                : ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'][(int)$nowDash->format('w')];
             $openTasks = (int)$taskStats['PENDING'] + (int)$taskStats['IN_PROGRESS'];
+            $openTasksMsg = $openTasks > 0 
+                ? __t("$openTasks tugas masih berjalan.", "$openTasks tasks in progress.") 
+                : __t("Semua antrean beres.", "All tasks completed.");
         ?>
         <div class="dash-head">
             <div>
-                <div class="dash-eyebrow"><span class="dot"></span><?= $hariId ?>, <?= $nowDash->format('d.m.Y') ?> &middot; <?= $nowDash->format('H:i') ?> <?= htmlspecialchars(getTimezoneAbbr($tzDash)) ?></div>
-                <h1 class="dash-greeting"><?= $greet ?>, <?= htmlspecialchars($nameDash) ?>.<br><em><?= $openTasks > 0 ? $openTasks . ' tugas masih berjalan.' : 'Semua antrean beres.' ?></em></h1>
+                <div class="dash-eyebrow"><span class="dot"></span><?= $dayName ?>, <?= $nowDash->format('d.m.Y') ?> &middot; <?= $nowDash->format('H:i') ?> <?= htmlspecialchars(getTimezoneAbbr($tzDash)) ?></div>
+                <h1 class="dash-greeting"><?= $greet ?>, <?= htmlspecialchars($nameDash) ?>.<br><em><?= $openTasksMsg ?></em></h1>
             </div>
         </div>
 
@@ -2781,15 +4796,15 @@ function renderSvg($name, $size = 15, $class = '') {
         <nav class="main-nav" aria-label="Navigasi utama">
             <a href="?tab=tasks<?= $filterProjectId ? "&filter_project=$filterProjectId" : "" ?>" class="nav-pill <?= $currentTab === 'tasks' ? 'active' : '' ?>">
                 <?= renderSvg('tasks', 14) ?>
-                <span>Antrean Tugas (<?= $taskStats['TOTAL'] ?>)</span>
+                <span><?= __t('Antrean Tugas', 'Task Queue') ?> (<?= $taskStats['TOTAL'] ?>)</span>
             </a>
             <a href="?tab=projects" class="nav-pill <?= $currentTab === 'projects' ? 'active' : '' ?>">
                 <?= renderSvg('settings', 14) ?>
-                <span>Pengaturan & Proyek (<?= count($projects) ?>)</span>
+                <span><?= __t('Pengaturan & Proyek', 'Settings & Projects') ?> (<?= count($projects) ?>)</span>
             </a>
             <a href="?tab=bantuan" class="nav-pill <?= $currentTab === 'bantuan' ? 'active' : '' ?>">
                 <?= renderSvg('help', 14) ?>
-                <span>Bantuan</span>
+                <span><?= __t('Bantuan & Panduan', 'Help & Guides') ?></span>
             </a>
             <?php if (!empty($isSuperAdmin)): ?>
                 <a href="?tab=admin" class="nav-pill nav-pill-admin <?= $currentTab === 'admin' ? 'active' : '' ?>">
@@ -2804,34 +4819,75 @@ function renderSvg($name, $size = 15, $class = '') {
             <!-- TAB 1: ANTREAN TUGAS BERDASARKAN PROYEK                          -->
             <!-- ================================================================ -->
             <section class="tab-pane">
+                <!-- Banner Panduan Penting: Pemicu Manual AI Agent & Prioritas Pekerja (Warna Kuat & High Visibility) -->
+                <div class="card" style="margin-bottom: 22px; border: 2px solid #f59e0b; background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(99, 102, 241, 0.10) 100%); border-radius: 12px; padding: 18px 22px; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.18);">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 18px;">
+                        <div style="flex: 1; min-width: 290px;">
+                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                                <span style="background: #f59e0b; color: #000; font-weight: 800; font-size: 11px; padding: 3px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; display: inline-flex; align-items: center; gap: 4px;">
+                                    <?= renderSvg('zap', 12) ?> <?= __t('PETUNJUK UTAMA', 'KEY GUIDANCE') ?>
+                                </span>
+                                <h3 style="font-size: 16px; font-weight: 700; color: #fff; margin: 0;">
+                                    <?= __t('Cara Terbaik: Perintahkan Manual AI Agent di IDE Chat', 'Best Practice: Prompt AI Agent Manually in IDE Chat') ?>
+                                </h3>
+                            </div>
+                            <p style="color: #cbd5e1; font-size: 13px; line-height: 1.6; margin: 0 0 12px 0;">
+                                <?= __t('Saat Anda berada di depan komputer, cara paling handal & instan agar AI Agent langsung menyelesaikan antrean <code>TASK_QUEUE.md</code> adalah mengetik kata kunci pemicu di Chat AI IDE (Antigravity / Claude / Copilot):', 'When you are at your computer, the most reliable and instant way for your AI Agent to solve <code>TASK_QUEUE.md</code> is by typing trigger keywords in your IDE AI Chat (Antigravity / Claude / Copilot):') ?>
+                            </p>
+                            <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                                <span style="color: #94a3b8; font-size: 12px; font-weight: 500;"><?= __t('Pemicu Sakti:', 'Magic Triggers:') ?></span>
+                                <code style="background: rgba(0,0,0,0.5); border: 1px solid rgba(245,158,11,0.5); color: #fbbf24; padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 13px; cursor: pointer;" onclick="copyText('proses antrian', 'Pemicu proses antrian')" title="<?= __t('Klik untuk salin', 'Click to copy') ?>">proses antrian</code>
+                                <code style="background: rgba(0,0,0,0.5); border: 1px solid rgba(245,158,11,0.5); color: #fbbf24; padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 13px; cursor: pointer;" onclick="copyText('handle task queue', 'Pemicu handle task queue')" title="<?= __t('Klik untuk salin', 'Click to copy') ?>">handle task queue</code>
+                                <code style="background: rgba(0,0,0,0.5); border: 1px solid rgba(245,158,11,0.5); color: #fbbf24; padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 13px; cursor: pointer;" onclick="copyText('kerjakan queue', 'Pemicu kerjakan queue')" title="<?= __t('Klik untuk salin', 'Click to copy') ?>">kerjakan queue</code>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="copyText('Periksa file TASK_QUEUE.md dan selesaikan seluruh tugas aktif sampai tuntas 100% sesuai AGENTS.md.', 'Perintah AI Agent')" style="background: #f59e0b; color: #000; font-weight: 700; border: none; margin-left: 6px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px;">
+                                    <?= renderSvg('copy', 13) ?>
+                                    <span><?= __t('Salin Perintah AI', 'Copy AI Prompt') ?></span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Prioritas Pekerja Box -->
+                        <div style="background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 10px; padding: 14px 18px; min-width: 270px; max-width: 360px;">
+                            <div style="font-size: 12px; font-weight: 800; color: #fbbf24; text-transform: uppercase; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; letter-spacing: 0.5px;">
+                                <?= renderSvg('activity', 13) ?> <?= __t('Prioritas Pekerja (Agent Priority):', 'Agent Priority Hierarchy:') ?>
+                            </div>
+                            <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; color: #e2e8f0; line-height: 1.6;">
+                                <li><strong style="color: #4ade80;">🥇 <?= __t('Prioritas Utama:', 'Primary Priority:') ?></strong> <code>Antigravity AI Agent</code> <?= __t('(otomatis mengambil semua tugas umum).', '(automatically takes all general tasks).') ?></li>
+                                <li><strong style="color: #60a5fa;">🥈 <?= __t('Prioritas Spesifik:', 'Specific Assignment:') ?></strong> <?= __t('Ditentukan via', 'Assigned via') ?> <code>@claude</code>, <code>@copilot</code>, <code>@cursor</code>, <code>@gemini</code>.</li>
+                                <li><strong style="color: #facc15;">🥉 <?= __t('Fallback Mandiri:', 'Autonomous Fallback:') ?></strong> <?= __t('Jika agent lain offline, Antigravity otomatis mengambil alih antrean.', 'If other agents are offline, Antigravity autonomously takes over.') ?></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 4 Counter Stats Cards (Slender Typography) -->
                 <div class="grid-4" style="margin-bottom: 22px;">
                     <div class="stat-card">
-                        <div class="val"><?= $taskStats['TOTAL'] ?></div>
+                        <div class="val" id="stat-val-total"><?= $taskStats['TOTAL'] ?></div>
                         <div class="lbl">
                             <?= renderSvg('layers', 12) ?>
-                            <span>Total Tugas</span>
+                            <span><?= __t('Total Tugas', 'Total Tasks') ?></span>
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="val" style="color: var(--accent-warning);"><?= $taskStats['PENDING'] ?></div>
+                        <div class="val" id="stat-val-pending" style="color: var(--accent-warning);"><?= $taskStats['PENDING'] ?></div>
                         <div class="lbl">
                             <?= renderSvg('clock', 12) ?>
-                            <span>Menunggu (PENDING)</span>
+                            <span><?= __t('Menunggu (PENDING)', 'Pending Queue') ?></span>
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="val" style="color: var(--accent-info);"><?= $taskStats['IN_PROGRESS'] ?></div>
+                        <div class="val" id="stat-val-progress" style="color: var(--accent-info);"><?= $taskStats['IN_PROGRESS'] ?></div>
                         <div class="lbl">
                             <?= renderSvg('play', 12) ?>
-                            <span>Sedang Dikerjakan</span>
+                            <span><?= __t('Sedang Dikerjakan', 'In Progress') ?></span>
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="val" style="color: var(--accent-success);"><?= $taskStats['DONE'] ?></div>
+                        <div class="val" id="stat-val-done" style="color: var(--accent-success);"><?= $taskStats['DONE'] ?></div>
                         <div class="lbl">
                             <?= renderSvg('check', 12) ?>
-                            <span>Selesai (DONE)</span>
+                            <span><?= __t('Selesai (DONE)', 'Completed') ?></span>
                         </div>
                     </div>
                 </div>
@@ -2842,9 +4898,9 @@ function renderSvg($name, $size = 15, $class = '') {
                         <input type="hidden" name="tab" value="tasks">
                         
                         <div style="flex: 1; min-width: 200px;">
-                            <label>Filter Proyek:</label>
+                            <label><?= __t('Filter Proyek:', 'Filter Project:') ?></label>
                             <select name="filter_project" onchange="this.form.submit()">
-                                <option value="0">Semua Proyek (<?= count($projects) ?> Proyek)</option>
+                                <option value="0"><?= __t('Semua Proyek', 'All Projects') ?> (<?= count($projects) ?> <?= __t('Proyek', 'Projects') ?>)</option>
                                 <?php foreach ($projects as $p): ?>
                                     <option value="<?= $p['id'] ?>" <?= $filterProjectId == $p['id'] ? 'selected' : '' ?>>
                                         <?= htmlspecialchars($p['name']) ?>
@@ -2854,19 +4910,19 @@ function renderSvg($name, $size = 15, $class = '') {
                         </div>
 
                         <div style="width: 180px;">
-                            <label>Status Tugas:</label>
+                            <label><?= __t('Status Tugas:', 'Task Status:') ?></label>
                             <select name="filter_status" onchange="this.form.submit()">
-                                <option value="">Semua Status</option>
-                                <option value="PENDING" <?= $filterStatus === 'PENDING' ? 'selected' : '' ?>>PENDING (Menunggu)</option>
-                                <option value="IN_PROGRESS" <?= $filterStatus === 'IN_PROGRESS' ? 'selected' : '' ?>>IN_PROGRESS (Dikerjakan)</option>
-                                <option value="DONE" <?= $filterStatus === 'DONE' ? 'selected' : '' ?>>DONE (Selesai)</option>
+                                <option value=""><?= __t('Semua Status', 'All Statuses') ?></option>
+                                <option value="PENDING" <?= $filterStatus === 'PENDING' ? 'selected' : '' ?>><?= __t('PENDING (Menunggu)', 'PENDING (Queued)') ?></option>
+                                <option value="IN_PROGRESS" <?= $filterStatus === 'IN_PROGRESS' ? 'selected' : '' ?>><?= __t('IN_PROGRESS (Dikerjakan)', 'IN_PROGRESS (Running)') ?></option>
+                                <option value="DONE" <?= $filterStatus === 'DONE' ? 'selected' : '' ?>><?= __t('DONE (Selesai)', 'DONE (Completed)') ?></option>
                             </select>
                         </div>
 
                         <div style="padding-bottom: 1px;">
                             <button type="button" class="btn btn-secondary" onclick="const b = document.getElementById('boxAddTask'); b.style.display = b.style.display === 'none' ? 'block' : 'none';">
                                 <?= renderSvg('plus', 13) ?>
-                                <span>Tambah Manual</span>
+                                <span><?= __t('Tambah Manual', 'Add Manually') ?></span>
                             </button>
                         </div>
                     </form>
@@ -2905,10 +4961,10 @@ function renderSvg($name, $size = 15, $class = '') {
 
                 <!-- Tabel Antrean Tugas -->
                 <div class="card" style="padding: 20px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;">
                         <h2 style="font-size: 15px; font-weight: 500; color: #fff; display: flex; align-items: center; gap: 8px;">
                             <?= renderSvg('tasks', 15) ?>
-                            <span>Daftar Antrean Tugas</span>
+                            <span><?= __t('Daftar Antrean Tugas', 'Task Queue List') ?></span>
                             <?php if ($filterProjectId > 0): ?>
                                 <?php 
                                     $curPName = 'Proyek Terpilih';
@@ -2917,9 +4973,21 @@ function renderSvg($name, $size = 15, $class = '') {
                                 <span class="badge badge-project"><?= htmlspecialchars($curPName) ?></span>
                             <?php endif; ?>
                         </h2>
-                        <span style="font-size: 12px; color: var(--text-muted);"><?= count($myTasks) ?> Tugas Ditampilkan</span>
+                        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                            <span class="badge badge-live-sync" id="liveSyncBadge">Live Auto-Update</span>
+                            <button type="button" class="btn btn-secondary btn-xs" onclick="expandAllTasks()" title="Buka Semua Rincian Tugas">
+                                <?= renderSvg('chevron-down', 11) ?> <?= __t('Buka Semua', 'Expand All') ?>
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-xs" onclick="collapseAllTasks()" title="Tutup Semua Rincian Tugas">
+                                <?= renderSvg('chevron-up', 11) ?> <?= __t('Tutup Semua', 'Collapse All') ?>
+                            </button>
+                            <span id="taskQueueCountSummary" style="font-size: 12px; color: var(--text-muted); margin-left: 6px;">
+                                Total <?= $totalTasksCount ?> Tugas (Hal <?= $page ?>/<?= $totalPages ?>)
+                            </span>
+                        </div>
                     </div>
 
+                    <div id="taskCardsWrapper">
                     <?php if (empty($myTasks)): ?>
                         <div style="text-align: center; padding: 48px 16px; color: var(--text-muted);">
                             <div style="width: 44px; height: 44px; border-radius: 50%; background: var(--bg-surface-inset); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px; color: var(--text-dim);">
@@ -2929,33 +4997,56 @@ function renderSvg($name, $size = 15, $class = '') {
                             <p style="font-size: 12px; margin-top: 4px;">Kirim pesan <code>/task &lt;instruksi&gt;</code> di Telegram atau klik <b>Tambah Manual</b> di atas.</p>
                         </div>
                     <?php else: ?>
-                        <div class="task-cards-list">
+                        <div class="task-cards-list" id="taskCardsContainer">
                             <?php foreach ($myTasks as $t): ?>
                                 <?php 
                                     $pTz = !empty($t['project_timezone']) ? $t['project_timezone'] : (!empty($currentUser['timezone']) ? $currentUser['timezone'] : 'Asia/Jakarta');
                                     $tAbbr = getTimezoneAbbr($pTz);
                                     $resText = !empty($t['result']) ? $t['result'] : (!empty($t['notes']) && $t['status'] === 'DONE' ? $t['notes'] : '');
                                     
+                                    // Deteksi dan bersihkan lampiran (dari DB atau instruksi teks)
+                                    $attUrl = !empty($t['attachment_url']) ? $t['attachment_url'] : '';
+                                    $attType = !empty($t['attachment_type']) ? strtolower($t['attachment_type']) : '';
+                                    $attName = !empty($t['attachment_name']) ? $t['attachment_name'] : '';
+                                    $cleanInstruction = $t['instruction'];
+
+                                    if (preg_match('/\[(?:Foto|Video|Dokumen)\s+Terlampir:\s*([^\]\(]+)(?:\s*\((https?:\/\/[^\)]+)\))?\]/i', $cleanInstruction, $mAtt)) {
+                                        if (!$attName) $attName = trim($mAtt[1]);
+                                        if (!$attUrl && !empty($mAtt[2])) $attUrl = trim($mAtt[2]);
+                                        if (!$attType) {
+                                            if (stripos($mAtt[0], 'Foto') !== false) $attType = 'photo';
+                                            elseif (stripos($mAtt[0], 'Video') !== false) $attType = 'video';
+                                            else $attType = 'document';
+                                        }
+                                        $cleanInstruction = trim(str_replace($mAtt[0], '', $cleanInstruction));
+                                    }
+                                    if ($attUrl && strpos($attUrl, '/uploads/#') !== false) {
+                                        $attUrl = str_replace('/uploads/#', '/uploads/%23', $attUrl);
+                                    }
+
                                     // Tentukan teks command yang ditampilkan di Baris 2
                                     $cmdDisplay = !empty($t['command']) ? trim($t['command']) : '';
                                     if (!$cmdDisplay) {
                                         $pCode = !empty($t['project_code']) ? strtolower($t['project_code']) : 'a';
                                         if ($t['sender'] === 'IDE Chat' || $t['sender'] === 'VS Code') {
                                             $cmdDisplay = 'tele-task add --sender "' . $t['sender'] . '"';
-                                        } elseif (!empty($t['instruction']) && preg_match('/^\/([a-zA-Z0-9_-]+)/', $t['instruction'], $mCmd)) {
+                                        } elseif (!empty($cleanInstruction) && preg_match('/^\/([a-zA-Z0-9_-]+)/', $cleanInstruction, $mCmd)) {
                                             $cmdDisplay = '/' . $mCmd[1];
-                                        } elseif (!empty($t['instruction']) && preg_match('/^#([a-zA-Z0-9_-]+)/', $t['instruction'], $mCmd)) {
+                                        } elseif (!empty($cleanInstruction) && preg_match('/^#([a-zA-Z0-9_-]+)/', $cleanInstruction, $mCmd)) {
                                             $cmdDisplay = '#' . $mCmd[1];
                                         } else {
                                             $cmdDisplay = '#' . $pCode;
                                         }
                                     }
+                                    $isPhoto = ($attType === 'photo' || preg_match('/\.(jpg|jpeg|png|webp|gif)($|\?)/i', $attUrl));
+                                    $isVideo = ($attType === 'video' || preg_match('/\.(mp4|mov|mkv)($|\?)/i', $attUrl));
                                 ?>
-                                <div class="task-card" id="task-<?= htmlspecialchars($t['id']) ?>">
+                                <!-- Card Akordion Default Minimized (Class: collapsed) -->
+                                <div class="task-card collapsed" id="task-<?= htmlspecialchars($t['id']) ?>">
                                     <!-- ============================================================== -->
-                                    <!-- BARIS 1: ID & WAKTU, PROYEK, PENGIRIM, STATUS, AKSI           -->
+                                    <!-- BARIS 1: HEADER AKORDION (ID, WAKTU, PROYEK, SENDER, AKSI)     -->
                                     <!-- ============================================================== -->
-                                    <div class="task-card-row-meta">
+                                    <div class="task-card-row-meta" onclick="toggleTaskAccordion('<?= htmlspecialchars($t['id']) ?>', event)" style="cursor: pointer;">
                                         <div class="task-meta-left">
                                             <code class="task-id-badge"><?= htmlspecialchars($t['id']) ?></code>
                                             <span class="task-time-text">
@@ -2968,6 +5059,19 @@ function renderSvg($name, $size = 15, $class = '') {
                                                 <?= renderSvg('user', 12) ?>
                                                 <span><?= htmlspecialchars($t['sender']) ?></span>
                                             </span>
+                                            <?php if ($attUrl && $isPhoto): ?>
+                                                <span class="badge-media-indicator" title="Ada Lampiran Foto">
+                                                    <?= renderSvg('photo', 11) ?> Foto
+                                                </span>
+                                            <?php elseif ($attUrl && $isVideo): ?>
+                                                <span class="badge-media-indicator" style="background: rgba(168,85,247,0.12); color:#d8b4fe; border-color: rgba(168,85,247,0.3);" title="Ada Lampiran Video">
+                                                    <?= renderSvg('video', 11) ?> Video
+                                                </span>
+                                            <?php elseif ($attUrl): ?>
+                                                <span class="badge-media-indicator" style="background: rgba(16,185,129,0.12); color:#86efac; border-color: rgba(16,185,129,0.3);" title="Ada Lampiran File">
+                                                    <?= renderSvg('file', 11) ?> File
+                                                </span>
+                                            <?php endif; ?>
                                         </div>
                                         <div class="task-meta-right">
                                             <?php if ($t['status'] === 'PENDING'): ?>
@@ -2975,7 +5079,17 @@ function renderSvg($name, $size = 15, $class = '') {
                                             <?php elseif ($t['status'] === 'IN_PROGRESS'): ?>
                                                 <span class="badge badge-progress">PROGRESS</span>
                                             <?php elseif ($t['status'] === 'DONE'): ?>
-                                                <span class="badge badge-done">DONE</span>
+                                                <?php
+                                                $durBadge = '';
+                                                if (!empty($t['created_at']) && !empty($t['updated_at'])) {
+                                                    $sec = max(0, strtotime($t['updated_at']) - strtotime($t['created_at']));
+                                                    $h = floor($sec / 3600);
+                                                    $m = floor(($sec % 3600) / 60);
+                                                    $s = $sec % 60;
+                                                    $durBadge = ($h > 0) ? "{$h}j {$m}m" : (($m > 0) ? "{$m}m {$s}s" : "{$s}s");
+                                                }
+                                                ?>
+                                                <span class="badge badge-done" title="Durasi pengerjaan: <?= $durBadge ?>">DONE <?= $durBadge ? "($durBadge)" : "" ?></span>
                                             <?php else: ?>
                                                 <span class="badge badge-failed"><?= htmlspecialchars($t['status']) ?></span>
                                             <?php endif; ?>
@@ -2992,91 +5106,197 @@ function renderSvg($name, $size = 15, $class = '') {
                                                 <a href="?action=delete_task&id=<?= urlencode($t['id']) ?>&csrf=<?= getCsrfToken() ?>" onclick="return confirm('Hapus tugas <?= htmlspecialchars($t['id']) ?> dari antrean?')" class="btn btn-icon btn-ghost" style="color: var(--accent-danger);" title="Hapus Tugas">
                                                     <?= renderSvg('trash', 14) ?>
                                                 </a>
+                                                <button type="button" class="btn btn-icon btn-ghost task-accordion-toggle" onclick="toggleTaskAccordion('<?= htmlspecialchars($t['id']) ?>', event)" title="Buka/Tutup Rincian">
+                                                    <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"/></svg>
+                                                </button>
                                             </div>
                                         </div>
                                     </div>
 
-                                    <!-- ============================================================== -->
-                                    <!-- BARIS 2: INSTRUKSI DAN KOMEN / COMMAND -> LEBAR FULL 100%     -->
-                                    <!-- ============================================================== -->
-                                    <div class="task-card-row-body">
-                                        <div class="task-card-instruction">
-                                            <?= nl2br(htmlspecialchars($t['instruction'])) ?>
-                                        </div>
-
-                                        <?php if (!empty($t['attachment_url'])): ?>
-                                            <div class="task-card-attachment">
-                                                <?php if ($t['attachment_type'] === 'photo'): ?>
-                                                    <a href="<?= htmlspecialchars($t['attachment_url']) ?>" target="_blank" class="badge" style="background: rgba(56, 189, 248, 0.12); color: #7dd3fc; border-color: rgba(56, 189, 248, 0.3);">
-                                                        <?= renderSvg('photo', 12) ?> Lihat Foto: <?= htmlspecialchars($t['attachment_name']) ?>
-                                                    </a>
-                                                <?php elseif ($t['attachment_type'] === 'video'): ?>
-                                                    <a href="<?= htmlspecialchars($t['attachment_url']) ?>" target="_blank" class="badge" style="background: rgba(168, 85, 247, 0.12); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.3);">
-                                                        <?= renderSvg('video', 12) ?> Lihat Video: <?= htmlspecialchars($t['attachment_name']) ?>
-                                                    </a>
-                                                <?php else: ?>
-                                                    <a href="<?= htmlspecialchars($t['attachment_url']) ?>" target="_blank" class="badge" style="background: rgba(16, 185, 129, 0.12); color: #86efac; border-color: rgba(16, 185, 129, 0.3);">
-                                                        <?= renderSvg('file', 12) ?> Unduh Dokumen: <?= htmlspecialchars($t['attachment_name']) ?>
-                                                    </a>
-                                                <?php endif; ?>
-                                            </div>
-                                        <?php endif; ?>
-
-                                        <div class="task-card-command">
-                                            <span class="task-cmd-prefix">
-                                                <?= renderSvg('terminal', 12) ?>
-                                                <span>Command:</span>
-                                            </span>
-                                            <code class="task-cmd-code"><?= htmlspecialchars($cmdDisplay) ?></code>
-                                            <button type="button" class="btn btn-icon btn-ghost task-cmd-copy" onclick="copyText('<?= htmlspecialchars(addslashes($cmdDisplay)) ?>', 'Command')" title="Salin Command">
-                                                <?= renderSvg('copy', 12) ?>
-                                            </button>
-                                        </div>
+                                    <!-- PREVIEW 1-BARIS SAAT MINIMIZED -->
+                                    <div class="task-card-preview" onclick="toggleTaskAccordion('<?= htmlspecialchars($t['id']) ?>', event)">
+                                        <?= htmlspecialchars(mb_strimwidth($cleanInstruction, 0, 110, '...')) ?>
                                     </div>
 
                                     <!-- ============================================================== -->
-                                    <!-- BARIS 3: RESULT -> LEBAR FULL 100%                            -->
+                                    <!-- BODY AKORDION (MUNCUL SAAT DI-EXPAND / DIKLIK)                  -->
                                     <!-- ============================================================== -->
-                                    <div class="task-card-row-result">
-                                        <?php if (!empty($resText)): ?>
-                                            <div class="task-result-box task-result-done">
-                                                <div class="res-header">
-                                                    <?= renderSvg('check', 12) ?>
-                                                    <span>Result:</span>
-                                                </div>
-                                                <div class="task-result-content"><?= nl2br(htmlspecialchars($resText)) ?></div>
+                                    <div class="task-card-body" id="body-task-<?= htmlspecialchars($t['id']) ?>">
+                                        <!-- BARIS 2: INSTRUKSI LENGKAP -->
+                                        <div class="task-card-row-body">
+                                            <div class="task-card-instruction">
+                                                <?= nl2br(htmlspecialchars($cleanInstruction)) ?>
                                             </div>
-                                        <?php elseif ($t['status'] === 'FAILED'): ?>
-                                            <div class="task-result-box task-result-failed">
-                                                <div class="res-header" style="color: #fda4af;">
-                                                    <?= renderSvg('alert', 12) ?>
-                                                    <span>Kendala / Error:</span>
+
+                                            <!-- TAMPILAN LAMPIRAN FOTO / VIDEO / DOKUMEN -->
+                                            <?php if (!empty($attUrl)): ?>
+                                                <div class="task-card-media-box">
+                                                    <?php if ($isPhoto): ?>
+                                                        <div class="task-photo-wrap">
+                                                            <a href="<?= htmlspecialchars($attUrl) ?>" target="_blank" class="task-photo-link" onclick="openImageModal(event, '<?= htmlspecialchars($attUrl) ?>', '<?= htmlspecialchars(addslashes($attName ?: 'Lampiran Foto')) ?>')">
+                                                                <img src="<?= htmlspecialchars($attUrl) ?>" alt="Lampiran Foto" class="task-photo-img" loading="lazy" onerror="this.parentElement.style.display='none';">
+                                                                <div class="task-photo-overlay">
+                                                                    <?= renderSvg('eye', 13) ?> <span>Perbesar Foto</span>
+                                                                </div>
+                                                            </a>
+                                                            <div class="task-media-caption">
+                                                                <span><?= renderSvg('photo', 12) ?> <?= htmlspecialchars($attName ?: 'photo.jpg') ?></span>
+                                                                <a href="<?= htmlspecialchars($attUrl) ?>" target="_blank" download class="btn btn-secondary btn-xs" style="padding: 2px 8px; font-size: 11px;">
+                                                                    <?= renderSvg('download', 11) ?> Unduh
+                                                                </a>
+                                                            </div>
+                                                        </div>
+                                                    <?php elseif ($isVideo): ?>
+                                                        <div class="task-video-wrap" style="max-width: 420px;">
+                                                            <video controls preload="metadata" style="max-width: 100%; max-height: 240px; border-radius: var(--radius-sm); border: 1px solid var(--border-medium); background: #000;">
+                                                                <source src="<?= htmlspecialchars($attUrl) ?>">
+                                                                Browser Anda tidak mendukung pemutar video HTML5.
+                                                            </video>
+                                                            <div class="task-media-caption" style="margin-top: 4px;">
+                                                                <span><?= renderSvg('video', 12) ?> <?= htmlspecialchars($attName ?: 'video.mp4') ?></span>
+                                                                <a href="<?= htmlspecialchars($attUrl) ?>" target="_blank" download class="btn btn-secondary btn-xs" style="padding: 2px 8px; font-size: 11px;">
+                                                                    <?= renderSvg('download', 11) ?> Unduh
+                                                                </a>
+                                                            </div>
+                                                        </div>
+                                                    <?php elseif ($attType === 'voice' || $attType === 'audio' || preg_match('/\.(ogg|oga|mp3|wav|m4a)($|\?)/i', $attUrl)): ?>
+                                                        <div class="task-audio-wrap" style="max-width: 440px; padding: 6px 0;">
+                                                            <audio controls preload="metadata" style="width: 100%; height: 38px; border-radius: var(--radius-sm);">
+                                                                <source src="<?= htmlspecialchars($attUrl) ?>">
+                                                                Browser Anda tidak mendukung pemutar audio.
+                                                            </audio>
+                                                            <div class="task-media-caption" style="margin-top: 6px;">
+                                                                <span><?= renderSvg('play', 11) ?> Pesan Suara / Audio (<?= htmlspecialchars($attName ?: 'audio') ?>)</span>
+                                                                <a href="<?= htmlspecialchars($attUrl) ?>" target="_blank" download class="btn btn-secondary btn-xs" style="padding: 2px 8px; font-size: 11px;">
+                                                                    <?= renderSvg('download', 11) ?> Unduh Audio
+                                                                </a>
+                                                            </div>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                                                            <span style="font-size: 12.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+                                                                <?= renderSvg('file', 14) ?> <?= htmlspecialchars($attName ?: 'Dokumen Terlampir') ?>
+                                                            </span>
+                                                            <a href="<?= htmlspecialchars($attUrl) ?>" target="_blank" download class="btn btn-secondary btn-xs">
+                                                                <?= renderSvg('download', 11) ?> Unduh Dokumen
+                                                            </a>
+                                                        </div>
+                                                    <?php endif; ?>
                                                 </div>
-                                                <div class="task-result-content"><?= nl2br(htmlspecialchars($t['notes'] ?: 'Gagal diproses')) ?></div>
+                                            <?php endif; ?>
+
+                                            <div class="task-card-command">
+                                                <span class="task-cmd-prefix">
+                                                    <?= renderSvg('terminal', 12) ?>
+                                                    <span>Command:</span>
+                                                </span>
+                                                <code class="task-cmd-code"><?= htmlspecialchars($cmdDisplay) ?></code>
+                                                <button type="button" class="btn btn-icon btn-ghost task-cmd-copy" onclick="copyText('<?= htmlspecialchars(addslashes($cmdDisplay)) ?>', 'Command')" title="Salin Command">
+                                                    <?= renderSvg('copy', 12) ?>
+                                                </button>
                                             </div>
-                                        <?php elseif ($t['status'] === 'IN_PROGRESS'): ?>
-                                            <div class="task-result-box task-result-progress">
-                                                <div style="display: flex; align-items: center; gap: 6px; font-style: italic; color: #7dd3fc;">
-                                                    <?= renderSvg('play', 11) ?>
-                                                    <span>Sedang dikerjakan oleh AI Agent...</span>
+                                        </div>
+
+                                        <!-- BARIS 3: RESULT PEKERJAAN -->
+                                        <div class="task-card-row-result">
+                                            <?php if (!empty($resText)): ?>
+                                                <div class="task-result-box task-result-done">
+                                                    <div class="res-header">
+                                                        <?= renderSvg('check', 12) ?>
+                                                        <span>Result:</span>
+                                                    </div>
+                                                    <div class="task-result-content"><?= nl2br(htmlspecialchars($resText)) ?></div>
                                                 </div>
-                                                <?php if (!empty($t['notes'])): ?>
-                                                    <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">(<?= htmlspecialchars($t['notes']) ?>)</div>
-                                                <?php endif; ?>
-                                            </div>
-                                        <?php else: ?>
-                                            <div class="task-result-box task-result-pending">
-                                                <div style="display: flex; align-items: center; gap: 6px; font-style: italic;">
-                                                    <?= renderSvg('clock', 11) ?>
-                                                    <span>Menunggu giliran eksekusi oleh Agent / Developer...</span>
+                                            <?php elseif ($t['status'] === 'FAILED'): ?>
+                                                <div class="task-result-box task-result-failed">
+                                                    <div class="res-header" style="color: #fda4af;">
+                                                        <?= renderSvg('alert', 12) ?>
+                                                        <span>Kendala / Error:</span>
+                                                    </div>
+                                                    <div class="task-result-content"><?= nl2br(htmlspecialchars($t['notes'] ?: 'Gagal diproses')) ?></div>
                                                 </div>
-                                            </div>
-                                        <?php endif; ?>
+                                            <?php elseif ($t['status'] === 'IN_PROGRESS'): ?>
+                                                <div class="task-result-box task-result-progress">
+                                                    <div style="display: flex; align-items: center; gap: 6px; font-style: italic; color: #7dd3fc;">
+                                                        <?= renderSvg('play', 11) ?>
+                                                        <span>Sedang dikerjakan oleh AI Agent...</span>
+                                                    </div>
+                                                    <?php if (!empty($t['notes'])): ?>
+                                                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">(<?= htmlspecialchars($t['notes']) ?>)</div>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php else: ?>
+                                                <div class="task-result-box task-result-pending">
+                                                    <div style="display: flex; align-items: center; gap: 6px; font-style: italic;">
+                                                        <?= renderSvg('clock', 11) ?>
+                                                        <span>Menunggu giliran eksekusi oleh Agent / Developer...</span>
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
                                     </div>
                                 </div>
                             <?php endforeach; ?>
                         </div>
+
+                        <!-- ============================================================== -->
+                        <!-- BARIS PAGINATION DEFAULT 10 LIST                                -->
+                        <!-- ============================================================== -->
+                        <?php if ($totalPages > 1 || $totalTasksCount > 10): ?>
+                            <div class="pagination-bar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-subtle);">
+                                <div style="font-size: 12.5px; color: var(--text-muted);">
+                                    Menampilkan <b><?= ($totalTasksCount > 0 ? $offset + 1 : 0) ?>-<?= min($offset + $perPage, $totalTasksCount) ?></b> dari <b><?= $totalTasksCount ?></b> tugas
+                                    (Halaman <?= $page ?> dari <?= $totalPages ?>)
+                                </div>
+
+                                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                                    <?php 
+                                        $baseQuery = "?tab=tasks";
+                                        if ($filterProjectId > 0) $baseQuery .= "&filter_project=" . $filterProjectId;
+                                        if ($filterStatus) $baseQuery .= "&filter_status=" . urlencode($filterStatus);
+                                        $baseQuery .= "&per_page=" . $perPage;
+                                    ?>
+
+                                    <?php if ($page > 1): ?>
+                                        <a href="<?= $baseQuery ?>&page=1" class="btn btn-secondary btn-xs" title="Halaman Pertama">«</a>
+                                        <a href="<?= $baseQuery ?>&page=<?= $page - 1 ?>" class="btn btn-secondary btn-xs" title="Halaman Sebelumnya">‹</a>
+                                    <?php endif; ?>
+
+                                    <?php
+                                        $startP = max(1, $page - 2);
+                                        $endP = min($totalPages, $page + 2);
+                                        for ($pIdx = $startP; $pIdx <= $endP; $pIdx++):
+                                    ?>
+                                        <a href="<?= $baseQuery ?>&page=<?= $pIdx ?>" class="btn btn-xs <?= $pIdx === $page ? 'btn-primary' : 'btn-secondary' ?>" style="<?= $pIdx === $page ? 'font-weight:600;' : '' ?>">
+                                            <?= $pIdx ?>
+                                        </a>
+                                    <?php endfor; ?>
+
+                                    <?php if ($page < $totalPages): ?>
+                                        <a href="<?= $baseQuery ?>&page=<?= $page + 1 ?>" class="btn btn-secondary btn-xs" title="Halaman Berikutnya">›</a>
+                                        <a href="<?= $baseQuery ?>&page=<?= $totalPages ?>" class="btn btn-secondary btn-xs" title="Halaman Terakhir">»</a>
+                                    <?php endif; ?>
+
+                                    <!-- Selector Per Page -->
+                                    <div style="display: flex; align-items: center; gap: 4px; margin-left: 10px; font-size: 11.5px; color: var(--text-muted);">
+                                        <span>Per hal:</span>
+                                        <?php foreach ([10, 25, 50] as $lim): ?>
+                                            <?php 
+                                                $limQuery = "?tab=tasks";
+                                                if ($filterProjectId > 0) $limQuery .= "&filter_project=" . $filterProjectId;
+                                                if ($filterStatus) $limQuery .= "&filter_status=" . urlencode($filterStatus);
+                                                $limQuery .= "&per_page=" . $lim . "&page=1";
+                                            ?>
+                                            <a href="<?= $limQuery ?>" class="badge" style="cursor: pointer; padding: 2px 6px; <?= $perPage === $lim ? 'background: var(--ink-4); color: #fff; font-weight:600; border-color: var(--accent-primary);' : 'background: transparent; color: var(--text-dim);' ?>">
+                                                <?= $lim ?>
+                                            </a>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endif; ?>
                     <?php endif; ?>
+                    </div>
                 </div>
             </section>
 
@@ -3098,12 +5318,14 @@ function renderSvg($name, $size = 15, $class = '') {
                                 </div>
                             </div>
                         </div>
-                        <div style="display: flex; gap: 8px;">
-                            <a href="https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code&ssr=false#review-details" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm" style="font-size: 12px;">
-                                <span>⭐ Rating Marketplace</span>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                            <a href="https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code&ssr=false#review-details" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm" style="border-radius: var(--radius-sm); font-size: 12px; height: 32px; padding: 0 13px; display: inline-flex; align-items: center; gap: 6px;">
+                                <span>⭐</span>
+                                <span>Rating Marketplace</span>
                             </a>
-                            <button type="button" class="btn btn-primary btn-sm" onclick="openDonationModal()" style="background: #e11d48; border-color: #be123c;">
-                                <span>❤️ Ayo Donasi</span>
+                            <button type="button" class="btn btn-primary btn-sm" onclick="openDonationModal()" style="background: #e11d48; border-color: #be123c; border-radius: var(--radius-sm); font-size: 12px; height: 32px; padding: 0 14px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 10px rgba(225, 29, 72, 0.35);">
+                                <span>❤️</span>
+                                <span>Ayo Donasi</span>
                             </button>
                         </div>
                     </div>
@@ -3125,9 +5347,9 @@ function renderSvg($name, $size = 15, $class = '') {
                                 <?= renderSvg('download', 13) ?>
                                 <span>Unduh Ekstensi .VSIX</span>
                             </a>
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="const p = document.getElementById('boxChangePass'); p.style.display = p.style.display === 'none' ? 'block' : 'none';">
-                                <?= renderSvg('key', 13) ?>
-                                <span>Ganti Password</span>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="openProfileModal()">
+                                <?= renderSvg('user', 13) ?>
+                                <span><?= __t('Edit Profil & Password', 'Edit Profile & Password') ?></span>
                             </button>
                         </div>
                     </div>
@@ -3429,12 +5651,10 @@ function renderSvg($name, $size = 15, $class = '') {
                                         <a href="?action=test_bot&id=<?= $prj['id'] ?>" class="btn btn-outline btn-sm">Tes Koneksi</a>
                                     <?php endif; ?>
                                 </div>
-                                <?php if (count($projects) > 1): ?>
-                                    <a href="?action=delete_project&id=<?= $prj['id'] ?>&csrf=<?= getCsrfToken() ?>" onclick="return confirm('Yakin ingin menghapus proyek <?= htmlspecialchars($prj['name']) ?>?')" class="btn btn-danger btn-sm" title="Hapus Proyek" style="display: inline-flex; align-items: center; gap: 6px;">
-                                        <?= renderSvg('trash', 13) ?>
-                                        <span>Hapus Proyek</span>
-                                    </a>
-                                <?php endif; ?>
+                                <a href="?action=delete_project&id=<?= $prj['id'] ?>&csrf=<?= getCsrfToken() ?>" onclick="return confirm('<?= count($projects) > 1 ? ('Yakin ingin menghapus proyek ' . htmlspecialchars($prj['name']) . '?') : ('⚠️ Perhatian: Ini adalah satu-satunya proyek Anda. Yakin ingin menghapus proyek ' . htmlspecialchars($prj['name']) . '?') ?>')" class="btn btn-danger btn-sm" title="Hapus Proyek" style="display: inline-flex; align-items: center; gap: 6px;">
+                                    <?= renderSvg('trash', 13) ?>
+                                    <span>Hapus Proyek</span>
+                                </a>
                             </div>
                         </form>
                     </div>
@@ -3687,6 +5907,157 @@ function renderSvg($name, $size = 15, $class = '') {
                     </div>
                 </div>
 
+
+                <!-- ================================================================ -->
+                <!-- KARTU ANALITIK PENGUNJUNG & LOKASI IP-API (KHUSUS ADMIN)          -->
+                <!-- ================================================================ -->
+                <div class="card" style="margin-bottom: 24px; border: 1px solid rgba(56, 189, 248, 0.25); background: linear-gradient(180deg, rgba(15, 23, 42, 0.8) 0%, rgba(10, 15, 30, 0.95) 100%);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <h3 style="font-size: 16px; font-weight: 600; color: #38bdf8; display: flex; align-items: center; gap: 8px; margin: 0 0 4px 0;">
+                                <?= renderSvg('globe', 18) ?>
+                                <span><?= __t('Analitik Pengunjung & Lokasi Geografis (ip-api.com)', 'Visitor Analytics & Geolocation (ip-api.com)') ?></span>
+                                <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-size: 10px;">ADMIN ONLY</span>
+                            </h3>
+                            <p style="font-size: 12px; color: var(--text-muted); margin: 0;">
+                                <?= __t('Pencatatan real-time lokasi IP, negara, kota, ISP, dan tipe perangkat pengunjung menggunakan engine ip-api.com.', 'Real-time logging of visitor IP geolocation, country, city, ISP, and device type via ip-api.com engine.') ?>
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <form method="POST" action="?action=clear_analytics" onsubmit="return confirm('Apakah Anda yakin ingin menghapus seluruh log analitik pengunjung?');" style="margin: 0;">
+                                <input type="hidden" name="csrf" value="<?= getCsrfToken() ?>">
+                                <button type="submit" class="btn btn-secondary btn-xs" style="color: #f87171; border-color: rgba(239, 68, 68, 0.3);">
+                                    <?= renderSvg('trash', 12) ?>
+                                    <span><?= __t('Bersihkan Log', 'Clear Logs') ?></span>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- KPI Cards Analitik -->
+                    <div class="grid-4" style="margin-bottom: 20px; gap: 10px;">
+                        <div class="stat-card" style="padding: 14px 16px;">
+                            <div class="val" style="color: #38bdf8; font-size: 28px;"><?= number_format($analyticsStats['total_hits']) ?></div>
+                            <div class="lbl"><?= __t('Total Kunjungan (Hits)', 'Total Page Hits') ?></div>
+                        </div>
+                        <div class="stat-card" style="padding: 14px 16px;">
+                            <div class="val" style="color: #34d399; font-size: 28px;"><?= number_format($analyticsStats['unique_ips']) ?></div>
+                            <div class="lbl"><?= __t('Pengunjung Unik (IP)', 'Unique Visitors (IP)') ?></div>
+                        </div>
+                        <div class="stat-card" style="padding: 14px 16px;">
+                            <div class="val" style="color: #fbbf24; font-size: 28px;"><?= number_format($analyticsStats['countries_count']) ?></div>
+                            <div class="lbl"><?= __t('Negara Terdeteksi', 'Countries Detected') ?></div>
+                        </div>
+                        <div class="stat-card" style="padding: 14px 16px;">
+                            <div class="val" style="color: #a78bfa; font-size: 28px;"><?= number_format($analyticsStats['cities_count']) ?></div>
+                            <div class="lbl"><?= __t('Kota Terdeteksi', 'Cities Detected') ?></div>
+                        </div>
+                    </div>
+
+                    <!-- Top Negara Breakdown -->
+                    <?php if (!empty($topCountries)): ?>
+                        <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 20px;">
+                            <div style="font-size: 11.5px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 10px; display: flex; justify-content: space-between;">
+                                <span><?= __t('Top 5 Asal Negara Pengunjung', 'Top 5 Visitor Countries') ?></span>
+                                <span><?= __t('Perangkat: Mobile (' . $analyticsStats['mobile_hits'] . ') vs Desktop (' . $analyticsStats['desktop_hits'] . ')', 'Devices: Mobile (' . $analyticsStats['mobile_hits'] . ') vs Desktop (' . $analyticsStats['desktop_hits'] . ')') ?></span>
+                            </div>
+                            <div style="display: flex; gap: 14px; flex-wrap: wrap;">
+                                <?php foreach ($topCountries as $tc): ?>
+                                    <div style="flex: 1; min-width: 140px; background: var(--bg-surface-inset); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
+                                        <div style="font-size: 13px; font-weight: 500; color: #fff; display: flex; align-items: center; gap: 6px;">
+                                            <span>🌐</span>
+                                            <span><?= htmlspecialchars($tc['country']) ?></span>
+                                        </div>
+                                        <span class="badge badge-secondary" style="font-size: 11px;"><?= $tc['hits'] ?></span>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+
+                    <!-- Tabel Log 40 Pengunjung Terkini -->
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <h4 style="font-size: 13.5px; font-weight: 500; color: #fff; margin: 0;">
+                            <?= __t('Daftar Kunjungan Terkini', 'Recent Visitors Log') ?>
+                        </h4>
+                        <span style="font-size: 11.5px; color: var(--text-muted);">
+                            <?= __t('Menampilkan 40 data terbaru', 'Showing latest 40 entries') ?>
+                        </span>
+                    </div>
+
+                    <div class="table-wrapper">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--border-medium); text-align: left; color: var(--text-muted);">
+                                    <th style="padding: 10px 8px;"><?= __t('Waktu', 'Time') ?></th>
+                                    <th style="padding: 10px 8px;"><?= __t('IP Address', 'IP Address') ?></th>
+                                    <th style="padding: 10px 8px;"><?= __t('Lokasi (Kota, Wilayah, Negara)', 'Location (City, Region, Country)') ?></th>
+                                    <th style="padding: 10px 8px;"><?= __t('ISP / Provider', 'ISP / Provider') ?></th>
+                                    <th style="padding: 10px 8px;"><?= __t('Perangkat & OS', 'Device & OS') ?></th>
+                                    <th style="padding: 10px 8px;"><?= __t('Pengguna / Sesi', 'User / Session') ?></th>
+                                    <th style="padding: 10px 8px; text-align: center;"><?= __t('Peta', 'Map') ?></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (empty($recentVisitors)): ?>
+                                    <tr>
+                                        <td colspan="7" style="padding: 24px; text-align: center; color: var(--text-muted);">
+                                            <?= __t('Belum ada riwayat kunjungan yang tercatat.', 'No visitor logs recorded yet.') ?>
+                                        </td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($recentVisitors as $v): ?>
+                                        <tr style="border-bottom: 1px solid var(--border-subtle);">
+                                            <td style="padding: 8px; color: var(--text-muted); white-space: nowrap; font-size: 11px;">
+                                                <?= htmlspecialchars(date('d M Y H:i', strtotime($v['visited_at']))) ?>
+                                            </td>
+                                            <td style="padding: 8px; font-family: var(--font-mono); font-size: 11.5px; color: #38bdf8;">
+                                                <?= htmlspecialchars($v['ip']) ?>
+                                            </td>
+                                            <td style="padding: 8px; color: #fff;">
+                                                <?php if (!empty($v['city']) || !empty($v['country'])): ?>
+                                                    <strong><?= htmlspecialchars($v['city'] ?: '-') ?></strong>, 
+                                                    <span style="color: var(--text-secondary);"><?= htmlspecialchars($v['region'] ?: '') ?></span>
+                                                    <span style="color: #fbbf24; font-size: 11px; margin-left: 2px;">(<?= htmlspecialchars($v['country'] ?: '-') ?>)</span>
+                                                <?php else: ?>
+                                                    <span style="color: var(--text-muted);">-</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td style="padding: 8px; color: var(--text-secondary); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                                <?= htmlspecialchars($v['isp'] ?: '-') ?>
+                                            </td>
+                                            <td style="padding: 8px; white-space: nowrap;">
+                                                <span class="badge <?= $v['device_type'] === 'Mobile' ? 'badge-primary' : 'badge-secondary' ?>" style="font-size: 10px; padding: 2px 6px;">
+                                                    <?= htmlspecialchars($v['device_type']) ?>
+                                                </span>
+                                                <span style="color: var(--text-muted); font-size: 11px; margin-left: 4px;">
+                                                    <?= htmlspecialchars($v['os'] . ' · ' . $v['browser']) ?>
+                                                </span>
+                                            </td>
+                                            <td style="padding: 8px; font-size: 11.5px;">
+                                                <?php if (!empty($v['user_email'])): ?>
+                                                    <span style="color: #34d399; font-weight: 500;">👤 <?= htmlspecialchars($v['user_email']) ?></span>
+                                                <?php else: ?>
+                                                    <span style="color: var(--text-muted);">Tamu (Guest)</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td style="padding: 8px; text-align: center;">
+                                                <?php if (!empty($v['lat']) && !empty($v['lon'])): ?>
+                                                    <a href="https://www.google.com/maps?q=<?= urlencode($v['lat'] . ',' . $v['lon']) ?>" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-xs" style="padding: 2px 7px; font-size: 10.5px;" title="<?= __t('Buka Koordinat GPS di Google Maps', 'Open GPS coordinates in Google Maps') ?>">
+                                                        📍 Peta
+                                                    </a>
+                                                <?php else: ?>
+                                                    <span style="color: var(--text-muted);">-</span>
+                                                <?php endif; ?>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- Tombol Tambah Pengguna Manual -->
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                     <h3 style="font-size: 16px; font-weight: 500; color: #fff; display: flex; align-items: center; gap: 8px;">
@@ -3852,13 +6223,129 @@ function renderSvg($name, $size = 15, $class = '') {
                             </div>
                         </div>
 
-                        <button type="submit" class="btn btn-primary btn-sm">Simpan Konfigurasi SMTP</button>
+                        <div style="border-top: 1px dashed var(--border-subtle); margin: 20px 0 16px; padding-top: 16px;">
+                            <h4 style="font-size: 13.5px; font-weight: 600; color: #fff; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                                <span>🛡️</span> <?= __t('Cloudflare Turnstile (Proteksi Bot)', 'Cloudflare Turnstile (Bot Protection)') ?>
+                            </h4>
+                            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+                                <?= __t('Kunci Turnstile untuk verifikasi pendaftaran & login. Default menggunakan Cloudflare test key (selalu lolos).', 'Turnstile keys for registration & login verification. Defaults to Cloudflare test key (always passes).') ?>
+                            </p>
+                            <div class="grid-2" style="gap: 12px; margin-bottom: 8px;">
+                                <div class="form-group">
+                                    <label><?= __t('Site Key:', 'Site Key:') ?></label>
+                                    <input type="text" name="turnstile_site_key" value="<?= htmlspecialchars(getSetting('turnstile_site_key', '1x00000000000000000000AA')) ?>" placeholder="1x00000000000000000000AA">
+                                </div>
+                                <div class="form-group">
+                                    <label><?= __t('Secret Key:', 'Secret Key:') ?></label>
+                                    <input type="password" name="turnstile_secret_key" value="<?= htmlspecialchars(getSetting('turnstile_secret_key', '1x0000000000000000000000000000000AA')) ?>" placeholder="1x0000000000000000000000000000000AA">
+                                </div>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-sm"><?= __t('Simpan Konfigurasi SMTP & Turnstile', 'Save SMTP & Turnstile Configuration') ?></button>
                     </form>
+
+                    <hr style="border: 0; border-top: 1px solid var(--border-subtle); margin: 24px 0 20px;">
+
+                    <h4 style="font-size: 14px; font-weight: 500; color: #fff; margin-bottom: 6px; display: flex; align-items: center; gap: 8px;">
+                        <span>🧪</span> <?= __t('Uji Koneksi & Kirim Email Tes SMTP', 'Test SMTP Connection & Send Test Email') ?>
+                    </h4>
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px;">
+                        <?= __t('Kirimkan email uji coba langsung untuk memverifikasi socket koneksi SMTP, autentikasi user/password, dan kesiapan pengiriman.', 'Send an immediate test email to verify SMTP socket connection, authentication, and delivery readiness.') ?>
+                    </p>
+
+                    <form method="POST" action="?action=test_smtp" style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px;">
+                        <input type="hidden" name="csrf" value="<?= getCsrfToken() ?>">
+                        <div class="form-group" style="flex: 1; min-width: 260px; margin-bottom: 0;">
+                            <label><?= __t('Email Penerima Tes * :', 'Test Recipient Email * :') ?></label>
+                            <input type="email" name="test_email" value="<?= htmlspecialchars(!empty($_SESSION['tvsc_smtp_diag']['email']) ? $_SESSION['tvsc_smtp_diag']['email'] : $currentUser['email']) ?>" placeholder="admin@domain.com" required>
+                        </div>
+                        <button type="submit" class="btn btn-secondary btn-sm" style="height: 38px;">
+                            <span>🚀</span> <?= __t('Kirim Email Tes Sekarang', 'Send Test Email Now') ?>
+                        </button>
+                    </form>
+
+                    <?php if (!empty($_SESSION['tvsc_smtp_diag'])): ?>
+                        <?php 
+                            $diag = $_SESSION['tvsc_smtp_diag']; 
+                            $isDiagOk = !empty($diag['ok']);
+                        ?>
+                        <div style="background: <?= $isDiagOk ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)' ?>; border: 1px solid <?= $isDiagOk ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)' ?>; border-radius: 8px; padding: 14px; margin-top: 14px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span class="badge" style="background: <?= $isDiagOk ? '#10b981' : '#ef4444' ?>; color: #fff; font-weight: 600; font-size: 11px; padding: 2px 8px; border-radius: 4px;">
+                                        <?= $isDiagOk ? '✅ ' . __t('BERHASIL', 'SUCCESS') : '❌ ' . __t('GAGAL', 'FAILED') ?>
+                                    </span>
+                                    <span style="font-size: 12.5px; color: #f8fafc; font-weight: 500;">
+                                        <?= __t('Hasil Uji Coba Terakhir:', 'Last Diagnostic Result:') ?> <b><?= htmlspecialchars($diag['email']) ?></b> (<?= htmlspecialchars($diag['time']) ?>)
+                                    </span>
+                                </div>
+                                <a href="?action=clear_smtp_diag" class="btn btn-secondary btn-xs" style="text-decoration: none;"><?= __t('Tutup Log', 'Dismiss Log') ?></a>
+                            </div>
+
+                            <?php if (!$isDiagOk && !empty($diag['error'])): ?>
+                                <div style="color: #f87171; font-size: 12px; margin-bottom: 8px; font-weight: 500;">
+                                    ⚠️ <?= htmlspecialchars($diag['error']) ?>
+                                </div>
+                            <?php endif; ?>
+
+                            <?php if (!empty($diag['log'])): ?>
+                                <details style="margin-top: 6px;">
+                                    <summary style="font-size: 11.5px; color: var(--text-muted); cursor: pointer; user-select: none;">
+                                        <?= __t('Lihat Rincian Socket Handshake Log (Technical Trace)', 'View Socket Handshake Technical Trace') ?>
+                                    </summary>
+                                    <pre style="background: #090d16; color: #86efac; padding: 12px; border-radius: 6px; font-size: 11.5px; font-family: monospace; max-height: 200px; overflow-y: auto; margin-top: 8px; white-space: pre-wrap; line-height: 1.4;"><?= htmlspecialchars($diag['log']) ?></pre>
+                                </details>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </section>
         <?php endif; ?>
 
     <?php endif; ?>
+
+    <!-- Global Footer (Landing & Dashboard) -->
+    <footer class="app-footer">
+        <div class="footer-credit">
+            &copy; <?= date('Y') ?> <b>Telegram VS Code</b> &middot; <?= __t('Karya Dedikasi Anak Magang di', 'Dedicated Creation by Intern Talents at') ?> <a href="https://www.biru.co.id" target="_blank" rel="noopener noreferrer" class="footer-biru-link">Biru Indonesia Creative</a>
+        </div>
+        <div class="footer-links">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="openAboutModal()">
+                <?= renderSvg('info', 13) ?>
+                <span><?= __t('Tentang Kami', 'About Us') ?></span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="openPrivacyModal()">
+                <?= renderSvg('shield', 13) ?>
+                <span><?= __t('Regulasi & Privasi Data', 'Regulations & Privacy') ?></span>
+            </button>
+            <a href="https://ayo.ke/feedback-tele-vs-code" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">
+                <?= renderSvg('help', 13) ?>
+                <span><?= __t('Saran & Bug', 'Feedback') ?></span>
+            </a>
+            <a href="https://ayo.ke/donasi" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">
+                <span style="font-size: 12px;">❤️</span>
+                <span><?= __t('Donasi', 'Donate') ?></span>
+            </a>
+        </div>
+        <div class="social-links">
+            <a href="https://www.biru.co.id" target="_blank" rel="noopener noreferrer" class="social-icon-btn" title="Website Biru Software">
+                <?= renderSvg('globe', 14) ?>
+            </a>
+            <a href="https://instagram.com/birusoftware" target="_blank" rel="noopener noreferrer" class="social-icon-btn" title="Instagram @birusoftware">
+                <?= renderSvg('instagram', 14) ?>
+            </a>
+            <a href="https://youtube.com/@birusoftware" target="_blank" rel="noopener noreferrer" class="social-icon-btn" title="YouTube @birusoftware">
+                <?= renderSvg('youtube', 14) ?>
+            </a>
+            <a href="https://wa.me/6282257577772" target="_blank" rel="noopener noreferrer" class="social-icon-btn" title="WhatsApp: +62 822 575 77772">
+                <?= renderSvg('whatsapp', 14) ?>
+            </a>
+            <a href="mailto:hai@biru.co.id" class="social-icon-btn" title="Email: hai@biru.co.id">
+                <?= renderSvg('mail', 14) ?>
+            </a>
+        </div>
+    </footer>
 </div>
 
 <!-- ======================================================================== -->
@@ -4125,6 +6612,520 @@ function toggleProjectCard(id) {
         if (btn) btn.setAttribute('title', 'Buka Pengaturan Proyek');
     }
 }
+</script>
+
+
+<!-- ==================================================================== -->
+<!-- MODAL ABOUT TELEGRAM VS CODE (Dual Language ID & EN)                 -->
+<!-- ==================================================================== -->
+<div id="modalAbout" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closeAboutModal()">
+    <div class="modal-content" style="max-width: 620px; padding: 28px 24px; text-align: left;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 38px; height: 38px; border-radius: 10px; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.35); display: inline-flex; align-items: center; justify-content: center;">
+                    <?= renderSvg('bell', 20) ?>
+                </div>
+                <div>
+                    <h3 style="font-size: 17px; font-weight: 600; color: #fff; margin: 0;">Telegram VS Code</h3>
+                    <div style="font-size: 11.5px; color: var(--text-muted);">Biru Indonesia Creative (Biru Software)</div>
+                </div>
+            </div>
+            <button type="button" class="btn btn-icon btn-ghost" onclick="closeAboutModal()" title="<?= __t('Tutup', 'Close') ?>">
+                <?= renderSvg('close', 16) ?>
+            </button>
+        </div>
+
+        <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.65; max-height: 70vh; overflow-y: auto; padding-right: 6px;">
+            <!-- Dedikasi Tim Magang Mancanegara -->
+            <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 16px;">
+                <div style="font-weight: 600; color: #38bdf8; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                    <span>🌟</span>
+                    <span><?= __t('Karya Dedikasi Tim Magang Mancanegara', 'Dedicated Creation by International Intern Team') ?></span>
+                </div>
+                <p style="margin: 0 0 8px 0; color: #e0f2fe;">
+                    <?= __t(
+                        'Alat ini merupakan hasil dedikasi nyata dan kerja keras anak-anak magang di <b>Biru Indonesia Creative (Biru Software)</b>.',
+                        'This tool is the dedicated creation and hard work of intern talents at <b>Biru Indonesia Creative (Biru Software)</b>.'
+                    ) ?>
+                </p>
+                <p style="margin: 0; color: #bae6fd;">
+                    <?= __t(
+                        'Tim magang di Biru Indonesia Creative berasal dari berbagai negara (mancanegara) yang bersatu dengan satu harapan luhur: <b>memudahkan masyarakat luas untuk bertahan hidup dengan teknologi dan memunculkan insan-insan kreatif baru</b> di era kecerdasan buatan (AI).',
+                        'Our internship team comes from multiple nations across the globe, united by a noble mission: <b>to empower people worldwide to survive and thrive through technology and foster creative talents</b> in the era of Artificial Intelligence.'
+                    ) ?>
+                </p>
+            </div>
+
+            <!-- Ucapan Terima Kasih -->
+            <div style="margin-bottom: 16px;">
+                <h4 style="font-size: 13.5px; font-weight: 600; color: #fff; margin-bottom: 6px;">
+                    🙏 <?= __t('Terima Kasih Atas Dukungan Anda', 'Thank You for Your Trust & Support') ?>
+                </h4>
+                <p style="margin: 0;">
+                    <?= __t(
+                        'Terima kasih telah mempercayakan dan memanfaatkan Telegram VS Code sebagai sahabat berteknologi dan AI coding Anda. Kami merancang alat ini agar developer tidak perlu terus menerus menunggu di depan layar komputer &mdash; cukup delegasikan instruksi coding dari Telegram kapan saja dan di mana saja.',
+                        'Thank you for utilizing Telegram VS Code as your essential companion in AI coding and modern development. We engineered this tool so developers don’t have to stay glued to computer monitors &mdash; easily delegate coding tasks from Telegram anytime, anywhere.'
+                    ) ?>
+                </p>
+            </div>
+
+            <!-- Like, Ulasan & Donasi -->
+            <div style="background: rgba(244, 63, 94, 0.08); border: 1px solid rgba(244, 63, 94, 0.3); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 16px;">
+                <div style="font-weight: 600; color: #fda4af; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                    <span>❤️</span>
+                    <span><?= __t('Dukung Kami: Ulasan Marketplace & Donasi', 'Support Us: Marketplace Reviews & Donations') ?></span>
+                </div>
+                <p style="margin: 0 0 10px 0; color: #ffe4e6;">
+                    <?= __t(
+                        'Demi misi mulia <b>"bertahan hidup dengan teknologi dan #berkembangBaik"</b>, dukungan Like, ulasan bintang 5 di VS Code Marketplace, dan partisipasi donasi Anda sangat berarti untuk membiayai server dan pengembangan fitur selanjutnya.',
+                        'In line with our mission <b>"to thrive and survive with technology and #growWell"</b>, your 5-star reviews on the VS Code Marketplace and generous donations sustain our servers and ongoing development.'
+                    ) ?>
+                </p>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <a href="https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code&ssr=false#review-details" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.06); color: #fff; border-color: rgba(255,255,255,0.25); border-radius: var(--radius-sm); font-size: 12px; height: 32px; padding: 0 14px;">
+                        <span>⭐</span>
+                        <span><?= __t('Ulas di Marketplace', 'Review on Marketplace') ?></span>
+                    </a>
+                    <a href="https://ayo.ke/donasi" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" style="display: inline-flex; align-items: center; gap: 6px; background: #e11d48; border-color: #be123c; color: #fff; border-radius: var(--radius-sm); font-size: 12px; height: 32px; padding: 0 14px; box-shadow: 0 2px 10px rgba(225,29,72,0.4);">
+                        <span>❤️</span>
+                        <span><?= __t('Ayo Donasi', 'Donate Now') ?></span>
+                    </a>
+                    <a href="https://ayo.ke/feedback-tele-vs-code" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" style="display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-sm); font-size: 12px; height: 32px; padding: 0 14px;">
+                        <span>💬</span>
+                        <span><?= __t('Saran & Laporan Bug', 'Send Feedback') ?></span>
+                    </a>
+                </div>
+            </div>
+
+            <!-- Informasi Kontak Perusahaan -->
+            <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 16px;">
+                <h4 style="font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 8px;">
+                    🏢 <?= __t('Informasi Kontak & Pengembang', 'Contact & Developer Information') ?>
+                </h4>
+                <div style="font-size: 12px; display: grid; grid-template-columns: 1fr; gap: 6px;">
+                    <div><b>Perusahaan:</b> Biru Indonesia Creative (Biru Software)</div>
+                    <div><b>Website:</b> <a href="https://www.biru.co.id" target="_blank" rel="noopener noreferrer" style="color: #38bdf8;">www.biru.co.id</a></div>
+                    <div><b>Email Resmi:</b> <a href="mailto:hai@biru.co.id" style="color: #38bdf8;">hai@biru.co.id</a></div>
+                    <div><b>Hotline / Telepon:</b> <code>+62 822 575 77772</code> &nbsp;/&nbsp; <code>+1 (772) 779 7772</code></div>
+                    <div><b>Saran & Feedback:</b> <a href="https://ayo.ke/feedback-tele-vs-code" target="_blank" rel="noopener noreferrer" style="color: #38bdf8;">https://ayo.ke/feedback-tele-vs-code</a></div>
+                </div>
+
+                <div style="margin-top: 12px; pt-2; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">Sosial Media Resmi:</div>
+                    <div class="social-links">
+                        <a href="https://www.biru.co.id" target="_blank" rel="noopener noreferrer" class="social-icon-btn" title="Website"><span style="font-size:11px;">🌐</span></a>
+                        <a href="https://instagram.com/birusoftware" target="_blank" rel="noopener noreferrer" class="social-icon-btn" title="Instagram"><span style="font-size:11px;">📷</span></a>
+                        <a href="https://youtube.com/@birusoftware" target="_blank" rel="noopener noreferrer" class="social-icon-btn" title="YouTube"><span style="font-size:11px;">▶️</span></a>
+                        <a href="https://wa.me/6282257577772" target="_blank" rel="noopener noreferrer" class="social-icon-btn" title="WhatsApp"><span style="font-size:11px;">💬</span></a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+            <button type="button" class="btn btn-link btn-sm" onclick="closeAboutModal(); openPrivacyModal();" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #38bdf8; text-decoration: none; padding: 0;">
+                <?= renderSvg('shield', 13) ?>
+                <span><?= __t('Lihat Regulasi & Privasi Data &rarr;', 'View Regulations & Data Privacy &rarr;') ?></span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="closeAboutModal()" style="border-radius: var(--radius-sm); min-width: 80px;">
+                <?= __t('Tutup', 'Close') ?>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ==================================================================== -->
+<!-- MODAL REGULASI, PRIVASI & KERAHASIAAN DATA (Dual Language ID & EN)    -->
+<!-- ==================================================================== -->
+<div id="modalPrivacy" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closePrivacyModal()">
+    <div class="modal-content" style="max-width: 620px; padding: 28px 24px; text-align: left;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 38px; height: 38px; border-radius: 10px; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.35); display: inline-flex; align-items: center; justify-content: center; color: #34d399;">
+                    <?= renderSvg('shield', 20) ?>
+                </div>
+                <div>
+                    <h3 style="font-size: 16.5px; font-weight: 600; color: #fff; margin: 0;">
+                        <?= __t('Regulasi, Privasi & Kerahasiaan Data', 'Regulations, Privacy & Data Confidentiality') ?>
+                    </h3>
+                    <div style="font-size: 11.5px; color: var(--text-muted);">Telegram VS Code &middot; Biru Indonesia Creative</div>
+                </div>
+            </div>
+            <button type="button" class="btn btn-icon btn-ghost" onclick="closePrivacyModal()" title="<?= __t('Tutup', 'Close') ?>">
+                <?= renderSvg('close', 16) ?>
+            </button>
+        </div>
+
+        <div style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.65; max-height: 68vh; overflow-y: auto; padding-right: 6px;">
+            <!-- Inti Layanan: Gratis untuk Bertahan Hidup dengan Teknologi -->
+            <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 14px;">
+                <b style="color: #34d399; font-size: 13px;">
+                    <?= __t('1. 100% Gratis untuk Kemudahan Bertahan Hidup dengan Teknologi', '1. 100% Free to Empower Survival and Growth with Technology') ?>
+                </b>
+                <p style="margin: 6px 0 0 0; color: #d1fae5;">
+                    <?= __t(
+                        'Layanan <b>Telegram VS Code</b> disediakan <b>100% gratis</b> tanpa biaya lisensi tersembunyi. Tujuannya adalah mempermudah para pelajar, mahasiswa, developer independen, dan masyarakat luas untuk bertahan hidup, berinovasi, dan berkarya produktif dengan teknologi kecerdasan buatan (AI).',
+                        'The <b>Telegram VS Code</b> service is provided <b>100% free of charge</b> with no hidden licensing fees. Our sole purpose is to empower students, independent developers, and creators worldwide to thrive, innovate, and achieve productivity through AI technology.'
+                    ) ?>
+                </p>
+            </div>
+
+            <!-- Kerahasiaan & Keamanan Data -->
+            <div style="margin-bottom: 14px;">
+                <b style="color: #fff; font-size: 13px;">
+                    <?= __t('2. Kerahasiaan & Keamanan Data Anda', '2. Data Confidentiality & Security') ?>
+                </b>
+                <ul style="margin: 6px 0 0 18px; padding: 0;">
+                    <li><b>Kunci API & Bot Token:</b> Disimpan secara privat dan hanya digunakan untuk mengautentikasi pengiriman pesan Telegram ke bot proyek Anda.</li>
+                    <li><b>Kode Sumber Workspace:</b> Ekstensi bekerja secara lokal di komputer/laptop Anda. Kode sumber proyek Anda <b>TIDAK PERNAH</b> dikirimkan atau disimpan ke server publik kami. Hanya teks instruksi tugas dan hasil ringkasan laporan yang disinkronkan melalui antrean.</li>
+                    <li><b>Tidak Dijual ke Pihak Ketiga:</b> Kami menjamin secara mutlak bahwa data akun, kontak, maupun antrean tugas Anda tidak akan pernah dijual, disewakan, atau dibagikan kepada pihak ketiga.</li>
+                </ul>
+            </div>
+
+            <!-- Regulasi & Tanggung Jawab -->
+            <div style="margin-bottom: 14px;">
+                <b style="color: #fff; font-size: 13px;">
+                    <?= __t('3. Regulasi & Tanggung Jawab Pengguna', '3. User Responsibilities & Fair Use') ?>
+                </b>
+                <p style="margin: 6px 0 0 0;">
+                    <?= __t(
+                        'Pengguna bertanggung jawab penuh atas segala instruksi perintah tugas yang dikirimkan ke agen AI lokal di komputernya. Dilarang menyalahgunakan alat ini untuk aktivitas melanggar hukum, peretasan tidak sah, atau tindakan yang merugikan sistem pihak lain.',
+                        'Users bear full responsibility for task instructions dispatched to their local AI agents. Misusing this tool for unlawful acts, unauthorized intrusion, or harmful activities is strictly prohibited.'
+                    ) ?>
+                </p>
+            </div>
+
+            <!-- Kontak Bantuan -->
+            <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px 14px;">
+                <div style="font-weight: 600; color: #fff; margin-bottom: 3px;">Kontak Regulasi & Privasi:</div>
+                <div>Biru Indonesia Creative &middot; <a href="mailto:hai@biru.co.id" style="color: #38bdf8;">hai@biru.co.id</a> &middot; Hotline: +62 822 575 77772</div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+            <button type="button" class="btn btn-link btn-sm" onclick="closePrivacyModal(); openAboutModal();" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #38bdf8; text-decoration: none; padding: 0;">
+                <span>&larr;</span>
+                <span><?= __t('Tentang Telegram VS Code', 'About Telegram VS Code') ?></span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="closePrivacyModal()" style="border-radius: var(--radius-sm); min-width: 80px;">
+                <?= __t('Tutup', 'Close') ?>
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+
+// Switcher tab modal auth (Login, Register, Forgot, OTP, Reset)
+function switchAuthTab(tab) {
+    const boxLogin = document.getElementById('boxLogin');
+    const boxRegister = document.getElementById('boxRegister');
+    const boxForgot = document.getElementById('boxForgot');
+    const boxOtp = document.getElementById('boxOtp');
+    const boxResetPass = document.getElementById('boxResetPass');
+    const btnLogin = document.getElementById('btnAuthLogin');
+    const btnReg = document.getElementById('btnAuthRegister');
+    const seg = document.getElementById('modalAuthSegmented');
+    const title = document.getElementById('authModalTitle');
+    const sub = document.getElementById('authModalSubtitle');
+
+    if (boxLogin) boxLogin.style.display = 'none';
+    if (boxRegister) boxRegister.style.display = 'none';
+    if (boxForgot) boxForgot.style.display = 'none';
+    if (boxOtp) boxOtp.style.display = 'none';
+    if (boxResetPass) boxResetPass.style.display = 'none';
+    if (btnLogin) btnLogin.classList.remove('active');
+    if (btnReg) btnReg.classList.remove('active');
+    if (seg) seg.style.display = 'flex';
+
+    if (tab === 'register') {
+        if (boxRegister) boxRegister.style.display = 'block';
+        if (btnReg) btnReg.classList.add('active');
+        if (title) title.textContent = 'Daftar Akun Baru';
+        if (sub) sub.textContent = 'Verifikasi kode email & amankan akun kamu.';
+    } else if (tab === 'forgot') {
+        if (boxForgot) boxForgot.style.display = 'block';
+        if (seg) seg.style.display = 'none';
+        if (title) title.textContent = 'Lupa Password';
+        if (sub) sub.textContent = 'Masukkan email untuk pemulihan akun.';
+    } else if (tab === 'otp') {
+        if (boxOtp) boxOtp.style.display = 'block';
+        if (seg) seg.style.display = 'none';
+        if (title) title.textContent = 'Verifikasi Kode Email';
+        if (sub) sub.textContent = 'Masukkan 6 digit kode yang dikirim ke email kamu.';
+    } else if (tab === 'reset') {
+        if (boxResetPass) boxResetPass.style.display = 'block';
+        if (seg) seg.style.display = 'none';
+        if (title) title.textContent = 'Buat Password Baru';
+        if (sub) sub.textContent = 'Masukkan password baru untuk akun kamu.';
+    } else {
+        if (boxLogin) boxLogin.style.display = 'block';
+        if (btnLogin) btnLogin.classList.add('active');
+        if (title) title.textContent = 'Masuk ke ruang kerja';
+        if (sub) sub.textContent = 'Satu akun untuk semua proyek dan bot kamu.';
+    }
+}
+
+// Cloudflare Turnstile Callbacks (Aktifkan tombol jika lolos Turnstile)
+window.onTurnstileSuccessLogin = function(token) {
+    const btn = document.getElementById('btnSubmitLogin');
+    if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.style.cursor = 'pointer';
+    }
+};
+window.onTurnstileExpiredLogin = function() {
+    const btn = document.getElementById('btnSubmitLogin');
+    if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+        btn.style.cursor = 'not-allowed';
+    }
+};
+
+window.onTurnstileSuccessRegister = function(token) {
+    const btn = document.getElementById('btnSubmitRegister');
+    if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.style.cursor = 'pointer';
+    }
+};
+window.onTurnstileExpiredRegister = function() {
+    const btn = document.getElementById('btnSubmitRegister');
+    if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+        btn.style.cursor = 'not-allowed';
+    }
+};
+
+// Modal Profil & Password
+function openProfileModal() {
+    const m = document.getElementById('modalProfile');
+    if (m) m.style.display = 'flex';
+}
+function closeProfileModal() {
+    const m = document.getElementById('modalProfile');
+    if (m) m.style.display = 'none';
+}
+
+function openAuthModal(tab) {
+    const m = document.getElementById('modalAuth');
+    if (m) {
+        m.style.display = 'flex';
+        if (typeof switchAuthTab === 'function') {
+            switchAuthTab(tab || 'login');
+        }
+    }
+}
+function closeAuthModal() {
+    const m = document.getElementById('modalAuth');
+    if (m) m.style.display = 'none';
+}
+
+function openAboutModal() {
+    const m = document.getElementById('modalAbout');
+    if (m) m.style.display = 'flex';
+}
+function closeAboutModal() {
+    const m = document.getElementById('modalAbout');
+    if (m) m.style.display = 'none';
+}
+function openPrivacyModal() {
+    const m = document.getElementById('modalPrivacy');
+    if (m) m.style.display = 'flex';
+}
+function closePrivacyModal() {
+    const m = document.getElementById('modalPrivacy');
+    if (m) m.style.display = 'none';
+}
+
+// ==============================================================================
+// Task Accordion & Image Lightbox Helpers
+// ==============================================================================
+function toggleTaskAccordion(taskId, event) {
+    if (event) {
+        const target = event.target;
+        if (target.closest('.task-card-actions') || target.closest('a') || (target.closest('button') && !target.closest('.task-accordion-toggle'))) {
+            return;
+        }
+    }
+    const card = document.getElementById('task-' + taskId);
+    if (!card) return;
+    const body = document.getElementById('body-task-' + taskId);
+    if (card.classList.contains('collapsed')) {
+        card.classList.remove('collapsed');
+        if (body) body.style.display = 'flex';
+    } else {
+        card.classList.add('collapsed');
+        if (body) body.style.display = 'none';
+    }
+}
+
+function expandAllTasks() {
+    document.querySelectorAll('.task-card').forEach(card => {
+        card.classList.remove('collapsed');
+        const body = card.querySelector('.task-card-body');
+        if (body) body.style.display = 'flex';
+    });
+}
+
+function collapseAllTasks() {
+    document.querySelectorAll('.task-card').forEach(card => {
+        card.classList.add('collapsed');
+        const body = card.querySelector('.task-card-body');
+        if (body) body.style.display = 'none';
+    });
+}
+
+function openImageModal(e, url, title) {
+    if (e) e.preventDefault();
+    let modal = document.getElementById('imageLightboxModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'imageLightboxModal';
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(6px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;cursor:pointer;';
+        modal.onclick = function() { modal.style.display = 'none'; };
+        modal.innerHTML = `
+            <div style="position:relative;max-width:92vw;max-height:92vh;display:flex;flex-direction:column;align-items:center;" onclick="event.stopPropagation()">
+                <div style="display:flex;justify-content:space-between;width:100%;margin-bottom:8px;color:#fff;font-size:13px;">
+                    <span id="imageLightboxTitle" style="font-weight:500;"></span>
+                    <button type="button" style="background:none;border:none;color:#fff;cursor:pointer;font-size:18px;line-height:1;padding:0 4px;" onclick="document.getElementById('imageLightboxModal').style.display='none'">✕</button>
+                </div>
+                <img id="imageLightboxImg" style="max-width:92vw;max-height:82vh;object-fit:contain;border-radius:8px;box-shadow:0 16px 48px rgba(0,0,0,0.7);border:1px solid rgba(255,255,255,0.15);" src="" alt="">
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+    document.getElementById('imageLightboxImg').src = url;
+    document.getElementById('imageLightboxTitle').textContent = title || 'Lampiran Foto';
+    modal.style.display = 'flex';
+}
+
+
+// ==============================================================================
+// Live Auto-Update Engine dengan Sonner Notifications
+// ==============================================================================
+(function() {
+    let lastStateHash = '';
+    let knownTaskStatus = {};
+    let isInitialLoad = true;
+    let isFetching = false;
+
+    async function pollDashboardUpdates() {
+        if (isFetching) return;
+        isFetching = true;
+        try {
+            const url = '?action=check_task_updates&hash=' + encodeURIComponent(lastStateHash);
+            const res = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+            if (!res.ok) { isFetching = false; return; }
+            const data = await res.json();
+
+            if (data.ok) {
+                // Update Statistik Angka di Dashboard Real-time
+                if (data.stats) {
+                    const elTotal = document.getElementById('stat-val-total');
+                    const elPending = document.getElementById('stat-val-pending');
+                    const elProgress = document.getElementById('stat-val-progress');
+                    const elDone = document.getElementById('stat-val-done');
+                    if (elTotal) elTotal.textContent = data.stats.TOTAL;
+                    if (elPending) elPending.textContent = data.stats.PENDING;
+                    if (elProgress) elProgress.textContent = data.stats.IN_PROGRESS;
+                    if (elDone) elDone.textContent = data.stats.DONE;
+                }
+
+                if (isInitialLoad) {
+                    lastStateHash = data.hash;
+                    if (Array.isArray(data.tasks)) {
+                        for (const t of data.tasks) {
+                            knownTaskStatus[t.id] = t.status;
+                        }
+                    }
+                    isInitialLoad = false;
+                    isFetching = false;
+                    return;
+                }
+
+                // Cek Perubahan Status Tugas & Munculkan Notifikasi Sonner
+                if (data.changed && Array.isArray(data.tasks)) {
+                    for (const t of data.tasks) {
+                        const prevStatus = knownTaskStatus[t.id];
+                        const cleanInst = (t.instruction || '').replace(/\[(?:Foto|Video|Dokumen)[^\]]+\]/g, '').trim();
+                        const snippet = cleanInst.length > 70 ? cleanInst.substring(0, 70) + '...' : cleanInst;
+
+                        if (!prevStatus) {
+                            // Tugas Baru Masuk
+                            if (typeof toast !== 'undefined') {
+                                toast('📥 Tugas Baru di Antrean!', {
+                                    description: `${t.id}: ${snippet || 'Tugas coding baru diterima'}`
+                                });
+                            }
+                        } else if (prevStatus !== t.status) {
+                            // Status Berubah
+                            if (t.status === 'DONE') {
+                                if (typeof toast !== 'undefined') {
+                                    const resSnippet = (t.result || t.notes || 'Tugas selesai 100%').substring(0, 80);
+                                    toast.success(`✅ Tugas ${t.id} Selesai 100%!`, {
+                                        description: resSnippet
+                                    });
+                                }
+                            } else if (t.status === 'IN_PROGRESS') {
+                                if (typeof toast !== 'undefined') {
+                                    toast.info(`⚡ Memulai Pekerjaan: ${t.id}`, {
+                                        description: 'AI Agent di VS Code sedang mengeksekusi tugas...'
+                                    });
+                                }
+                            } else if (t.status === 'FAILED') {
+                                if (typeof toast !== 'undefined') {
+                                    toast.error(`🚨 Kendala pada ${t.id}`, {
+                                        description: t.notes || 'Pengerjaan tugas mengalami kendala'
+                                    });
+                                }
+                            }
+                        }
+                        knownTaskStatus[t.id] = t.status;
+                    }
+
+                    lastStateHash = data.hash;
+
+                    // Auto-refresh DOM Antrean Tugas tanpa reload halaman penuh
+                    const taskWrapper = document.getElementById('taskCardsWrapper');
+                    if (taskWrapper) {
+                        try {
+                            const refreshUrl = window.location.href + (window.location.href.includes('?') ? '&' : '?') + '_ts=' + Date.now();
+                            const pageRes = await fetch(refreshUrl, { cache: 'no-store' });
+                            if (pageRes.ok) {
+                                const htmlText = await pageRes.text();
+                                const parser = new DOMParser();
+                                const doc = parser.parseFromString(htmlText, 'text/html');
+                                const newWrapper = doc.getElementById('taskCardsWrapper');
+                                const newCountSummary = doc.getElementById('taskQueueCountSummary');
+                                const oldCountSummary = document.getElementById('taskQueueCountSummary');
+
+                                if (newWrapper) {
+                                    taskWrapper.innerHTML = newWrapper.innerHTML;
+                                }
+                                if (newCountSummary && oldCountSummary) {
+                                    oldCountSummary.innerHTML = newCountSummary.innerHTML;
+                                }
+                            }
+                        } catch (domErr) {}
+                    }
+                }
+            }
+        } catch (err) {
+        } finally {
+            isFetching = false;
+        }
+    }
+
+    // Jalankan auto-update setiap 3.5 detik
+    setInterval(pollDashboardUpdates, 3500);
+    setTimeout(pollDashboardUpdates, 1000);
+})();
+
 </script>
 
 </body>

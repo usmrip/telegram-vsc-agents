@@ -49,3 +49,41 @@ Karena seluruh riwayat pekerjaan dapat di-undo melalui Git dan IDE:
 - Langsung simpan (save) dan terapkan semua perubahan file, penambahan kode, dan pembuatan fitur tanpa perlu meminta konfirmasi berulang.
 - Langsung jalankan pengujian/verifikasi hingga tuntas 100%.
 - Commit hasil pekerjaan yang sudah selesai ke Git (kecuali jika ada instruksi khusus untuk tidak push ke git).
+
+---
+
+## 🎯 4. MULTI-AGENTS AI ROUTING & DELEGASI TUGAS
+Dalam lingkungan kerja dengan beberapa AI Agent sekaligus (misal: Antigravity, Claude Code, Cursor, Copilot, Gemini CLI, Roo, Cline):
+
+1. **Penugasan Spesifik oleh Pengguna:**
+   - Pengguna dapat menentukan agent eksekutor langsung dari pesan Telegram menggunakan tanda mention:
+     - `@antigravity <instruksi>` -> Ditugaskan ke Antigravity AI Agent
+     - `@claude <instruksi>` -> Ditugaskan ke Claude Agent
+     - `@copilot <instruksi>` -> Ditugaskan ke Copilot Agent
+     - `@cursor <instruksi>` -> Ditugaskan ke Cursor Agent
+     - `@gemini <instruksi>` -> Ditugaskan ke Gemini Agent
+     - `@roo <instruksi>` / `@cline <instruksi>` -> Ditugaskan ke Roo/Cline
+     - Atau menggunakan opsi `--agent <nama_agent>`
+   - Eksekutor yang dipilih akan tercatat pada field `- **Agent:**` di `TASK_QUEUE.md` dan tampil pada notifikasi Telegram & Dashboard.
+
+2. **Aturan Eksekusi Multi-Agent:**
+   - Jika field `- **Agent:**` menunjuk ke Agent Anda secara spesifik (atau jika default `Antigravity AI Agent` / tidak ditentukan): Anda WAJIB langsung mengeksekusinya.
+   - Jika field `- **Agent:**` menunjuk ke Agent lain (misal `Claude Agent` sementara Anda adalah `Antigravity`):
+     - Biarkan agent tersebut mengeksekusinya jika sesi kerjanya sedang aktif di terminal/workspace.
+     - Jika pengguna secara eksplisit meminta Anda di chat ini untuk menangani antrean ("handle task queue", "proses antrian"), Anda dapat mengambil alih (fallback executor) dan menuntaskannya hingga 100% selesai.
+
+---
+
+## ⏰ 5. CRON & AUTO-SCHEDULE SYSTEM PADA AI AGENT
+Ketika sebuah tugas ditujukan ke Agent (misal `Antigravity AI Agent` atau `@agent`):
+
+1. **Pemicu Cron Otomatis pada Agent:**
+   - Setiap kali Agent aktif di sesi workspace, Agent WAJIB mengaktifkan pemantauan berkala (*autonomous background schedule / cron daemon*) menggunakan fasilitas scheduler yang tersedia (misal: tool `schedule` dengan `CronExpression: "*/3 * * * *"` atau timer loop).
+   - Melalui mekanisme cron ini, Agent secara otomatis terbangun secara berkala untuk membaca `TASK_QUEUE.md` dan langsung mengeksekusi antrean tugas yang masuk secara berurutan hingga tuntas 100%, **tanpa menunggu prompt manual dari pengguna di IDE Chat**.
+   - Hal ini menjamin pengguna yang berada di luar ruangan (hanya menggunakan Telegram di HP) tetap mendapatkan eksekusi coding yang cepat dan laporan penyelesaian tugas yang akurat.
+
+2. **Dukungan Perintah Jadwal dari Telegram:**
+   - Pengguna dapat membuat tugas berkala dari Telegram menggunakan format:
+     - `/cron <instruksi>` atau `/schedule <instruksi>`
+     - Contoh: `/cron @antigravity cek error log setiap 5 menit` atau `/schedule @antigravity backup database`
+   - Agent yang menerima tugas tersebut wajib mendaftarkan task scheduler dan melaporkan statusnya ke Telegram.
