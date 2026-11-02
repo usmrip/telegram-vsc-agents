@@ -88,14 +88,21 @@ function getLatestVsixFile() {
     $candidates = glob(__DIR__ . '/tele-vs-code-*.vsix');
     if (!empty($candidates)) {
         usort($candidates, function($a, $b) {
-            return version_compare(
-                preg_replace('/^.*tele-vs-code-|\.vsix$/', '', $b),
-                preg_replace('/^.*tele-vs-code-|\.vsix$/', '', $a)
-            );
+            $verA = preg_replace('/^.*tele-vs-code-|\.vsix$/', '', $a);
+            $verB = preg_replace('/^.*tele-vs-code-|\.vsix$/', '', $b);
+            // Suffix huruf (misal: 1.0.8a atau 1.0.8-a) adalah revisi lanjutan setelah 1.0.8
+            $numA = preg_replace('/[^0-9.]/', '', $verA);
+            $numB = preg_replace('/[^0-9.]/', '', $verB);
+            if ($numA === $numB && $verA !== $verB) {
+                return strcmp($b, $a);
+            }
+            $cmp = version_compare($verB, $verA);
+            if ($cmp !== 0) return $cmp;
+            return filemtime($b) <=> filemtime($a);
         });
         return $candidates[0];
     }
-    return __DIR__ . '/tele-vs-code-1.0.7.vsix';
+    return __DIR__ . '/tele-vs-code-1.0.8.vsix';
 }
 define('VSIX_FILE', getLatestVsixFile());
 define('SUPERADMIN_EMAIL', 'iam@usm.rip');

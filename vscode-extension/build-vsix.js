@@ -76,6 +76,23 @@ if (fs.existsSync(vsceBin)) {
       } catch (e) {}
     }
 
+    // Alias tanpa tanda hubung jika versi prerelease (misal 1.0.8-a -> tele-vs-code-1.0.8a.vsix)
+    if (version.includes('-')) {
+      const aliasName = `${name}-${version.replace('-', '')}.vsix`;
+      const rootAlias = path.join(path.dirname(extDir), aliasName);
+      fs.copyFileSync(outputVsix, path.join(extDir, aliasName));
+      fs.copyFileSync(outputVsix, rootAlias);
+      if (fs.existsSync(teleVsCodeWebDir)) {
+        fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, aliasName));
+      }
+      if (fs.existsSync(liveWebDir)) {
+        try {
+          fs.copyFileSync(outputVsix, path.join(liveWebDir, aliasName));
+          console.log(`[LIVE DEPLOY] Alias \${aliasName} disinkronkan ke server live!`);
+        } catch (e) {}
+      }
+    }
+
     console.log(`\n🎉 Paket VSIX Resmi Microsoft Berhasil Dibuat!`);
     console.log(`📁 Lokasi file VSIX : ${outputVsix}`);
     console.log(`📁 Lokasi Root     : ${rootOutputVsix}\n`);
@@ -173,6 +190,20 @@ try {
       fs.copyFileSync(outputVsix, path.join(liveWebDir, vsixFileName));
       console.log('[LIVE DEPLOY] Disalin ke server');
     } catch (e) {}
+  }
+  if (version.includes('-')) {
+    const aliasName = `${name}-${version.replace('-', '')}.vsix`;
+    const rootAlias = path.join(path.dirname(extDir), aliasName);
+    fs.copyFileSync(outputVsix, path.join(extDir, aliasName));
+    fs.copyFileSync(outputVsix, rootAlias);
+    if (fs.existsSync(teleVsCodeWebDir)) {
+      fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, aliasName));
+    }
+    if (fs.existsSync(liveWebDir)) {
+      try {
+        fs.copyFileSync(outputVsix, path.join(liveWebDir, aliasName));
+      } catch (e) {}
+    }
   }
 
   fs.rmSync(stagingDir, { recursive: true, force: true });

@@ -43,15 +43,15 @@ install-vsix.cmd
 ```
 *Atau via perintah VS Code CLI langsung:*
 ```bash
-code --install-extension tele-vs-code-1.0.8.vsix --force
+code --install-extension tele-vs-code-1.0.8a.vsix --force
 ```
 
 ### Cara 3: Melalui UI Visual Studio Code (.VSIX)
-1. Unduh paket `tele-vs-code-1.0.8.vsix` dari [GitHub Releases](https://github.com/usmrip/telegram-vsc-agents/releases) atau portal [https://biru.co.id/tele-vs-code/](https://biru.co.id/tele-vs-code/).
+1. Unduh paket `tele-vs-code-1.0.8a.vsix` dari [GitHub Releases](https://github.com/usmrip/telegram-vsc-agents/releases) atau portal [https://biru.co.id/tele-vs-code/](https://biru.co.id/tele-vs-code/).
 2. Buka Visual Studio Code.
 3. Buka panel **Extensions** (`Ctrl + Shift + X`).
 4. Klik menu titik tiga (**`...`**) di pojok kanan atas panel Extensions.
-5. Pilih **"Install from VSIX..."** dan pilih file `tele-vs-code-1.0.8.vsix`.
+5. Pilih **"Install from VSIX..."** dan pilih file `tele-vs-code-1.0.8a.vsix`.
 6. Ekstensi siap digunakan!
 
 ---
@@ -95,7 +95,7 @@ telegram-vsc-agents/
 │       ├── tele-notify.js     # CLI notifikasi Telegram
 │       └── tele-task.js       # CLI manajemen status antrean
 ├── TASK_QUEUE.md              # File antrean tugas AI Agent (di-ignore oleh git)
-├── tele-vs-code-1.0.8.vsix    # Paket instalasi ekstensi VS Code
+├── tele-vs-code-1.0.8a.vsix   # Paket instalasi ekstensi VS Code (alias 1.0.8-a)
 ├── vscode-extension/          # Source code ekstensi VS Code
 │   ├── extension.js
 │   ├── package.json

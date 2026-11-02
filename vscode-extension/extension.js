@@ -51,7 +51,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
     try {
       const fetchHeaders = {
         'Connection': 'close',
-        'User-Agent': 'Tele-vs-Code/1.0.8',
+        'User-Agent': 'Tele-vs-Code/1.0.8a',
         ...(options.headers || {})
       };
       const opt = {
