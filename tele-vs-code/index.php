@@ -102,7 +102,7 @@ function getLatestVsixFile() {
         });
         return $candidates[0];
     }
-    return __DIR__ . '/tele-vs-code-1.0.8.vsix';
+    return __DIR__ . '/tele-vs-code-1.0.9.vsix';
 }
 define('VSIX_FILE', getLatestVsixFile());
 define('SUPERADMIN_EMAIL', 'iam@usm.rip');
