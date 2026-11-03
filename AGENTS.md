@@ -99,3 +99,11 @@ Ketika sebuah tugas ditujukan ke Agent (misal `Antigravity AI Agent` atau `@agen
      - `/cron <instruksi>` atau `/schedule <instruksi>`
      - Contoh: `/cron @antigravity cek error log setiap 5 menit` atau `/schedule @antigravity backup database`
    - Agent yang menerima tugas tersebut wajib mendaftarkan task scheduler dan melaporkan statusnya ke Telegram.
+
+3. **Format Prompt Pemicu Tugas Berkala:**
+   - Prompt resmi dari ekstensi untuk mengaktifkan pemantauan berkala pada AI Agent adalah:
+     👉 `"baca TASK_QUEUE.md secara berkala, buat task berkala untuk membaca dan kerjakan yang berstatus waiting satu persatu"`
+   - Saat AI Agent menerima prompt ini (baik melalui terminal runner, clipboard paste, atau chat IDE), Agent WAJIB langsung:
+     1. Mendaftarkan background schedule/timer (misal tool `schedule` dengan `CronExpression: "*/3 * * * *"` atau timer loop berulang).
+     2. Membaca `TASK_QUEUE.md` secara berkala.
+     3. Mengambil dan mengeksekusi tugas berstatus `[PENDING]` / `[WAITING]` satu per satu secara sekuensial hingga 100% selesai.

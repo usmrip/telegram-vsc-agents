@@ -51,7 +51,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
     try {
       const fetchHeaders = {
         'Connection': 'close',
-        'User-Agent': 'Tele-vs-Code/1.0.11',
+        'User-Agent': 'Tele-vs-Code/1.0.12',
         ...(options.headers || {})
       };
       const opt = {
@@ -1138,6 +1138,15 @@ function activate(context) {
     return agents;
   }
 
+  // Format Prompt Resmi AI Agent (dengan instruksi pemantauan berkala & eksekusi sekuensial)
+  function buildAgentPrompt(taskId = '', instruction = '') {
+    const periodicDirective = 'Baca TASK_QUEUE.md secara berkala, buat task berkala untuk membaca dan kerjakan yang berstatus waiting satu persatu.';
+    if (taskId) {
+      return `Periksa file TASK_QUEUE.md dan selesaikan tugas ${taskId} ("${instruction || ''}") sampai tuntas 100% sesuai AGENTS.md. ${periodicDirective}`;
+    }
+    return `Periksa file TASK_QUEUE.md dan selesaikan seluruh tugas aktif sampai tuntas 100% sesuai AGENTS.md. ${periodicDirective}`;
+  }
+
   // Eksekusi tugas melalui Agent Handler terpilih
   function executeTaskWithAgent(taskId, instruction, agentOverride = null) {
     const cur = getEffectiveConfig();
@@ -1184,9 +1193,7 @@ function activate(context) {
         }
       } catch (e) {}
     }
-    const prompt = taskId
-      ? `Periksa file TASK_QUEUE.md dan selesaikan tugas ${taskId} ("${instruction || ''}") sampai tuntas 100% sesuai AGENTS.md.`
-      : `Periksa file TASK_QUEUE.md dan selesaikan seluruh tugas aktif sampai tuntas 100% sesuai AGENTS.md.`;
+    const prompt = buildAgentPrompt(taskId, instruction);
 
     let term = vscode.window.terminals.find(t => t.name === 'Tele-vs-Code Agent');
     if (!term) {
@@ -1814,7 +1821,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                 showTimedNotification(t('newTaskDoneToast', { id: t.id, brief: instBrief }), 10);
               } else {
                 // Salin prompt ke clipboard sebagai kemudahan
-                const prompt = `Periksa file TASK_QUEUE.md dan selesaikan tugas ${t.id} ("${t.instruction}") sampai tuntas 100% sesuai AGENTS.md.`;
+                const prompt = buildAgentPrompt(t.id, t.instruction);
                 await vscode.env.clipboard.writeText(prompt);
 
                 const currentHandler = (cur.agentHandler || '').trim();
@@ -1972,7 +1979,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
         "📖 Buka TASK_QUEUE.md"
       ).then(act => {
         if (act === "📋 Salin Prompt AI") {
-          const prompt = "Periksa file TASK_QUEUE.md dan selesaikan seluruh tugas aktif sampai tuntas 100% sesuai AGENTS.md.";
+          const prompt = buildAgentPrompt('', '');
           vscode.env.clipboard.writeText(prompt);
           showTimedNotification("📋 Prompt 'proses antrian' berhasil disalin ke clipboard! Tempelkan di Chat AI Agent Anda.", 5);
         } else if (act === "📖 Buka TASK_QUEUE.md") {
@@ -2364,7 +2371,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
       const mInst = block.match(/-\s+\*\*Instruksi:\*\*\s*([^\r\n]+)/i);
       const instruction = mInst ? mInst[1].trim() : '';
 
-      const prompt = `Periksa file TASK_QUEUE.md dan selesaikan tugas ${taskId} ("${instruction}") sampai tuntas 100% sesuai AGENTS.md.`;
+      const prompt = buildAgentPrompt(taskId, instruction);
       await vscode.env.clipboard.writeText(prompt);
 
       // Prompt disalin ke clipboard untuk digunakan oleh AI Agent aktif
@@ -2390,9 +2397,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     const cur = getEffectiveConfig();
     const agyBin = findAgyCli();
     const targetFolder = cur.folder || process.cwd();
-    const prompt = taskId
-      ? `Periksa file TASK_QUEUE.md dan selesaikan tugas ${taskId} ("${instruction || ''}") sampai tuntas 100% sesuai AGENTS.md.`
-      : `Periksa file TASK_QUEUE.md dan selesaikan seluruh tugas aktif sampai tuntas 100% sesuai AGENTS.md.`;
+    const prompt = buildAgentPrompt(taskId, instruction);
 
     let term = vscode.window.terminals.find(t => t.name === 'Tele-vs-Code Agent');
     if (!term) {
@@ -2838,7 +2843,7 @@ TIMEZONE="${matchedProject.timezone || 'Asia/Jakarta'}"
     } else if (pick.action === 'open_file') {
       vscode.commands.executeCommand('telegramNotifier.openQueue');
     } else if (pick.action === 'run_ai') {
-      const prompt = `Periksa file TASK_QUEUE.md dan selesaikan tugas ${task.id} ("${task.instruksi}") sampai tuntas 100% sesuai AGENTS.md.`;
+      const prompt = buildAgentPrompt(task.id, task.instruksi);
       await vscode.env.clipboard.writeText(prompt);
       showTimedNotification(`📋 Prompt tugas [${task.id}] disalin ke clipboard! Tempelkan di Chat AI Agent Anda.`, 5);
     }
