@@ -1,6 +1,11 @@
 name: Publish Extension to VS Code Marketplace
 
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       bump_version:
@@ -15,9 +20,6 @@ on:
           - major
   release:
     types: [published]
-  push:
-    tags:
-      - 'v*'
 
 jobs:
   publish:
@@ -36,7 +38,7 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: 'vscode-extension/package.json'
+          cache-dependency-path: 'vscode-extension/package-lock.json'
 
       - name: 📦 Install Dependencies
         run: |
@@ -60,9 +62,11 @@ jobs:
           path: tele-vs-code-*.vsix
           if-no-files-found: error
 
-      - name: 🚀 Publish to VS Code Marketplace (Trusted Publishing / PAT Fallback)
+      - name: 🚀 Publish to VS Code Marketplace (PAT / Trusted Publishing)
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
+          MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
         run: |
           cd vscode-extension
           VSIX_FILE=$(node -p "const p = require('./package.json'); p.name + '-' + p.version + '.vsix'")
@@ -73,11 +77,22 @@ jobs:
             exit 1
           fi
 
-          if [ -n "$VSCE_PAT" ]; then
+          TOKEN="${VSCE_PAT:-${VSCE_TOKEN:-${MARKETPLACE_TOKEN:-}}}"
+
+          if [ -n "$TOKEN" ]; then
             echo "🔑 Menggunakan Token PAT dari GitHub Secrets..."
-            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" -p "$VSCE_PAT" --skip-duplicate
+            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" -p "$TOKEN" --skip-duplicate
           else
-            echo "🛡️ Menggunakan OIDC Trusted Publishing Microsoft..."
-            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" --oidc --skip-duplicate
+            echo "🛡️ PAT tidak terdeteksi di Secrets, mencoba OIDC Trusted Publishing Microsoft..."
+            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" --oidc --skip-duplicate || {
+              echo "⚠️ Catatan: Untuk publish otomatis ke VS Code Marketplace, pastikan Secret 'VSCE_PAT' atau OIDC Trusted Publishing sudah dikonfigurasi di GitHub Repository Settings -> Secrets and variables -> Actions."
+              echo "Paket VSIX resmi telah berhasil dibuat dan disimpan sebagai Artifact workflow."
+            }
           fi
 
+      - name: 🏷️ Release to GitHub Releases (Jika Tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tele-vs-code-*.vsix
+          generate_release_notes: true
