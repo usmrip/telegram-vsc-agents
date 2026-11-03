@@ -1578,6 +1578,21 @@ function tryExecuteDirectTask(instruction, targetDir) {
     }
   }
 
+  // 5. Restart / Reload VS Code Window
+  const mRestart = inst.match(/^(?:restart|reload)\s*(?:vscode|vs\s*code|window|windows)?$/i);
+  if (mRestart) {
+    setTimeout(() => {
+      try {
+        vscode.commands.executeCommand('workbench.action.reloadWindow');
+      } catch (rErr) {}
+    }, 1500);
+    return {
+      executed: true,
+      report: 'Perintah reload window VS Code berhasil dipicu.',
+      type: 'reload'
+    };
+  }
+
   return { executed: false };
 }
 
