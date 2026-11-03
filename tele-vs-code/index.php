@@ -110,9 +110,9 @@ define('SUPERADMIN_EMAIL', 'iam@usm.rip');
 // ------------------------------------------------------------------------------
 // 1. Database & Schema Initialization (SQLite)
 // ------------------------------------------------------------------------------
-function getDb() {
+function getDb($forceNew = false) {
     static $pdo = null;
-    if ($pdo === null) {
+    if ($forceNew || $pdo === null) {
         $pdo = new PDO('sqlite:' . DB_FILE, null, null, [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_TIMEOUT => 30,
@@ -123,7 +123,9 @@ function getDb() {
         $pdo->exec("PRAGMA foreign_keys = ON;");
         
         // Optimasi: Eksekusi DDL & Migrasi skema database hanya jika versi skema belum up-to-date
-        $ver = (int)$pdo->query("PRAGMA user_version")->fetchColumn();
+        $stmtVer = $pdo->query("PRAGMA user_version");
+        $ver = (int)$stmtVer->fetchColumn();
+        $stmtVer->closeCursor();
         $targetVer = 3;
         if ($ver < $targetVer) {
             runDatabaseMigrations($pdo);
@@ -1249,6 +1251,7 @@ if ($action === 'webhook') {
         $stmtP = $db->prepare("SELECT p.*, u.email, u.api_key, u.is_blocked, u.block_notify, u.timezone as user_timezone FROM projects p JOIN users u ON p.user_id = u.id WHERE p.project_key = ?");
         $stmtP->execute([$pKey]);
         $project = $stmtP->fetch(PDO::FETCH_ASSOC);
+        $stmtP->closeCursor();
         if ($project) {
             if (!empty($project['bot_token'])) {
                 $stmtAll = $db->prepare("SELECT p.*, u.email, u.api_key, u.is_blocked, u.block_notify, u.timezone as user_timezone FROM projects p JOIN users u ON p.user_id = u.id WHERE (p.user_id = ? OR p.bot_token = ?) ORDER BY p.id ASC");
@@ -1263,6 +1266,7 @@ if ($action === 'webhook') {
         $stmtU = $db->prepare("SELECT * FROM users WHERE api_key = ?");
         $stmtU->execute([$apiKey]);
         $user = $stmtU->fetch(PDO::FETCH_ASSOC);
+        $stmtU->closeCursor();
         if ($user) {
             $stmtAll = $db->prepare("SELECT p.*, u.email, u.api_key, u.is_blocked, u.block_notify, u.timezone as user_timezone FROM projects p JOIN users u ON p.user_id = u.id WHERE p.user_id = ? ORDER BY p.id ASC");
             $stmtAll->execute([$user['id']]);
@@ -1332,6 +1336,7 @@ if ($action === 'webhook') {
     $stmtW = $db->prepare("SELECT * FROM bot_whitelist WHERE (telegram_user_id = ? OR (telegram_username != '' AND LOWER(telegram_username) = ?))");
     $stmtW->execute([$senderUserId, $senderUsername]);
     $myWhitelists = $stmtW->fetchAll(PDO::FETCH_ASSOC);
+    $stmtW->closeCursor();
 
     // Filter daftar proyek: HANYA proyek yang benar-benar di-whitelist untuk pengirim ini
     $accessibleProjects = [];
@@ -1406,11 +1411,13 @@ if ($action === 'webhook') {
             $stmtSes = $db->prepare("SELECT active_project_id FROM chat_sessions WHERE chat_id = ?");
             $stmtSes->execute([$incomingChatId . ':' . $senderUserId]);
             $activeProjId = (int)$stmtSes->fetchColumn();
+            $stmtSes->closeCursor();
         }
         if ($activeProjId <= 0) {
             $stmtSes = $db->prepare("SELECT active_project_id FROM chat_sessions WHERE chat_id = ?");
             $stmtSes->execute([$incomingChatId]);
             $activeProjId = (int)$stmtSes->fetchColumn();
+            $stmtSes->closeCursor();
         }
     }
 
@@ -1472,6 +1479,7 @@ if ($action === 'webhook') {
         $stmtRepTask = $db->prepare("SELECT t.*, p.name as project_name, p.code as project_code, p.bot_token, p.chat_id, p.timezone as project_timezone FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.id = ?");
         $stmtRepTask->execute([$repliedTaskId]);
         $repTask = $stmtRepTask->fetch(PDO::FETCH_ASSOC);
+        $stmtRepTask->closeCursor();
 
         if ($repTask) {
             $repTz = !empty($repTask['project_timezone']) ? $repTask['project_timezone'] : $effectiveTz;
@@ -2191,9 +2199,10 @@ if ($action === 'webhook') {
     $explicitProject = null;
     $taskCommand = '';
 
-    if (preg_match('/^\/task(@\w+)?\s+(.+)$/is', $text, $matches)) {
-        $taskCommand = '/task';
-        $instruction = trim($matches[2]);
+    if (preg_match('/^\/(?:task|laporan|report|bug|order|perintah|misi)(@\w+)?(?:\s+(.+))?$/is', $text, $matches)) {
+        $rawSlash = explode('@', substr($text, 1))[0];
+        $taskCommand = '/' . strtolower(explode(' ', $rawSlash)[0]);
+        $instruction = trim($matches[2] ?? '');
     } elseif (preg_match('/^\/(cron|schedule)(@\w+)?(?:\s+(.+))?$/is', $text, $matches)) {
         $taskCommand = '/' . strtolower($matches[1]);
         $instruction = trim($matches[3] ?? '');
@@ -2330,7 +2339,20 @@ if ($action === 'webhook') {
                 }
 
                 $targetFile = $uploadDir . '/' . $attachmentName;
-                $fileData = @file_get_contents($downloadSrc);
+                $fileData = false;
+                if (function_exists('curl_init')) {
+                    $ch = curl_init($downloadSrc);
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+                    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+                    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                    $fileData = curl_exec($ch);
+                    curl_close($ch);
+                }
+                if ($fileData === false || $fileData === null) {
+                    $ctx = stream_context_create(['http' => ['timeout' => 15]]);
+                    $fileData = @file_get_contents($downloadSrc, false, $ctx);
+                }
                 if ($fileData !== false && strlen($fileData) > 0) {
                     // 4. Inspeksi Konten: Cek apakah berkas mengandung tag PHP tersembunyi
                     if (preg_match('/<\?(php|=|\s)/i', $fileData) || stripos($fileData, '__halt_compiler') !== false) {
@@ -2389,17 +2411,20 @@ if ($action === 'webhook') {
             }
         }
 
-        $maxInsRetries = 5;
+        $maxInsRetries = 10;
         for ($insAttempt = 1; $insAttempt <= $maxInsRetries; $insAttempt++) {
             try {
                 $stmtIns = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, attachment_url, attachment_type, attachment_name, command, assigned_agent) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)");
                 $stmtIns->execute([$taskId, $targetProject['user_id'], $targetProject['id'], $instruction, $taskSender, $now, $now, $attachmentUrl, $attachmentType, $attachmentName, $taskCommand, $assignedAgent]);
+                $stmtIns->closeCursor();
                 break;
             } catch (PDOException $pdoErr) {
                 if ($insAttempt === $maxInsRetries) {
                     throw $pdoErr;
                 }
-                usleep(250000); // 250ms
+                // Jika database sedang terkunci/sibuk, reset koneksi PDO dan tunggu jeda progresif
+                $db = getDb(true);
+                usleep(200000 * $insAttempt); // 200ms, 400ms, 600ms...
             }
         }
 
@@ -2449,6 +2474,19 @@ if ($action === 'webhook') {
     echo "OK"; exit;
     } catch (Throwable $webhookErr) {
         @file_put_contents(__DIR__ . '/webhook_error.log', date('Y-m-d H:i:s') . ' ' . $webhookErr->getMessage() . ' in ' . $webhookErr->getFile() . ':' . $webhookErr->getLine() . "\n", FILE_APPEND);
+        // Jangan biarkan Telegram menggantung tanpa balasan
+        if (!empty($targetProject['bot_token']) && !empty($incomingChatId)) {
+            $errNotice = "⚠️ <b>Gagal Memproses Laporan / Tugas</b>\n"
+                       . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                       . "Terjadi kendala teknis saat memproses pesan: <code>" . htmlspecialchars($webhookErr->getMessage()) . "</code>\n\n"
+                       . "Silakan coba kirim ulang perintah atau foto Anda.";
+            callTelegram($targetProject['bot_token'], 'sendMessage', [
+                'chat_id' => $incomingChatId,
+                'text' => $errNotice,
+                'parse_mode' => 'HTML',
+                'reply_to_message_id' => $messageId ?? null
+            ]);
+        }
         echo "OK"; exit;
     }
 }
