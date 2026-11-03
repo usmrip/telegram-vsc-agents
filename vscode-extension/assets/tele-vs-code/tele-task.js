@@ -365,7 +365,9 @@ async function run() {
         }
 
         const notifyJs = getNotifyScript();
-        if (notifyJs) {
+        // Cegah notifikasi ganda: Hanya kirim jika server belum mengirimkan notifikasi mulai (1x saja)
+        const alreadyNotified = (data && (data.start_notified || data.notified_now || data.already_notified));
+        if (notifyJs && !alreadyNotified) {
           try {
             const details = [];
             if (foundInst) details.push(`--detail "Perintah: ${foundInst.replace(/"/g, '\\"')}"`);

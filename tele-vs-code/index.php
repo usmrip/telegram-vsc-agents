@@ -294,6 +294,7 @@ function runDatabaseMigrations($pdo) {
     try { $pdo->exec("ALTER TABLE projects ADD COLUMN last_seen DATETIME DEFAULT NULL"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE projects ADD COLUMN model_email TEXT DEFAULT ''"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE tasks ADD COLUMN assigned_agent TEXT DEFAULT 'Antigravity AI Agent'"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE tasks ADD COLUMN start_notified INTEGER DEFAULT 0"); } catch (Exception $e) {}
     try {
         $pdo->exec("CREATE TABLE IF NOT EXISTS chat_sessions (
             chat_id TEXT PRIMARY KEY,
@@ -2815,8 +2816,8 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
                 $upd = $db->prepare("UPDATE tasks SET updated_at = ?, notes = 'Ditarik antrean oleh VS Code Worker' WHERE id = ?");
                 $upd->execute([$now, $pt['id']]);
 
-                // Kirim notifikasi Telegram jika memulai pekerjaan (Requirement: info detail termasuk perintah)
-                if ($isNewlyStarted && !empty($pt['bot_token']) && !empty($pt['chat_id']) && empty($pt['block_notify'])) {
+                // Kirim notifikasi Telegram jika memulai pekerjaan 1x saja (cek apakah sudah pernah dikirim)
+                if ($isNewlyStarted && empty($pt['start_notified']) && !empty($pt['bot_token']) && !empty($pt['chat_id']) && empty($pt['block_notify'])) {
                     $tz = !empty($pt['timezone']) ? $pt['timezone'] : (!empty($user['timezone']) ? $user['timezone'] : 'Asia/Jakarta');
                     $tzAbbr = getTimezoneAbbr($tz);
                     $instSnippet = htmlspecialchars($pt['instruction']);
@@ -2839,6 +2840,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
                         'text' => $startMsg,
                         'parse_mode' => 'HTML'
                     ]);
+                    $db->prepare("UPDATE tasks SET start_notified = 1 WHERE id = ?")->execute([$pt['id']]);
                 }
             }
         }
@@ -2949,7 +2951,11 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $upd = $db->prepare("UPDATE tasks SET status = 'IN_PROGRESS', updated_at = ?, notes = ? WHERE id = ? AND user_id = ?");
         $upd->execute([$now, $notes, $taskId, $user['id']]);
 
-        if ($task && !empty($task['bot_token']) && !empty($task['chat_id']) && empty($user['block_notify'])) {
+        $alreadyNotified = !empty($task['start_notified']);
+        $notifiedByServer = false;
+
+        // Kirim notifikasi Telegram jika memulai pekerjaan 1x saja (cek apakah sudah pernah dikirim)
+        if (!$alreadyNotified && !empty($task['bot_token']) && !empty($task['chat_id']) && empty($user['block_notify'])) {
             $tz = !empty($task['project_timezone']) ? $task['project_timezone'] : (!empty($user['timezone']) ? $user['timezone'] : 'Asia/Jakarta');
             $tzAbbr = getTimezoneAbbr($tz);
             $instSnippet = htmlspecialchars($task['instruction']);
@@ -2987,9 +2993,18 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
                 $task['attachment_url'] ?? '',
                 ''
             );
+            $db->prepare("UPDATE tasks SET start_notified = 1 WHERE id = ?")->execute([$taskId]);
+            $notifiedByServer = true;
         }
 
-        echo json_encode(['ok' => true, 'id' => $taskId, 'status' => 'IN_PROGRESS']);
+        echo json_encode([
+            'ok' => true,
+            'id' => $taskId,
+            'status' => 'IN_PROGRESS',
+            'start_notified' => ($alreadyNotified || $notifiedByServer) ? 1 : 0,
+            'already_notified' => $alreadyNotified ? true : false,
+            'notified_now' => $notifiedByServer
+        ]);
         exit;
     }
 
