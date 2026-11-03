@@ -23,8 +23,9 @@ const description = pkg.description || 'Telegram sebagai pesuruh VS Code dari ma
 const minEngine = (pkg.engines && pkg.engines.vscode) ? pkg.engines.vscode.replace(/[\^~]/, '') : '1.75.0';
 
 const vsixFileName = `${name}-${version}.vsix`;
-const outputVsix = path.join(extDir, vsixFileName);
-const rootOutputVsix = path.join(path.dirname(extDir), vsixFileName);
+const publishDir = path.join(path.dirname(extDir), 'publish');
+if (!fs.existsSync(publishDir)) fs.mkdirSync(publishDir, { recursive: true });
+const outputVsix = path.join(publishDir, vsixFileName);
 const teleVsCodeWebDir = path.join(path.dirname(extDir), 'tele-vs-code');
 const liveWebDir = 'U:\\domains\\biru.co.id\\public_html\\tele-vs-code';
 
@@ -60,8 +61,7 @@ if (fs.existsSync(vsceBin)) {
       stdio: 'inherit'
     });
 
-    // Salin ke root
-    fs.copyFileSync(outputVsix, rootOutputVsix);
+    // Disimpan langsung ke publishDir sebagai outputVsix
 
     // Salin ke web lokal
     if (fs.existsSync(teleVsCodeWebDir)) {
@@ -79,9 +79,8 @@ if (fs.existsSync(vsceBin)) {
     // Alias tanpa tanda hubung jika versi prerelease (misal 1.0.8-a -> tele-vs-code-1.0.8a.vsix)
     if (version.includes('-')) {
       const aliasName = `${name}-${version.replace('-', '')}.vsix`;
-      const rootAlias = path.join(path.dirname(extDir), aliasName);
-      fs.copyFileSync(outputVsix, path.join(extDir, aliasName));
-      fs.copyFileSync(outputVsix, rootAlias);
+      const publishAlias = path.join(publishDir, aliasName);
+      fs.copyFileSync(outputVsix, publishAlias);
       if (fs.existsSync(teleVsCodeWebDir)) {
         fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, aliasName));
       }
@@ -95,7 +94,7 @@ if (fs.existsSync(vsceBin)) {
 
     console.log(`\n🎉 Paket VSIX Resmi Microsoft Berhasil Dibuat!`);
     console.log(`📁 Lokasi file VSIX : ${outputVsix}`);
-    console.log(`📁 Lokasi Root     : ${rootOutputVsix}\n`);
+    console.log(`📁 Lokasi Publish   : ${publishDir}\n`);
     process.exit(0);
   } catch (vsceErr) {
     console.warn(`[WARN] vsce resmi gagal (${vsceErr.message}), beralih ke fallback internal...`);
@@ -167,7 +166,7 @@ const vsixManifestXml = `<?xml version="1.0" encoding="utf-8"?>
 fs.writeFileSync(path.join(stagingDir, 'extension.vsixmanifest'), vsixManifestXml, 'utf-8');
 
 if (fs.existsSync(outputVsix)) fs.unlinkSync(outputVsix);
-if (fs.existsSync(rootOutputVsix)) fs.unlinkSync(rootOutputVsix);
+// Langsung ke publishDir
 
 try {
   const isWindows = process.platform === 'win32';
@@ -181,7 +180,7 @@ try {
     execSync(`cd "${stagingDir}" && zip -r "${outputVsix}" .`, { stdio: 'inherit' });
   }
 
-  fs.copyFileSync(outputVsix, rootOutputVsix);
+  // Langsung tersimpan di publishDir
   if (fs.existsSync(teleVsCodeWebDir)) {
     fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, vsixFileName));
   }
@@ -193,9 +192,8 @@ try {
   }
   if (version.includes('-')) {
     const aliasName = `${name}-${version.replace('-', '')}.vsix`;
-    const rootAlias = path.join(path.dirname(extDir), aliasName);
-    fs.copyFileSync(outputVsix, path.join(extDir, aliasName));
-    fs.copyFileSync(outputVsix, rootAlias);
+    const publishAlias = path.join(publishDir, aliasName);
+    fs.copyFileSync(outputVsix, publishAlias);
     if (fs.existsSync(teleVsCodeWebDir)) {
       fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, aliasName));
     }
@@ -208,6 +206,8 @@ try {
 
   fs.rmSync(stagingDir, { recursive: true, force: true });
   console.log(`\n🎉 Paket VSIX Berhasil Dibuat!`);
+  console.log(`📁 Lokasi file VSIX : ${outputVsix}`);
+  console.log(`📁 Lokasi Publish   : ${publishDir}\n`);
 } catch (err) {
   console.error(`❌ Gagal kompresi VSIX: ${err.message}`);
   process.exit(1);

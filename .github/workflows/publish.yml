@@ -59,7 +59,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tele-vs-code-vsix
-          path: tele-vs-code-*.vsix
+          path: publish/tele-vs-code-*.vsix
           if-no-files-found: error
 
       - name: 🚀 Publish to VS Code Marketplace (PAT / Trusted Publishing)
@@ -71,20 +71,25 @@ jobs:
           cd vscode-extension
           VSIX_FILE=$(node -p "const p = require('./package.json'); p.name + '-' + p.version + '.vsix'")
           echo "📦 Menyiapkan publikasi berkas: $VSIX_FILE"
-          if [ ! -f "$VSIX_FILE" ]; then
-            echo "❌ Berkas $VSIX_FILE tidak ditemukan di folder vscode-extension!"
-            ls -la
-            exit 1
+          VSIX_PATH="../publish/$VSIX_FILE"
+          if [ ! -f "$VSIX_PATH" ]; then
+            if [ -f "$VSIX_FILE" ]; then
+              VSIX_PATH="$VSIX_FILE"
+            else
+              echo "❌ Berkas $VSIX_FILE tidak ditemukan di publish/ maupun vscode-extension!"
+              ls -la ../publish || ls -la
+              exit 1
+            fi
           fi
 
           TOKEN="${VSCE_PAT:-${VSCE_TOKEN:-${MARKETPLACE_TOKEN:-}}}"
 
           if [ -n "$TOKEN" ]; then
             echo "🔑 Menggunakan Token PAT dari GitHub Secrets..."
-            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" -p "$TOKEN" --skip-duplicate
+            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_PATH" -p "$TOKEN" --skip-duplicate
           else
             echo "🛡️ PAT tidak terdeteksi di Secrets, mencoba OIDC Trusted Publishing Microsoft..."
-            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_FILE" --oidc --skip-duplicate || {
+            npx --yes @vscode/vsce@latest publish --packagePath "$VSIX_PATH" --oidc --skip-duplicate || {
               echo "⚠️ Catatan: Untuk publish otomatis ke VS Code Marketplace, pastikan Secret 'VSCE_PAT' atau OIDC Trusted Publishing sudah dikonfigurasi di GitHub Repository Settings -> Secrets and variables -> Actions."
               echo "Paket VSIX resmi telah berhasil dibuat dan disimpan sebagai Artifact workflow."
             }
@@ -94,5 +99,5 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: tele-vs-code-*.vsix
+          files: publish/tele-vs-code-*.vsix
           generate_release_notes: true
