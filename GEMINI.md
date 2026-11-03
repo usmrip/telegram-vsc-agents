@@ -6,15 +6,26 @@ Sebagai Agent AI otonom di workspace ini, Anda memiliki kewajiban utama untuk me
 Setiap kali Anda menerima giliran bicara, prompt, atau instruksi apapun dari USER di IDE Chat ini:
 1. **LANGKAH 1 (PRIORITAS UTAMA - PERIKSA TASK_QUEUE.md):**
    - Periksa file `TASK_QUEUE.md` di root proyek.
-   - Jika terdapat tugas berstatus `[PENDING]` atau `[IN_PROGRESS]` (terutama tugas masuk dari Telegram):
-     👉 **ANDA WAJIB OTOMATIS MENGEKSEKUSI TUGAS TERSEBUT SAMPAI SELESAI 100%!**
-     - Jangan menunggu diminta secara khusus.
-     - Ubah status menjadi `[IN_PROGRESS]` saat mulai dikerjakan.
-     - Terapkan perubahan kode yang diminta dan lakukan pengujian/verifikasi.
-     - Setelah tuntas 100%, tandai selesai menggunakan perintah:
-       `node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"`
-       *(Perintah ini otomatis memperbarui status di dashboard server menjadi DONE, mencatat riwayat ke TASK_QUEUE.md, dan mengirim notifikasi SELESAI ke Telegram)*.
-     - Jika terdapat beberapa antrean, proses satu per satu secara berurutan.
+   - Periksa apakah ada tugas aktif di bagian `## ⏳ Tugas Aktif`.
+   - **ATURAN MUTLAK STATUS & EKSEKUSI SEKUENSIAL:**
+     1. **Hak Mengubah ke `[IN_PROGRESS]`:**
+        - HANYA AI Agent yang mengeksekusi tugas (yang benar-benar membaca `TASK_QUEUE.md` dan mulai bekerja) atau instruksi yang disalin/dimasukkan langsung ke IDE Chat yang berhak mengubah status menjadi `[IN_PROGRESS]`.
+        - Server, worker, dan webhook sync TIDAK BERHAK mengubah status tugas baru menjadi `[IN_PROGRESS]`—tugas baru harus tetap `[PENDING]` (atau `[WAITING]`).
+     2. **Pengerjaan Satu per Satu (Sekuensial Murni):**
+        - Tugas WAJIB dikerjakan **satu per satu secara berurutan**.
+        - **Selama masih ada tugas yang berstatus `[IN_PROGRESS]`:**
+          👉 Tugas lain yang berstatus `[PENDING]`, `[WAITING]`, atau `[QUEUE]` **TIDAK BOLEH BERUBAH STATUSNYA DAN TIDAK BOLEH DIKERJAKAN**.
+          👉 Selesaikan tugas yang sedang `[IN_PROGRESS]` tersebut sampai tuntas 100% terlebih dahulu.
+     3. **Memulai Tugas Antrean Berikutnya:**
+        - Jika TIDAK ADA tugas yang sedang `[IN_PROGRESS]` dan terdapat tugas `[PENDING]`:
+          - Ambil tugas `[PENDING]` yang pertama.
+          - Ubah statusnya menjadi `[IN_PROGRESS]` menggunakan:
+            `node .vscode/tele-vs-code/tele-task.js start "<TASK-ID>"`
+          - Terapkan perubahan kode yang diminta dan lakukan pengujian/verifikasi hingga tuntas 100%.
+          - Tandai selesai menggunakan perintah:
+            `node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"`
+            *(Perintah ini otomatis memperbarui status di server menjadi DONE, mencatat riwayat ke TASK_QUEUE.md, dan mengirim notifikasi SELESAI ke Telegram)*.
+          - Baru setelah itu, lanjutkan ke tugas `[PENDING]` berikutnya (satu per satu).
 
 2. **LANGKAH 2 (PENCATATAN PERINTAH BARU DARI USER):**
    - Jika tugas antrean sudah selesai atau tidak ada antrean aktif, dan user memberikan instruksi baru di chat ini:
@@ -27,7 +38,7 @@ Setiap kali Anda menerima giliran bicara, prompt, atau instruksi apapun dari USE
 3. **KATA KUNCI PEMICU INSTAN (TRIGGER KEYWORDS):**
    Jika user mengetik kata kunci singkat seperti:
    `proses antrian`, `kerjakan queue`, `next task`, `cek queue`, `/queue`, `/run`, atau `lanjutkan`:
-   👉 Anda WAJIB langsung membaca `TASK_QUEUE.md`, mengambil tugas aktif berikutnya, dan menyelesaikannya sampai tuntas.
+   👉 Anda WAJIB langsung membaca `TASK_QUEUE.md`, mengambil tugas aktif berikutnya sesuai aturan sekuensial di atas, dan menyelesaikannya sampai tuntas.
 
 ---
 

@@ -51,7 +51,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
     try {
       const fetchHeaders = {
         'Connection': 'close',
-        'User-Agent': 'Tele-vs-Code/1.0.10',
+        'User-Agent': 'Tele-vs-Code/1.0.11',
         ...(options.headers || {})
       };
       const opt = {
@@ -1149,6 +1149,41 @@ function activate(context) {
     }
 
     const targetFolder = cur.folder || process.cwd();
+    const queueFile = path.join(targetFolder, 'TASK_QUEUE.md');
+
+    // Aturan Sekuensial: Periksa apakah ada tugas lain yang masih [IN_PROGRESS]
+    if (taskId && fs.existsSync(queueFile)) {
+      try {
+        const qText = fs.readFileSync(queueFile, 'utf-8');
+        const activeSection = qText.split('## ✅ Riwayat Tugas Selesai')[0];
+        const regexProg = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/gi;
+        let mProg;
+        const cleanCurrent = taskId.toLowerCase().replace(/^#/, '');
+        while ((mProg = regexProg.exec(activeSection)) !== null) {
+          const foundId = mProg[1];
+          if (foundId.toLowerCase().replace(/^#/, '') !== cleanCurrent) {
+            const warnMsg = `⚠️ [Tele-vs-Code] Tugas ${foundId} masih berstatus [IN_PROGRESS]. Berdasarkan aturan, tugas harus dikerjakan satu per satu secara sekuensial.`;
+            log('warn', warnMsg);
+            vscode.window.showWarningMessage(warnMsg);
+            return { executed: false, reason: 'Ada tugas lain yang sedang IN_PROGRESS' };
+          }
+        }
+      } catch (qErr) {}
+    }
+
+    // Panggil tele-task start untuk mengubah status ke IN_PROGRESS jika taskId disediakan
+    if (taskId) {
+      try {
+        const taskCandidates = [
+          path.join(targetFolder, '.vscode', 'tele-vs-code', 'tele-task.js'),
+          path.join(targetFolder, 'tele-task.js')
+        ];
+        const taskScript = taskCandidates.find(p => fs.existsSync(p));
+        if (taskScript) {
+          execSync(`node "${taskScript}" start "${taskId}" --force`, { cwd: targetFolder, stdio: 'pipe' });
+        }
+      } catch (e) {}
+    }
     const prompt = taskId
       ? `Periksa file TASK_QUEUE.md dan selesaikan tugas ${taskId} ("${instruction || ''}") sampai tuntas 100% sesuai AGENTS.md.`
       : `Periksa file TASK_QUEUE.md dan selesaikan seluruh tugas aktif sampai tuntas 100% sesuai AGENTS.md.`;
@@ -1643,7 +1678,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     }
 
     const operator = `${os.userInfo().username}@${os.hostname()}`;
-    let url = `${cur.webhookUrl.replace(/\/?$/, '/')}?action=pull&secret=${cur.secretKey}&limit=5&format=json&mark=1&workspace_folder=${encodeURIComponent(cur.folder)}&workspace_name=${encodeURIComponent(path.basename(cur.folder))}&operator=${encodeURIComponent(operator)}`;
+    let url = `${cur.webhookUrl.replace(/\/?$/, '/')}?action=pull&secret=${cur.secretKey}&limit=5&format=json&mark=0&workspace_folder=${encodeURIComponent(cur.folder)}&workspace_name=${encodeURIComponent(path.basename(cur.folder))}&operator=${encodeURIComponent(operator)}`;
     if (cur.project) {
       url += `&project=${encodeURIComponent(cur.project)}`;
     }
@@ -1686,9 +1721,11 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
             }
           }
 
-          // Catat tugas ke TASK_QUEUE.md
+          // Catat tugas ke TASK_QUEUE.md (Hak ubah status: Tugas baru dari server masuk sebagai PENDING)
           const agentName = t.assigned_agent || t.agent || 'Antigravity AI Agent';
-          const taskBlock = `### [IN_PROGRESS] ${t.id}\n- **Waktu:** ${t.created_at}\n- **Pengirim:** ${t.sender}\n- **Agent:** ${agentName}\n- **Instruksi:** ${t.instruction}${attachLines}\n- **Status:** IN_PROGRESS\n\n`;
+          const targetStatus = (t.status === 'DONE' || t.status === 'FAILED') ? t.status : (t.status === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'PENDING');
+          const targetNote = targetStatus === 'IN_PROGRESS' ? 'Sedang dikerjakan oleh AI Agent...' : 'Menunggu giliran eksekusi oleh AI Agent...';
+          const taskBlock = `### [${targetStatus}] ${t.id}\n- **Waktu:** ${t.created_at}\n- **Pengirim:** ${t.sender}\n- **Agent:** ${agentName}\n- **Instruksi:** ${t.instruction}${attachLines}\n- **Status:** ${targetStatus}\n- **Catatan:** ${targetNote}\n\n`;
           let isNewTask = false;
           if (!content.includes(t.id)) {
             newTasksCount++;
@@ -1702,14 +1739,19 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
           }
           fs.writeFileSync(queueFile, content, 'utf-8');
 
-          // Kirim notifikasi memulai pekerjaan ke Telegram jika tugas baru masuk (Requirement: info detail termasuk perintah)
+          // Kirim notifikasi antrean ke Telegram jika tugas baru masuk
           if (isNewTask && t.status !== 'DONE' && !cur.autoExecuteSimpleTasks) {
             try {
-              await sendTelegramMessage(cur.botToken, cur.chatId, `Memulai Pekerjaan: ${t.id}`, 'PROSES', [
+              const notifyStatus = targetStatus === 'IN_PROGRESS' ? 'PROSES' : 'INFO';
+              const notifyTitle = targetStatus === 'IN_PROGRESS' ? `Memulai Pekerjaan: ${t.id}` : `Tugas Masuk Antrean: ${t.id}`;
+              const statusDesc = targetStatus === 'IN_PROGRESS'
+                ? 'Diterima oleh VS Code & sedang dikerjakan oleh AI Agent...'
+                : 'Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)';
+              await sendTelegramMessage(cur.botToken, cur.chatId, notifyTitle, notifyStatus, [
                 `Perintah: ${t.instruction}`,
                 `Pengirim: ${t.sender}`,
                 `Waktu Diterima: ${t.created_at || 'Baru saja'}`,
-                `Status: Diterima oleh VS Code & sedang dikerjakan oleh AI Agent...`
+                `Status: ${statusDesc}`
               ], cur.project, cur.timezone);
             } catch (pErr) {}
           }
@@ -1778,9 +1820,16 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                 const currentHandler = (cur.agentHandler || '').trim();
                 const runBtnLabel = currentHandler ? t('btnRunVia', { agent: currentHandler === 'custom' ? 'Custom Agent' : currentHandler.toUpperCase() }) : t('btnSelectAgent');
 
-                // Jika autoDispatchAgent aktif dan handler terisi, langsung jalankan tanpa menunggu klik
+                // Jika autoDispatchAgent aktif dan handler terisi, periksa aturan sekuensial
                 if (cur.autoDispatchAgent && currentHandler) {
-                  executeTaskWithAgent(t.id, t.instruction);
+                  const qContentNow = fs.existsSync(queueFile) ? fs.readFileSync(queueFile, 'utf-8') : '';
+                  const activeSec = qContentNow.split('## ✅ Riwayat Tugas Selesai')[0];
+                  const mActive = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i.exec(activeSec);
+                  if (!mActive || mActive[1].toLowerCase() === t.id.toLowerCase()) {
+                    executeTaskWithAgent(t.id, t.instruction);
+                  } else {
+                    log('info', `[SEKUENSIAL] Menunda auto-dispatch ${t.id} karena tugas ${mActive[1]} masih [IN_PROGRESS].`);
+                  }
                 }
 
                 showTimedNotification(
@@ -2299,7 +2348,12 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     try {
       const content = fs.readFileSync(queueFile, 'utf-8');
       const activeSection = content.split('## ✅ Riwayat Tugas Selesai')[0];
-      const match = /###\s+\[(PENDING|IN_PROGRESS)\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/i.exec(activeSection);
+      // Prioritaskan tugas yang sedang IN_PROGRESS terlebih dahulu
+      let match = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/i.exec(activeSection);
+      if (!match) {
+        // Jika tidak ada yang IN_PROGRESS, ambil tugas PENDING pertama
+        match = /###\s+\[(PENDING|WAITING|QUEUE)\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/i.exec(activeSection);
+      }
       if (!match) {
         vscode.window.showInformationMessage('ℹ️ Tidak ada tugas aktif [PENDING] atau [IN_PROGRESS] di antrean TASK_QUEUE.md.');
         return;

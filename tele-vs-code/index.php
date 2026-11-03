@@ -2761,7 +2761,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
     // Pull Pending Tasks (Opsional filter by project_id / project_key / code / name)
     if ($action === 'api_pull') {
         $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 1;
-        $mark = ($_GET['mark'] ?? '1') === '1';
+        $mark = ($_GET['mark'] ?? '0') === '1';
         $prjFilter = $_GET['project_id'] ?? ($_GET['project'] ?? ($_GET['code'] ?? ''));
         $wsFolder = trim($_GET['workspace_folder'] ?? ($_POST['workspace_folder'] ?? ''));
         $operator = trim($_GET['operator'] ?? ($_POST['operator'] ?? ''));
@@ -2908,10 +2908,25 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
     }
 
         // Update Status Tugas Menjadi IN_PROGRESS (Requirement: notifikasi telegram jika memulai pekerjaan detail termasuk perintah)
-    if ($action === 'api_in_progress') {
+        if ($action === 'api_in_progress') {
         $taskId = $_GET['id'] ?? ($_POST['id'] ?? '');
         $notes = trim($_POST['notes'] ?? ($_GET['notes'] ?? 'Sedang dikerjakan oleh AI Agent'));
         $now = date('Y-m-d H:i:s');
+
+        // Aturan Sekuensial: Hanya satu tugas yang boleh [IN_PROGRESS] pada satu waktu
+        $stmtChk = $db->prepare("SELECT id FROM tasks WHERE user_id = ? AND status = 'IN_PROGRESS' AND id != ? LIMIT 1");
+        $stmtChk->execute([$user['id'], $taskId]);
+        $existingProg = $stmtChk->fetch(PDO::FETCH_ASSOC);
+        if ($existingProg && empty($_REQUEST['force'])) {
+            http_response_code(409);
+            echo json_encode([
+                'ok' => false,
+                'error' => "Tugas #{$existingProg['id']} masih berstatus [IN_PROGRESS]. Berdasarkan aturan, tugas harus dikerjakan satu per satu secara sekuensial.",
+                'active_task_id' => $existingProg['id']
+            ]);
+            exit;
+        }
+
         $upd = $db->prepare("UPDATE tasks SET status = 'IN_PROGRESS', updated_at = ?, notes = ? WHERE id = ? AND user_id = ?");
         $upd->execute([$now, $notes, $taskId, $user['id']]);
 

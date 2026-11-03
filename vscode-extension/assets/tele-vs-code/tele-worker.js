@@ -15,7 +15,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
         ...options,
         headers: {
           'Connection': 'close',
-          'User-Agent': 'Tele-vs-Code/1.0.10',
+          'User-Agent': 'Tele-vs-Code/1.0.11',
           ...(options.headers || {})
         },
         signal: options.signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined)
@@ -170,7 +170,7 @@ console.log(`================================================================\n`
 async function fetchNextTask() {
   try {
     const operator = `${os.userInfo().username}@${os.hostname()}`;
-    let url = `${normalizedUrl}?action=pull&secret=${secretKey}&limit=1&format=json&mark=1&workspace_folder=${encodeURIComponent(projectDir)}&operator=${encodeURIComponent(operator)}`;
+    let url = `${normalizedUrl}?action=pull&secret=${secretKey}&limit=1&format=json&mark=0&workspace_folder=${encodeURIComponent(projectDir)}&operator=${encodeURIComponent(operator)}`;
     if (projectKey) {
       url += `&project=${encodeURIComponent(projectKey)}`;
     }
@@ -247,13 +247,15 @@ function recordActiveTask(task) {
     if (content.includes(task.id)) return; // sudah tercatat
 
     const agentName = task.assigned_agent || task.agent || 'Antigravity AI Agent';
-    const activeBlock = `### [IN_PROGRESS] ${task.id}
+    const status = (task.status === 'DONE' || task.status === 'FAILED') ? task.status : (task.status === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'PENDING');
+    const note = status === 'IN_PROGRESS' ? 'Sedang dikerjakan oleh AI Agent...' : 'Menunggu giliran eksekusi oleh AI Agent...';
+    const activeBlock = `### [${status}] ${task.id}
 - **Waktu:** ${task.created_at}
 - **Pengirim:** ${task.sender}
 - **Agent:** ${agentName}
 - **Instruksi:** ${task.instruction.replace(/\r?\n/g, ' ')}
-- **Status:** IN_PROGRESS
-- **Catatan:** Sedang dikerjakan oleh AI Agent...
+- **Status:** ${status}
+- **Catatan:** ${note}
 
 `;
     const activeMarker = '## ⏳ Tugas Aktif';
@@ -487,16 +489,15 @@ async function executeTask(task) {
     // 3. TUGAS PENGEMBANGAN / CODING / AGENT TASK:
     // Dicatat ke TASK_QUEUE.md untuk diselesaikan oleh AI Agent
     recordActiveTask(task);
-    await markTaskStatus(task.id, 'IN_PROGRESS', 'Sedang dikerjakan oleh AI Agent');
-
-    sendNotification(`Tugas Diterima: ${task.id}`, 'PROSES', [
+    // Sesuai aturan: Worker TIDAK mengubah status ke [IN_PROGRESS]. Tugas tetap [PENDING] sampai AI Agent aktif mengeksekusinya.
+    sendNotification(`Tugas Masuk Antrean: ${task.id}`, 'INFO', [
       `Instruksi: ${inst.substring(0, 90)}`,
       `Pengirim: ${task.sender}`,
-      `Status: Masuk TASK_QUEUE.md (Sedang dikerjakan oleh AI Agent...)`
+      `Status: Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)`
     ]);
 
-    console.log(`⚡ [${task.id}] Tugas dicatat ke TASK_QUEUE.md dengan status [IN_PROGRESS].`);
-    console.log(`📢 Notifikasi PROSES dikirim ke Telegram.`);
+    console.log(`⚡ [${task.id}] Tugas dicatat ke TASK_QUEUE.md dengan status [PENDING].`);
+    console.log(`📢 Notifikasi INFO dikirim ke Telegram.`);
     console.log(`⚠️ Menunggu AI Agent untuk menyelesaikan pekerjaan coding.\n`);
   }
 }
@@ -507,10 +508,19 @@ async function processActiveLocalTasks() {
   try {
     const queueContent = fs.readFileSync(queueFile, 'utf-8');
     const activeSection = queueContent.split('## ✅ Riwayat Tugas Selesai')[0];
+
+    // Aturan Sekuensial: Jika ada tugas [IN_PROGRESS], jangan eksekusi tugas lain
+    const inProgressMatch = activeSection.match(/###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i);
+    const hasInProgress = !!inProgressMatch;
     const regex = /###\s+\[(PENDING|IN_PROGRESS)\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/gi;
     let match;
     while ((match = regex.exec(activeSection)) !== null) {
+      const taskStatus = (match[1] || '').toUpperCase();
       const taskId = match[2].startsWith('#') ? match[2] : `#${match[2]}`;
+      if (hasInProgress && taskStatus !== 'IN_PROGRESS') {
+        // Lewati tugas PENDING selama ada tugas IN_PROGRESS
+        continue;
+      }
       const block = match[3];
       const mInst = block.match(/-\s+\*\*Instruksi:\*\*\s*([^\r\n]+)/i);
       const mSender = block.match(/-\s+\*\*Pengirim:\*\*\s*([^\r\n]+)/i);

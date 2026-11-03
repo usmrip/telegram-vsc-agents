@@ -99,6 +99,26 @@ function getNotifyScript() {
   return candidates.find(p => fs.existsSync(p)) || null;
 }
 
+// Cek apakah ada tugas lain yang sedang [IN_PROGRESS] di antrean aktif
+function getOtherActiveInProgressTask(currentTaskId = '') {
+  if (!fs.existsSync(queueFile)) return null;
+  try {
+    const content = fs.readFileSync(queueFile, 'utf-8');
+    const activeSection = content.split('## ✅ Riwayat Tugas Selesai')[0];
+    const regex = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/gi;
+    let match;
+    const cleanCurrent = (currentTaskId || '').toLowerCase().replace(/^#/, '');
+    while ((match = regex.exec(activeSection)) !== null) {
+      const foundId = match[1];
+      const cleanFound = foundId.toLowerCase().replace(/^#/, '');
+      if (cleanFound !== cleanCurrent) {
+        return foundId.startsWith('#') ? foundId : '#' + foundId;
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
 function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', attachmentUrl = '', attachmentType = '', attachmentName = '', agent = 'Antigravity AI Agent') {
   try {
     if (!fs.existsSync(queueFile)) {
@@ -113,7 +133,7 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
 
       // Ambil instruksi dan pengirim dari blok aktif jika parameter kosong
       const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-      const regexActive = new RegExp(`### \\[(PENDING|IN_PROGRESS)\\]\\s+${escapedId}[\\s\\S]*?(?=(###|##|$))`, 'g');
+      const regexActive = new RegExp(`### \\[(PENDING|WAITING|QUEUE|IN_PROGRESS)\\]\\s+${escapedId}[\\s\\S]*?(?=(###|##|$))`, 'g');
       const match = content.match(regexActive);
       if (match && match[0]) {
         if (!finalInstruction) {
@@ -135,17 +155,48 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
       } else {
         content += `\n\n${doneMarker}\n\n${doneBlock}`;
       }
+    } else if (status === 'IN_PROGRESS') {
+      // Jika tugas sudah ada sebagai [PENDING] atau [WAITING], ubah statusnya menjadi [IN_PROGRESS]
+      const regexPending = new RegExp(`### \\[(PENDING|WAITING|QUEUE)\\]\\s+${escapedId}[\\s\\S]*?(?=(###|##|$))`, 'i');
+      const matchPending = content.match(regexPending);
+      if (matchPending && matchPending[0]) {
+        let block = matchPending[0];
+        block = block.replace(/### \[(PENDING|WAITING|QUEUE)\]/i, '### [IN_PROGRESS]');
+        block = block.replace(/- \*\*Status:\*\*\s*[^\r\n]+/i, '- **Status:** IN_PROGRESS');
+        if (notes) {
+          if (block.includes('- **Catatan:**')) {
+            block = block.replace(/- \*\*Catatan:\*\*\s*[^\r\n]+/i, `- **Catatan:** ${notes}`);
+          } else {
+            block = block.trimEnd() + `\n- **Catatan:** ${notes}\n\n`;
+          }
+        }
+        content = content.replace(regexPending, block);
+      } else if (!content.includes(taskId)) {
+        let attachLines = '';
+        if (attachmentUrl) {
+          attachLines = `\n- **Lampiran:** [${attachmentName || 'Buka File'}](${attachmentUrl}) (${attachmentType || 'file'})`;
+        }
+        const activeBlock = `### [IN_PROGRESS] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${sender || 'IDE Chat'}\n- **Agent:** ${agent || 'Antigravity AI Agent'}\n- **Instruksi:** ${(instruction || '').replace(/\r?\n/g, ' ')}${attachLines}\n- **Status:** IN_PROGRESS\n- **Catatan:** ${notes || 'Sedang dikerjakan oleh AI Agent...'}\n\n`;
+        const activeMarker = '## ⏳ Tugas Aktif';
+        if (content.includes(activeMarker)) {
+          content = content.replace(activeMarker, `${activeMarker}\n\n${activeBlock}`);
+          content = content.replace(/\*\(Tidak ada tugas aktif[^)]*\)\*/g, '');
+        } else {
+          content = `${activeMarker}\n\n${activeBlock}\n\n${content}`;
+        }
+      }
     } else {
+      // Status PENDING / WAITING: Masuk ke antrean aktif
       if (!content.includes(taskId)) {
         let attachLines = '';
         if (attachmentUrl) {
           attachLines = `\n- **Lampiran:** [${attachmentName || 'Buka File'}](${attachmentUrl}) (${attachmentType || 'file'})`;
         }
-        const activeBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${sender}\n- **Instruksi:** ${instruction.replace(/\r?\n/g, ' ')}${attachLines}\n- **Status:** ${status}\n- **Catatan:** ${notes}\n\n`;
+        const activeBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${sender}\n- **Instruksi:** ${instruction.replace(/\r?\n/g, ' ')}${attachLines}\n- **Status:** ${status}\n- **Catatan:** ${notes || 'Menunggu giliran eksekusi oleh AI Agent'}\n\n`;
         const activeMarker = '## ⏳ Tugas Aktif';
         if (content.includes(activeMarker)) {
           content = content.replace(activeMarker, `${activeMarker}\n\n${activeBlock}`);
-          content = content.replace(/\*\(Tidak ada tugas aktif[^\)]*\)\*/g, '');
+          content = content.replace(/\*\(Tidak ada tugas aktif[^)]*\)\*/g, '');
         } else {
           content = `${activeMarker}\n\n${activeBlock}\n\n${content}`;
         }
@@ -204,7 +255,7 @@ async function run() {
   } else if (command === 'pull') {
     try {
       const operator = `${os.userInfo().username}@${os.hostname()}`;
-      let url = `${normalizedUrl}?action=pull&secret=${secretKey}&limit=5&format=json&mark=1&workspace_folder=${encodeURIComponent(cwd)}&operator=${encodeURIComponent(operator)}`;
+      let url = `${normalizedUrl}?action=pull&secret=${secretKey}&limit=5&format=json&mark=0&workspace_folder=${encodeURIComponent(cwd)}&operator=${encodeURIComponent(operator)}`;
       if (projectKey) url += `&project=${encodeURIComponent(projectKey)}`;
       const res = await fetch(url);
       const data = await res.json();
@@ -231,7 +282,9 @@ async function run() {
             }
           }
           const attachUrlToShow = localAbsUrl || t.attachment_url;
-          updateLocalQueueFile(t.id, t.instruction, t.sender, 'IN_PROGRESS', 'Telah ditarik untuk diproses oleh AI Agent', attachUrlToShow, t.attachment_type, t.attachment_name);
+          const targetStatus = (t.status === 'DONE' || t.status === 'FAILED') ? t.status : (t.status === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'PENDING');
+          const targetNote = targetStatus === 'IN_PROGRESS' ? 'Sedang dikerjakan oleh AI Agent' : 'Menunggu giliran eksekusi oleh AI Agent';
+          updateLocalQueueFile(t.id, t.instruction, t.sender, targetStatus, targetNote, attachUrlToShow, t.attachment_type, t.attachment_name);
           console.log(`   ✨ [${t.id}] ${t.instruction.substring(0, 80)}...`);
         }
       } else {
@@ -240,12 +293,25 @@ async function run() {
     } catch (err) {
       console.error(`❌ Gagal menarik tugas: ${err.message}`);
     }
-    } else if (command === 'start' || command === 'proses') {
+    } else if (command === 'start' || command === 'proses' || command === 'in_progress') {
     const taskId = args[1] || '';
     const note = args[2] || 'Sedang dikerjakan oleh AI Agent...';
 
     if (!taskId) {
       console.error('[ERROR] Task ID wajib disertakan! Contoh: node tele-task.js start "#TASK-123"');
+      process.exit(1);
+    }
+
+    // Aturan Sekuensial: Periksa apakah ada tugas lain yang masih [IN_PROGRESS]
+    let forceStart = false;
+    for (let i = 2; i < args.length; i++) {
+      if (args[i] === '--force' || args[i] === '-f') forceStart = true;
+    }
+    const otherInProgress = getOtherActiveInProgressTask(taskId);
+    if (otherInProgress && !forceStart) {
+      console.error(`⚠️ [BLOCKED] Tugas ${otherInProgress} saat ini masih berstatus [IN_PROGRESS].`);
+      console.error(`   Sesuai aturan, tugas harus dikerjakan satu per satu secara sekuensial.`);
+      console.error(`   Tugas ${taskId} tetap [PENDING] sampai tugas ${otherInProgress} selesai 100%.`);
       process.exit(1);
     }
 
@@ -260,6 +326,9 @@ async function run() {
       const data = await res.json();
       if (data.ok) {
         console.log(`⚡ [${taskId}] Status di server berhasil diperbarui ke: IN_PROGRESS`);
+
+        // Perbarui status di TASK_QUEUE.md lokal menjadi [IN_PROGRESS]
+        updateLocalQueueFile(taskId, '', '', 'IN_PROGRESS', note);
 
         // Cari instruksi dari TASK_QUEUE.md lokal
         let foundInst = '';
