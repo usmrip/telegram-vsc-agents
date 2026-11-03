@@ -2811,7 +2811,8 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
             $now = date('Y-m-d H:i:s');
             foreach ($pending as $pt) {
                 $isNewlyStarted = ($pt['status'] === 'PENDING');
-                $upd = $db->prepare("UPDATE tasks SET status = 'IN_PROGRESS', updated_at = ?, notes = 'Ditarik oleh VS Code Agent' WHERE id = ?");
+                // Aturan: api_pull hanya memperbarui last_seen tanpa mengubah status ke IN_PROGRESS
+                $upd = $db->prepare("UPDATE tasks SET updated_at = ?, notes = 'Ditarik antrean oleh VS Code Worker' WHERE id = ?");
                 $upd->execute([$now, $pt['id']]);
 
                 // Kirim notifikasi Telegram jika memulai pekerjaan (Requirement: info detail termasuk perintah)
@@ -4684,9 +4685,9 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
             <?php endif; ?>
 
             <!-- Tombol About (sama seperti Tambah Manual) -->
-            <button type="button" class="btn btn-secondary btn-sm" onclick="openAboutModal()" title="<?= __t('Tentang Telegram VS Code & Tim Magang', 'About Telegram VS Code & Intern Team') ?>">
-                <?= renderSvg('info', 13) ?>
-                <span><?= __t('About', 'About') ?></span>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="openAboutModal()" title="<?= __t('Profil Telegram VS Code & Tim Pengembang', 'Profile of Telegram VS Code & Developer Team') ?>">
+                <?= renderSvg('user', 13) ?>
+                <span><?= __t('Profil', 'Profile') ?></span>
             </button>
 
             <!-- Language Switcher (Dual Language ID / EN) -->
@@ -6585,8 +6586,8 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
         </div>
         <div class="footer-links">
             <button type="button" class="btn btn-secondary btn-sm" onclick="openAboutModal()">
-                <?= renderSvg('info', 13) ?>
-                <span><?= __t('Tentang Kami', 'About Us') ?></span>
+                <?= renderSvg('user', 13) ?>
+                <span><?= __t('Profil Kami', 'Our Profile') ?></span>
             </button>
             <button type="button" class="btn btn-secondary btn-sm" onclick="openPrivacyModal()">
                 <?= renderSvg('shield', 13) ?>
@@ -7078,7 +7079,7 @@ function toggleProjectCard(id) {
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
             <button type="button" class="btn btn-link btn-sm" onclick="closePrivacyModal(); openAboutModal();" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #38bdf8; text-decoration: none; padding: 0;">
                 <span>&larr;</span>
-                <span><?= __t('Tentang Telegram VS Code', 'About Telegram VS Code') ?></span>
+                <span><?= __t('Profil Telegram VS Code', 'Profile of Telegram VS Code') ?></span>
             </button>
             <button type="button" class="btn btn-secondary btn-sm" onclick="closePrivacyModal()" style="border-radius: var(--radius-sm); min-width: 80px;">
                 <?= __t('Tutup', 'Close') ?>

@@ -51,7 +51,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
     try {
       const fetchHeaders = {
         'Connection': 'close',
-        'User-Agent': 'Tele-vs-Code/1.0.13',
+        'User-Agent': 'Tele-vs-Code/1.0.14',
         ...(options.headers || {})
       };
       const opt = {
@@ -317,6 +317,7 @@ const I18N = {
   }
 };
 
+const i18n = (...args) => t(...args);
 function t(key, replacements = {}, langOverride = null) {
   let lang = langOverride;
   if (!lang) {
@@ -1702,19 +1703,19 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
         let newTasksCount = 0;
         consecutivePullFailures = 0;
         log('info', `Ditemukan ${data.tasks.length} tugas di antrean server.`);
-        for (const t of data.tasks) {
-          setStatusBarState('proses', `Menangani [${t.id}]`, `Sedang menangani tugas ${t.id}: "${t.instruction}"`);
-          log('info', `[TUGAS MASUK] ID: ${t.id} | Pengirim: ${t.sender} | Instruksi: "${t.instruction}"`);
+        for (const taskItem of data.tasks) {
+          setStatusBarState('proses', `Menangani [${taskItem.id}]`, `Sedang menangani tugas ${taskItem.id}: "${taskItem.instruction}"`);
+          log('info', `[TUGAS MASUK] ID: ${taskItem.id} | Pengirim: ${taskItem.sender} | Instruksi: "${taskItem.instruction}"`);
           let attachLines = '';
-          if (t.attachment_url) {
+          if (taskItem.attachment_url) {
             try {
-              const attachDir = path.join(cur.folder, 'attachments', t.id.replace(/[^a-zA-Z0-9_-]/g, ''));
+              const attachDir = path.join(cur.folder, 'attachments', taskItem.id.replace(/[^a-zA-Z0-9_-]/g, ''));
               if (!fs.existsSync(attachDir)) {
                 fs.mkdirSync(attachDir, { recursive: true });
               }
-              const localFilePath = path.join(attachDir, t.attachment_name || 'lampiran.bin');
+              const localFilePath = path.join(attachDir, taskItem.attachment_name || 'lampiran.bin');
               if (!fs.existsSync(localFilePath)) {
-                const fRes = await fetch(t.attachment_url);
+                const fRes = await fetch(taskItem.attachment_url);
                 if (fRes.ok) {
                   const fBuf = Buffer.from(await fRes.arrayBuffer());
                   fs.writeFileSync(localFilePath, fBuf);
@@ -1722,19 +1723,19 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
               }
               const relPath = path.relative(cur.folder, localFilePath).replace(/\\/g, '/');
               const absFileUrl = `file:///${localFilePath.replace(/\\/g, '/')}`;
-              attachLines = `\n- **Lampiran Lokal:** [${t.attachment_name || 'Buka File'}](${absFileUrl}) (${t.attachment_type || 'file'})\n- **URL Lampiran:** [Buka di Browser](${t.attachment_url})`;
+              attachLines = `\n- **Lampiran Lokal:** [${taskItem.attachment_name || 'Buka File'}](${absFileUrl}) (${taskItem.attachment_type || 'file'})\n- **URL Lampiran:** [Buka di Browser](${taskItem.attachment_url})`;
             } catch (dErr) {
-              attachLines = `\n- **Lampiran:** [${t.attachment_name || 'File'}](${t.attachment_url}) (${t.attachment_type || 'file'})`;
+              attachLines = `\n- **Lampiran:** [${taskItem.attachment_name || 'File'}](${taskItem.attachment_url}) (${taskItem.attachment_type || 'file'})`;
             }
           }
 
           // Catat tugas ke TASK_QUEUE.md (Hak ubah status: Tugas baru dari server masuk sebagai PENDING)
-          const agentName = t.assigned_agent || t.agent || 'Antigravity AI Agent';
-          const targetStatus = (t.status === 'DONE' || t.status === 'FAILED') ? t.status : (t.status === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'PENDING');
+          const agentName = taskItem.assigned_agent || taskItem.agent || 'Antigravity AI Agent';
+          const targetStatus = (taskItem.status === 'DONE' || taskItem.status === 'FAILED') ? taskItem.status : (taskItem.status === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'PENDING');
           const targetNote = targetStatus === 'IN_PROGRESS' ? 'Sedang dikerjakan oleh AI Agent...' : 'Menunggu giliran eksekusi oleh AI Agent...';
-          const taskBlock = `### [${targetStatus}] ${t.id}\n- **Waktu:** ${t.created_at}\n- **Pengirim:** ${t.sender}\n- **Agent:** ${agentName}\n- **Instruksi:** ${t.instruction}${attachLines}\n- **Status:** ${targetStatus}\n- **Catatan:** ${targetNote}\n\n`;
+          const taskBlock = `### [${targetStatus}] ${taskItem.id}\n- **Waktu:** ${taskItem.created_at}\n- **Pengirim:** ${taskItem.sender}\n- **Agent:** ${agentName}\n- **Instruksi:** ${taskItem.instruction}${attachLines}\n- **Status:** ${targetStatus}\n- **Catatan:** ${targetNote}\n\n`;
           let isNewTask = false;
-          if (!content.includes(t.id)) {
+          if (!content.includes(taskItem.id)) {
             newTasksCount++;
             isNewTask = true;
             if (content.includes('## ⏳ Tugas Aktif')) {
@@ -1747,17 +1748,17 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
           fs.writeFileSync(queueFile, content, 'utf-8');
 
           // Kirim notifikasi antrean ke Telegram jika tugas baru masuk
-          if (isNewTask && t.status !== 'DONE' && !cur.autoExecuteSimpleTasks) {
+          if (isNewTask && taskItem.status !== 'DONE' && !cur.autoExecuteSimpleTasks) {
             try {
               const notifyStatus = targetStatus === 'IN_PROGRESS' ? 'PROSES' : 'INFO';
-              const notifyTitle = targetStatus === 'IN_PROGRESS' ? `Memulai Pekerjaan: ${t.id}` : `Tugas Masuk Antrean: ${t.id}`;
+              const notifyTitle = targetStatus === 'IN_PROGRESS' ? `Memulai Pekerjaan: ${taskItem.id}` : `Tugas Masuk Antrean: ${taskItem.id}`;
               const statusDesc = targetStatus === 'IN_PROGRESS'
                 ? 'Diterima oleh VS Code & sedang dikerjakan oleh AI Agent...'
                 : 'Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)';
               await sendTelegramMessage(cur.botToken, cur.chatId, notifyTitle, notifyStatus, [
-                `Perintah: ${t.instruction}`,
-                `Pengirim: ${t.sender}`,
-                `Waktu Diterima: ${t.created_at || 'Baru saja'}`,
+                `Perintah: ${taskItem.instruction}`,
+                `Pengirim: ${taskItem.sender}`,
+                `Waktu Diterima: ${taskItem.created_at || 'Baru saja'}`,
                 `Status: ${statusDesc}`
               ], cur.project, cur.timezone);
             } catch (pErr) {}
@@ -1766,81 +1767,81 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
           // EKSEKUTOR OTOMATIS: Hanya jika diaktifkan (default: false agar tugas tetap di TASK_QUEUE untuk AI Agent)
           if (cur.autoExecuteSimpleTasks) {
             try {
-              const execRes = tryExecuteDirectTask(t.instruction, cur.folder);
+              const execRes = tryExecuteDirectTask(taskItem.instruction, cur.folder);
               if (execRes && execRes.executed) {
                 const rep = execRes.report;
-                await markServerTaskDone(cur, t.id, rep);
-                appendDoneToTaskQueueFile(queueFile, t, rep);
+                await markServerTaskDone(cur, taskItem.id, rep);
+                appendDoneToTaskQueueFile(queueFile, taskItem, rep);
                 content = fs.readFileSync(queueFile, 'utf-8');
 
                 try {
-                  await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${t.id}`, 'SELESAI', [
-                    `Instruksi: ${t.instruction.substring(0, 90)}`,
+                  await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${taskItem.id}`, 'SELESAI', [
+                    `Instruksi: ${taskItem.instruction.substring(0, 90)}`,
                     `Hasil: ${rep}`,
-                    `Pengirim: ${t.sender}`
+                    `Pengirim: ${taskItem.sender}`
                   ], cur.project, cur.timezone);
                 } catch (nErr) {}
 
-                log('info', `[TUGAS SELESAI] ID: ${t.id} tuntas dieksekusi: ${rep}`);
-                showTimedNotification(`✅ Tugas [${t.id}] berhasil dieksekusi: ${rep}`, 10);
+                log('info', `[TUGAS SELESAI] ID: ${taskItem.id} tuntas dieksekusi: ${rep}`);
+                showTimedNotification(`✅ Tugas [${taskItem.id}] berhasil dieksekusi: ${rep}`, 10);
                 setStatusBarState('idle');
                 continue;
               }
             } catch (execErr) {
-              await markServerTaskFailed(cur, t.id, execErr.message);
-              log('error', `[TUGAS GAGAL] ID: ${t.id} gagal: ${execErr.message}`);
-              setStatusBarState('warning', `Gagal [${t.id}]`, execErr.message);
+              await markServerTaskFailed(cur, taskItem.id, execErr.message);
+              log('error', `[TUGAS GAGAL] ID: ${taskItem.id} gagal: ${execErr.message}`);
+              setStatusBarState('warning', `Gagal [${taskItem.id}]`, execErr.message);
               try {
-                await sendTelegramMessage(cur.botToken, cur.chatId, `Gagal: ${t.id}`, 'KENDALA', [
-                  `Instruksi: ${t.instruction.substring(0, 90)}`,
+                await sendTelegramMessage(cur.botToken, cur.chatId, `Gagal: ${taskItem.id}`, 'KENDALA', [
+                  `Instruksi: ${taskItem.instruction.substring(0, 90)}`,
                   `Penyebab: ${execErr.message}`
                 ], cur.project, cur.timezone);
               } catch (nErr) {}
-              vscode.window.showErrorMessage(`❌ Gagal mengeksekusi tugas [${t.id}]: ${execErr.message}`);
+              vscode.window.showErrorMessage(`❌ Gagal mengeksekusi tugas [${taskItem.id}]: ${execErr.message}`);
               continue;
             }
           }
 
           // Beri tahu user bahwa tugas baru masuk antrean
           if (!silent || cur.showToastOnNewTask) {
-            const instBrief = t.instruction ? (t.instruction.length > 55 ? t.instruction.substring(0, 55) + '...' : t.instruction) : '';
-            const isIdeTask = (t.id && (t.id.includes('-IDE-') || t.id.startsWith('#TASK-IDE'))) ||
-                              (t.sender && (t.sender.includes('IDE') || t.sender.includes('VS Code')));
+            const instBrief = taskItem.instruction ? (taskItem.instruction.length > 55 ? taskItem.instruction.substring(0, 55) + '...' : taskItem.instruction) : '';
+            const isIdeTask = (taskItem.id && (taskItem.id.includes('-IDE-') || taskItem.id.startsWith('#TASK-IDE'))) ||
+                              (taskItem.sender && (taskItem.sender.includes('IDE') || taskItem.sender.includes('VS Code')));
 
             if (isIdeTask) {
               // Tugas dari IDE (dengan kode khusus -IDE-): JANGAN tampilkan pop-up dialog delegasi
               // Tampilkan pop-up status tugas dikerjakan / selesai
-              if (t.status === 'DONE') {
-                showTimedNotification(`✅ [${t.id}] Tugas IDE Selesai: "${instBrief}"`, 10);
+              if (taskItem.status === 'DONE') {
+                showTimedNotification(`✅ [${taskItem.id}] Tugas IDE Selesai: "${instBrief}"`, 10);
               } else {
-                showTimedNotification(`⚡ [${t.id}] Tugas IDE Sedang Dikerjakan: "${instBrief}"`, 10);
+                showTimedNotification(`⚡ [${taskItem.id}] Tugas IDE Sedang Dikerjakan: "${instBrief}"`, 10);
               }
             } else {
               // Tugas dari Telegram: tampilkan notifikasi toast informatif langsung (tanpa dialog tombol yang menuntut klik manual)
-              if (t.status === 'DONE') {
-                showTimedNotification(t('newTaskDoneToast', { id: t.id, brief: instBrief }), 10);
+              if (taskItem.status === 'DONE') {
+                showTimedNotification(i18n('newTaskDoneToast', { id: taskItem.id, brief: instBrief }), 10);
               } else {
                 // Salin prompt ke clipboard sebagai kemudahan
-                const prompt = buildAgentPrompt(t.id, t.instruction);
+                const prompt = buildAgentPrompt(taskItem.id, taskItem.instruction);
                 await vscode.env.clipboard.writeText(prompt);
 
                 const currentHandler = (cur.agentHandler || '').trim();
-                const runBtnLabel = currentHandler ? t('btnRunVia', { agent: currentHandler === 'custom' ? 'Custom Agent' : currentHandler.toUpperCase() }) : t('btnSelectAgent');
+                const runBtnLabel = currentHandler ? i18n('btnRunVia', { agent: currentHandler === 'custom' ? 'Custom Agent' : currentHandler.toUpperCase() }) : i18n('btnSelectAgent');
 
                 // Jika autoDispatchAgent aktif dan handler terisi, periksa aturan sekuensial
                 if (cur.autoDispatchAgent && currentHandler) {
                   const qContentNow = fs.existsSync(queueFile) ? fs.readFileSync(queueFile, 'utf-8') : '';
                   const activeSec = qContentNow.split('## ✅ Riwayat Tugas Selesai')[0];
                   const mActive = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i.exec(activeSec);
-                  if (!mActive || mActive[1].toLowerCase() === t.id.toLowerCase()) {
-                    executeTaskWithAgent(t.id, t.instruction);
+                  if (!mActive || mActive[1].toLowerCase() === taskItem.id.toLowerCase()) {
+                    executeTaskWithAgent(taskItem.id, taskItem.instruction);
                   } else {
-                    log('info', `[SEKUENSIAL] Menunda auto-dispatch ${t.id} karena tugas ${mActive[1]} masih [IN_PROGRESS].`);
+                    log('info', `[SEKUENSIAL] Menunda auto-dispatch ${taskItem.id} karena tugas ${mActive[1]} masih [IN_PROGRESS].`);
                   }
                 }
 
                 showTimedNotification(
-                  `⚡ [${t.id}] Tugas Baru: "${instBrief}" (Prompt disalin ke clipboard)`,
+                  `⚡ [${taskItem.id}] Tugas Baru: "${instBrief}" (Prompt disalin ke clipboard)`,
                   15,
                   runBtnLabel,
                   'Buka TASK_QUEUE'
@@ -1849,7 +1850,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                     if (!currentHandler) {
                       vscode.commands.executeCommand('telegramNotifier.selectAgentHandler');
                     } else {
-                      executeTaskWithAgent(t.id, t.instruction);
+                      executeTaskWithAgent(taskItem.id, taskItem.instruction);
                     }
                   } else if (act === 'Buka TASK_QUEUE') {
                     vscode.commands.executeCommand('telegramNotifier.openQueue');
