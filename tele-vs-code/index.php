@@ -1487,7 +1487,15 @@ if ($action === 'webhook') {
             $pName = htmlspecialchars($repTask['project_name'] ?: 'Tele-vs-Code');
 
             // 1. Aksi Pembatalan Tugas
-            if (preg_match('/^(?:\/cancel|\/batal|batal|batalkan|cancel|stop|hapus)/i', $text) || stripos($text, 'batalkan task') !== false || stripos($text, 'batal task') !== false || stripos($text, 'cancel task') !== false) {
+            $cleanRevCmd = trim(preg_replace('/^\/(?:[A-Za-z0-9_-]+)(?:@\w+)?\s*/i', '', $text));
+            $isCancelReply = preg_match('/^(?:\/cancel|\/batal|batal|batalkan|cancel|stop|hapus)(?:\s|$)/i', $text)
+                          || preg_match('/^(?:\/cancel|\/batal|batal|batalkan|cancel|stop|hapus)(?:\s|$)/i', $cleanRevCmd)
+                          || stripos($text, 'batalkan task') !== false
+                          || stripos($text, 'batal task') !== false
+                          || stripos($text, 'cancel task') !== false
+                          || stripos($text, 'batalkan') !== false;
+
+            if ($isCancelReply) {
                 if ($repTask['status'] === 'DONE') {
                     $reply = "⚠️ <b>TUGAS SUDAH SELESAI</b>\n\n"
                            . "Tugas <code>$repliedTaskId</code> sudah tuntas 100% sebelumnya dan tidak dapat dibatalkan.";
@@ -2190,6 +2198,94 @@ if ($action === 'webhook') {
             'text' => $reply,
             'parse_mode' => 'HTML',
             'reply_to_message_id' => $messageId
+        ]);
+        echo "OK"; exit;
+    }
+
+    // Command /cancel atau /batal atau /<kode_proyek> batalkan: Batalkan tugas aktif
+    $cleanText = trim($text);
+    $directCancelTarget = null;
+    $targetTaskId = null;
+    $isDirectCancelCmd = false;
+
+    if (preg_match('/^\/(?:cancel|batal|stop|hapus)(?:@\w+)?(?:\s+(.+))?$/is', $cleanText, $mCancel)) {
+        $isDirectCancelCmd = true;
+        $cancelArg = trim($mCancel[1] ?? '');
+        if (preg_match('/(#?TASK-[A-Za-z0-9_-]+)/i', $cancelArg, $mCid)) {
+            $targetTaskId = $mCid[1];
+        } elseif ($cancelArg) {
+            foreach ($allProjects as $idx => $p) {
+                $pCode = strtolower($p['code'] ?: chr(97 + ($idx % 26)));
+                if (strtolower($cancelArg) === $pCode || $cancelArg === (string)$p['id']) {
+                    $directCancelTarget = $p;
+                    break;
+                }
+            }
+        }
+        if (!$directCancelTarget) {
+            $directCancelTarget = $activeProject;
+        }
+    } elseif (preg_match('/^\/([a-zA-Z0-9_-]+)(?:@\w+)?\s+(batal|batalkan|cancel|stop)$/is', $cleanText, $mPrjCancel)) {
+        $slashPrj = strtolower($mPrjCancel[1]);
+        foreach ($allProjects as $idx => $p) {
+            $pCode = strtolower($p['code'] ?: chr(97 + ($idx % 26)));
+            if ($slashPrj === $pCode || $slashPrj === (string)$p['id']) {
+                $isDirectCancelCmd = true;
+                $directCancelTarget = $p;
+                break;
+            }
+        }
+    }
+
+    if ($isDirectCancelCmd && $directCancelTarget) {
+        $pTz = !empty($directCancelTarget['timezone']) ? $directCancelTarget['timezone'] : $effectiveTz;
+        $pTzAbbr = getTimezoneAbbr($pTz);
+        $pName = htmlspecialchars($directCancelTarget['name'] ?: 'Tele-vs-Code');
+
+        $curTaskToCancel = null;
+        if ($targetTaskId) {
+            $stmtC = $db->prepare("SELECT * FROM tasks WHERE id = ? LIMIT 1");
+            $stmtC->execute([$targetTaskId]);
+            $curTaskToCancel = $stmtC->fetch(PDO::FETCH_ASSOC);
+            $stmtC->closeCursor();
+        } else {
+            // Ambil tugas terakhir yang masih IN_PROGRESS atau PENDING pada proyek ini
+            $stmtC = $db->prepare("SELECT * FROM tasks WHERE project_id = ? AND status IN ('IN_PROGRESS', 'PENDING') ORDER BY id DESC LIMIT 1");
+            $stmtC->execute([$directCancelTarget['id']]);
+            $curTaskToCancel = $stmtC->fetch(PDO::FETCH_ASSOC);
+            $stmtC->closeCursor();
+        }
+
+        if ($curTaskToCancel) {
+            if ($curTaskToCancel['status'] === 'DONE') {
+                $reply = "⚠️ <b>TUGAS SUDAH SELESAI</b>\n\n"
+                       . "Tugas <code>{$curTaskToCancel['id']}</code> sudah tuntas 100% sebelumnya dan tidak dapat dibatalkan.";
+            } else {
+                $now = date('Y-m-d H:i:s');
+                $cancelNote = "Dibatalkan oleh pemohon ($sender) via Telegram Command";
+                $upd = $db->prepare("UPDATE tasks SET status = 'FAILED', notes = ?, result = ?, updated_at = ? WHERE id = ?");
+                $upd->execute([$cancelNote, $cancelNote, $now, $curTaskToCancel['id']]);
+                $upd->closeCursor();
+
+                $reply = "🚫 <b>TUGAS BERHASIL DIBATALKAN!</b>\n"
+                       . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                       . "🆔 <b>ID Tugas:</b> <code>{$curTaskToCancel['id']}</code>\n"
+                       . "📁 <b>Proyek:</b> <code>$pName</code>\n"
+                       . "👤 <b>Pemohon:</b> " . htmlspecialchars($sender) . "\n"
+                       . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $pTzAbbr\n"
+                       . "📌 <b>Status:</b> <code>[FAILED / DIBATALKAN]</code>\n\n"
+                       . "<i>Tugas telah dihentikan dan dikeluarkan dari antrean eksekusi AI Agent.</i>";
+            }
+        } else {
+            $reply = "ℹ️ <b>TIDAK ADA TUGAS AKTIF</b>\n\n"
+                   . "Tidak ditemukan tugas yang sedang berjalan atau menunggu di proyek <b>$pName</b>.";
+        }
+
+        callTelegram($project['bot_token'], 'sendMessage', [
+            'chat_id' => $incomingChatId,
+            'text' => $reply,
+            'parse_mode' => 'HTML',
+            'reply_to_message_id' => $messageId ?? null
         ]);
         echo "OK"; exit;
     }
