@@ -51,7 +51,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
     try {
       const fetchHeaders = {
         'Connection': 'close',
-        'User-Agent': 'Tele-vs-Code/1.0.14',
+        'User-Agent': 'Tele-vs-Code/1.0.15',
         ...(options.headers || {})
       };
       const opt = {
@@ -1295,13 +1295,21 @@ function activate(context) {
   let lastWarningMessage = '';
   let lastWarningTime = 0;
 
-  function setStatusBarState(state, activity = '', detail = '') {
+  function setStatusBarState(state, activity = '', detail = '', isQuiet = false) {
     currentWorkerState = state;
     currentActivityText = activity;
     currentActivityDetail = detail || activity;
 
-    // Requirement 7: Jika ada Warning beri notifikasi popup (debounce 25s agar tidak spam)
+    // Catat selalu ke log jika state warning
     if (state === 'warning' && detail) {
+      log('warn', `[STATUS BAR WARNING] ${activity ? activity + ': ' : ''}${detail}`);
+    }
+
+    // Aturan User: Jika koneksi webhook terputus, network error, server offline, atau isQuiet:
+    // JANGAN munculkan dialog pop-up, biarkan tampil sebagai indikator warning di status bar dan tercatat di log.
+    const isNetworkOrWebhookError = /koneksi|server|webhook|network|fetch|timeout|econnrefused|enotfound|offline/i.test(`${activity} ${detail}`);
+
+    if (state === 'warning' && detail && !isNetworkOrWebhookError && !isQuiet) {
       const now = Date.now();
       if (now - lastWarningTime > 25000 || detail !== lastWarningMessage) {
         lastWarningTime = now;
@@ -1877,11 +1885,10 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
         log('warn', `Koneksi sementara ke server webhook terputus (${err.message}), mencoba kembali di siklus berikutnya...`);
       } else {
         log('error', `Gagal menghubungi server webhook: ${err.message}`);
-        setStatusBarState('warning', 'Koneksi Server Gagal', `Gagal terhubung ke server: ${err.message}`);
-        if (!silent) {
-          vscode.window.showErrorMessage(`❌ Gagal menarik tugas: ${err.message}`);
-        }
       }
+      // Sesuai instruksi user: jangan munculkan pop-up saat koneksi webhook terputus atau network error,
+      // tampilkan warning di status bar dan catat di log
+      setStatusBarState('warning', 'Koneksi Server Terputus', `Gagal terhubung ke server webhook: ${err.message}`, true);
     } finally {
       isPulling = false;
       if (consecutivePullFailures === 0 && currentWorkerState !== 'warning') {

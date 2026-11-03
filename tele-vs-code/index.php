@@ -2914,15 +2914,33 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $notes = trim($_POST['notes'] ?? ($_GET['notes'] ?? 'Sedang dikerjakan oleh AI Agent'));
         $now = date('Y-m-d H:i:s');
 
-        // Aturan Sekuensial: Hanya satu tugas yang boleh [IN_PROGRESS] pada satu waktu
-        $stmtChk = $db->prepare("SELECT id FROM tasks WHERE user_id = ? AND status = 'IN_PROGRESS' AND id != ? LIMIT 1");
-        $stmtChk->execute([$user['id'], $taskId]);
+        // Ambil data tugas & proyek terlebih dahulu
+        $stmtT = $db->prepare("SELECT t.*, p.bot_token, p.chat_id, p.name as project_name, p.code as project_code, p.timezone as project_timezone FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.id = ? AND t.user_id = ?");
+        $stmtT->execute([$taskId, $user['id']]);
+        $task = $stmtT->fetch(PDO::FETCH_ASSOC);
+
+        if (!$task) {
+            http_response_code(404);
+            echo json_encode(['ok' => false, 'error' => 'Tugas tidak ditemukan.']);
+            exit;
+        }
+
+        $pId = !empty($task['project_id']) ? intval($task['project_id']) : 0;
+
+        // Aturan Sekuensial: Hanya satu tugas yang boleh [IN_PROGRESS] pada proyek yang sama pada satu waktu
+        if ($pId > 0) {
+            $stmtChk = $db->prepare("SELECT id FROM tasks WHERE user_id = ? AND project_id = ? AND status = 'IN_PROGRESS' AND id != ? LIMIT 1");
+            $stmtChk->execute([$user['id'], $pId, $taskId]);
+        } else {
+            $stmtChk = $db->prepare("SELECT id FROM tasks WHERE user_id = ? AND status = 'IN_PROGRESS' AND id != ? LIMIT 1");
+            $stmtChk->execute([$user['id'], $taskId]);
+        }
         $existingProg = $stmtChk->fetch(PDO::FETCH_ASSOC);
         if ($existingProg && empty($_REQUEST['force'])) {
             http_response_code(409);
             echo json_encode([
                 'ok' => false,
-                'error' => "Tugas #{$existingProg['id']} masih berstatus [IN_PROGRESS]. Berdasarkan aturan, tugas harus dikerjakan satu per satu secara sekuensial.",
+                'error' => "Tugas #{$existingProg['id']} masih berstatus [IN_PROGRESS] pada proyek ini. Berdasarkan aturan, tugas harus dikerjakan satu per satu secara sekuensial.",
                 'active_task_id' => $existingProg['id']
             ]);
             exit;
@@ -2930,11 +2948,6 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 
         $upd = $db->prepare("UPDATE tasks SET status = 'IN_PROGRESS', updated_at = ?, notes = ? WHERE id = ? AND user_id = ?");
         $upd->execute([$now, $notes, $taskId, $user['id']]);
-
-        // Ambil data tugas & proyek untuk mengirim notifikasi mulai ke Telegram
-        $stmtT = $db->prepare("SELECT t.*, p.bot_token, p.chat_id, p.name as project_name, p.code as project_code, p.timezone as project_timezone FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.id = ? AND t.user_id = ?");
-        $stmtT->execute([$taskId, $user['id']]);
-        $task = $stmtT->fetch(PDO::FETCH_ASSOC);
 
         if ($task && !empty($task['bot_token']) && !empty($task['chat_id']) && empty($user['block_notify'])) {
             $tz = !empty($task['project_timezone']) ? $task['project_timezone'] : (!empty($user['timezone']) ? $user['timezone'] : 'Asia/Jakarta');
@@ -4346,6 +4359,39 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
     /* ==========================================================================
        Task Card Accordion & Media Preview Styling
        ========================================================================== */
+    /* Judul di Card: 1 kolom, rata kiri, lebar 100% */
+    .card h1, .card h2, .card h3, .card h4, .card h5,
+    .card-title, .card-header,
+    .task-card .task-meta-left,
+    .task-card-instruction,
+    .task-card-preview {
+        width: 100% !important;
+        text-align: left !important;
+        justify-content: flex-start !important;
+    }
+    .project-card-header {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        width: 100%;
+        text-align: left;
+        gap: 10px;
+    }
+    .project-card-title-box {
+        cursor: pointer;
+        width: 100%;
+        text-align: left;
+    }
+    .project-card-actions-box {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+        width: 100%;
+        justify-content: flex-start;
+        border-top: 1px dashed var(--border-subtle);
+        padding-top: 10px;
+    }
     .task-card {
         transition: all var(--transition-fast);
     }
@@ -5822,9 +5868,10 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                         $webhookUrl = "https://biru.co.id/tele-vs-code/webhook?pkey=" . urlencode($prj['project_key']);
                     ?>
                     <div class="card" id="projectCard_<?= $prj['id'] ?>" style="margin-bottom: 20px;">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px;">
-                            <div style="cursor: pointer;" onclick="toggleProjectCard(<?= $prj['id'] ?>)" title="Klik untuk membuka / menutup form pengaturan">
-                                <h3 style="font-size: 16px; font-weight: 500; color: #fff; display: flex; align-items: center; gap: 8px;">
+                        <div class="project-card-header">
+                            <!-- Judul di card: 1 kolom, rata kiri, lebar 100% -->
+                            <div class="project-card-title-box" onclick="toggleProjectCard(<?= $prj['id'] ?>)" title="Klik untuk membuka / menutup form pengaturan">
+                                <h3 style="font-size: 16px; font-weight: 500; color: #fff; display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px; width: 100%; text-align: left; margin: 0 0 6px 0;">
                                     <span><?= htmlspecialchars($prj['name']) ?></span>
                                     <span class="badge badge-done">Tag: #<?= htmlspecialchars($prj['code'] ?: 'a') ?></span>
                                     <span style="font-size: 11.5px; background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 2px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.3); display: inline-flex; align-items: center; gap: 6px;" onclick="event.stopPropagation();">
@@ -5834,7 +5881,7 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                                         </button>
                                     </span>
                                 </h3>
-                                <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; align-items: center; gap: 6px;" onclick="event.stopPropagation();">
+                                <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 6px; width: 100%; text-align: left;" onclick="event.stopPropagation();">
                                     <span>Webhook:</span>
                                     <code><?= $webhookUrl ?></code>
                                     <button type="button" class="btn btn-icon btn-ghost" style="width: 20px; height: 20px;" onclick="event.stopPropagation(); copyText('<?= htmlspecialchars($webhookUrl) ?>', 'Webhook URL')" title="Salin Webhook">
@@ -5842,7 +5889,7 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                                     </button>
                                 </div>
                             </div>
-                            <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+                            <div class="project-card-actions-box">
                                 <?php if (!empty($prj['bot_token'])): ?>
                                     <a href="?action=test_bot&id=<?= $prj['id'] ?>" class="btn btn-secondary btn-sm" title="Uji Bot">
                                         <?= renderSvg('bot', 13) ?>

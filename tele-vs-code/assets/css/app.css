@@ -215,6 +215,17 @@ b, strong { font-weight: 600; }
     box-shadow: var(--shadow-soft);
 }
 
+/* Judul di card: 1 kolom, rata kiri, lebar 100% */
+.card h1, .card h2, .card h3, .card h4, .card h5,
+.card-header, .card-title, .card-heading,
+.task-card .task-meta-left,
+.task-card-instruction,
+.task-card-preview {
+    width: 100% !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+}
+
 .card-inner {
     background: var(--bg-surface-inset);
     border: 1px solid var(--border-subtle);
