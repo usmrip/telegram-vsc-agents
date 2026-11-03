@@ -27,12 +27,15 @@ let title = '';
 let status = 'SELESAI';
 let agent = 'Antigravity AI Agent';
 let mediaUrl = null;
+let duration = '';
 const details = [];
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
   if (arg === '--status' || arg === '-s') {
     status = (args[++i] || 'SELESAI').toUpperCase();
+  } else if (arg === '--duration' || arg === '--durasi') {
+    if (args[i + 1]) duration = args[++i];
   } else if (arg === '--agent' || arg === '-a') {
     if (args[i + 1]) agent = args[++i];
   } else if (arg === '--media' || arg === '--attachment' || arg === '--image' || arg === '--video' || arg === '--file') {
@@ -52,6 +55,17 @@ for (let i = 0; i < args.length; i++) {
 
 if (!title) title = 'Laporan Tugas';
 status = status.toUpperCase();
+
+// Ekstrak durasi dari detail jika belum dispesifikasikan via flag
+if (!duration) {
+  for (let idx = 0; idx < details.length; idx++) {
+    const mDur = details[idx].match(/^(?:durasi|duration|waktu pengerjaan)\s*:\s*(.+)$/i);
+    if (mDur) {
+      duration = mDur[1].trim();
+      break;
+    }
+  }
+}
 
 if (!mediaUrl) {
   for (const d of details) {
@@ -158,6 +172,7 @@ function escapeHtml(text) {
 let textHtml = `<b>${emoji} ${escapeHtml(title)}: ${escapeHtml(status)}</b>\n\n`
              + `📁 <b>Proyek:</b> <code>${escapeHtml(projectName)}</code>\n`
              + `🕒 <b>Waktu:</b> ${dateStr} ${timeStr} ${tzLabel}\n`
+             + (duration ? `⏱️ <b>Durasi Pengerjaan:</b> <code>${escapeHtml(duration)}</code>\n` : '')
              + `🤖 <b>Eksekutor:</b> <code>${escapeHtml(agent)}</code>\n`
              + `👤 <b>Operator:</b> <code>${escapeHtml(userHost)}</code>\n`;
 

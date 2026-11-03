@@ -51,7 +51,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
     try {
       const fetchHeaders = {
         'Connection': 'close',
-        'User-Agent': 'Tele-vs-Code/1.0.12',
+        'User-Agent': 'Tele-vs-Code/1.0.13',
         ...(options.headers || {})
       };
       const opt = {
@@ -639,7 +639,7 @@ function escapeHtml(text) {
   return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function sendTelegramMessage(botToken, chatId, title, status, details = [], folderName = '', timezone = '') {
+async function sendTelegramMessage(botToken, chatId, title, status, details = [], folderName = '', timezone = '', duration = '') {
   let resolvedToken = botToken;
   let resolvedChat = chatId;
   let effectiveTz = timezone;

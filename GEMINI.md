@@ -45,13 +45,14 @@ Setiap kali Anda menerima giliran bicara, prompt, atau instruksi apapun dari USE
 ## 📢 2. NOTIFIKASI TELEGRAM
 Setiap kali Anda menyelesaikan suatu tugas atau jika menemukan kendala error yang memblokir proses, jalankan perintah terminal:
 - **Jika Sukses (HANYA jika tugas benar-benar 100% selesai dan terverifikasi):**
-  `node .vscode/tele-vs-code/tele-notify.js "<Judul Tugas>" --status SELESAI --detail "<Rincian 1>" --detail "<Rincian 2>"`
+  `node .vscode/tele-vs-code/tele-notify.js "<Judul Tugas>" --status SELESAI --detail "<Rincian 1>" --duration "<Durasi Pengerjaan>"`
+  *(Catatan: Perintah `node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil>"` otomatis menghitung durasi pengerjaan dari waktu mulai hingga selesai dan mencantumkannya ke TASK_QUEUE.md serta notifikasi Telegram).*
 - **Jika Sedang Proses Pengerjaan (opsional untuk update progres):**
   `node .vscode/tele-vs-code/tele-notify.js "<Judul Tugas>" --status PROSES --detail "<Status progres pekerjaan saat ini>"`
 - **Jika Menemukan Kendala Error:**
   `node .vscode/tele-vs-code/tele-notify.js "<Judul Kendala>" --status KENDALA --detail "<Penyebab>"`
 
-> ⚠️ **ATURAN MUTLAK:** JANGAN PERNAH mengirimkan status `SELESAI` saat tugas baru dimulai atau sedang dikerjakan. Status `SELESAI` HANYA untuk pekerjaan yang sudah 100% tuntas dan teruji.
+> ⚠️ **ATURAN MUTLAK:** JANGAN PERNAH mengirimkan status `SELESAI` saat tugas baru dimulai atau sedang dikerjakan. Status `SELESAI` HANYA untuk pekerjaan yang sudah 100% tuntas dan teruji. Selalu cantumkan durasi pengerjaan pada setiap laporan selesai.
 
 ---
 

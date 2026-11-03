@@ -270,6 +270,25 @@ function recordActiveTask(task) {
 }
 
 // Pindahkan tugas ke Riwayat Tugas Selesai (Status: DONE) hanya jika 100% SELESAI
+// Format durasi pengerjaan
+function formatDuration(startTime, endTime = new Date()) {
+  if (!startTime) return '';
+  try {
+    const startTs = typeof startTime === 'number' ? startTime : new Date(startTime).getTime();
+    const endTs = typeof endTime === 'number' ? endTime : new Date(endTime).getTime();
+    if (isNaN(startTs) || isNaN(endTs)) return '';
+    const diffSec = Math.max(0, Math.floor((endTs - startTs) / 1000));
+    const h = Math.floor(diffSec / 3600);
+    const m = Math.floor((diffSec % 3600) / 60);
+    const s = diffSec % 60;
+    if (h > 0) return `${h} jam ${m} menit ${s} detik`;
+    if (m > 0) return `${m} menit ${s} detik`;
+    return `${s} detik`;
+  } catch (e) {
+    return '';
+  }
+}
+
 function appendToTaskQueueFile(task, report) {
   try {
     if (!fs.existsSync(queueFile)) return;
@@ -279,10 +298,13 @@ function appendToTaskQueueFile(task, report) {
     const regexActive = new RegExp(`### \\[(PENDING|IN_PROGRESS)\\]\\s+${task.id}[\\s\\S]*?(?=(###|##|$))`, 'g');
     content = content.replace(regexActive, '');
 
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const durStr = formatDuration(task.created_at, now);
+    const durLine = durStr ? `- **Durasi:** ${durStr}\n` : '';
     const doneBlock = `### [DONE] ${task.id}
-- **Waktu:** ${task.created_at}
+- **Waktu:** ${now}
 - **Pengirim:** ${task.sender}
-- **Instruksi:** ${task.instruction.replace(/\r?\n/g, ' ')}
+${durLine}- **Instruksi:** ${task.instruction.replace(/\r?\n/g, ' ')}
 - **Status:** DONE
 - **Laporan Agent:** ${report}
 
@@ -541,11 +563,11 @@ async function processActiveLocalTasks() {
             const report = directResult.report;
             await markTaskDone(taskObj.id, report);
             appendToTaskQueueFile(taskObj, report);
-            sendNotification(`Tugas Selesai: ${taskObj.id}`, 'SELESAI', [
-              `Instruksi: ${inst.substring(0, 90)}`,
-              `Hasil: ${report}`,
-              `Pengirim: ${sender}`
-            ]);
+            const compDur = formatDuration(taskObj.created_at, new Date());
+            const repDetails = [`Instruksi: ${inst.substring(0, 90)}`, `Hasil: ${report}`];
+            if (compDur) repDetails.push(`Durasi: ${compDur}`);
+            repDetails.push(`Pengirim: ${sender}`);
+            sendNotification(`Tugas Selesai: ${taskObj.id}`, 'SELESAI', repDetails);
             console.log(`✅ [${taskObj.id}] Tugas aktif dari TASK_QUEUE.md berhasil dieksekusi: ${report}`);
           }
         } catch (err) {

@@ -119,6 +119,25 @@ function getOtherActiveInProgressTask(currentTaskId = '') {
   return null;
 }
 
+// Format durasi pengerjaan ke teks yang mudah dibaca
+function formatDuration(startTime, endTime = new Date()) {
+  if (!startTime) return '';
+  try {
+    const startTs = typeof startTime === 'number' ? startTime : new Date(startTime).getTime();
+    const endTs = typeof endTime === 'number' ? endTime : new Date(endTime).getTime();
+    if (isNaN(startTs) || isNaN(endTs)) return '';
+    const diffSec = Math.max(0, Math.floor((endTs - startTs) / 1000));
+    const h = Math.floor(diffSec / 3600);
+    const m = Math.floor((diffSec % 3600) / 60);
+    const s = diffSec % 60;
+    if (h > 0) return `${h} jam ${m} menit ${s} detik`;
+    if (m > 0) return `${m} menit ${s} detik`;
+    return `${s} detik`;
+  } catch (e) {
+    return '';
+  }
+}
+
 function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', attachmentUrl = '', attachmentType = '', attachmentName = '', agent = 'Antigravity AI Agent') {
   try {
     if (!fs.existsSync(queueFile)) {
@@ -148,7 +167,14 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
       content = content.replace(regexActive, '');
 
       const cleanInstruction = (finalInstruction || 'Perintah dari IDE Chat').replace(/\r?\n/g, ' ');
-      const doneBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${finalSender || 'IDE Chat'}\n- **Agent:** ${agent || 'Antigravity AI Agent'}\n- **Instruksi:** ${cleanInstruction}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
+      let taskStartTime = '';
+      if (match && match[0]) {
+        const mTime = match[0].match(/- \*\*Waktu:\*\*\s*([^\r\n]+)/);
+        if (mTime) taskStartTime = mTime[1].trim();
+      }
+      const durationStr = formatDuration(taskStartTime, now);
+      const durationLine = durationStr ? `- **Durasi:** ${durationStr}\n` : '';
+      const doneBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${finalSender || 'IDE Chat'}\n- **Agent:** ${agent || 'Antigravity AI Agent'}\n${durationLine}- **Instruksi:** ${cleanInstruction}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
       const doneMarker = '## ✅ Riwayat Tugas Selesai';
       if (content.includes(doneMarker)) {
         content = content.replace(doneMarker, `${doneMarker}\n\n${doneBlock}`);
@@ -369,9 +395,20 @@ async function run() {
     }
 
     try {
+      let computedDuration = '';
+      if (fs.existsSync(queueFile)) {
+        const qText = fs.readFileSync(queueFile, 'utf-8');
+        const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const mActive = new RegExp(`### \\[.*?\\]\\s+${escapedId}[\\s\\S]*?-\\s+\\*\\*Waktu:\\*\\*\\s*([^\\r\\n]+)`, 'i').exec(qText);
+        if (mActive) {
+          computedDuration = formatDuration(mActive[1].trim(), new Date());
+        }
+      }
+
       const act = command === 'done' ? 'done' : 'failed';
       const url = `${normalizedUrl}?action=${act}&secret=${secretKey}&id=${encodeURIComponent(taskId)}`;
       const paramsObj = { notes: report, result: report };
+      if (computedDuration) paramsObj.duration = computedDuration;
       if (cmd) paramsObj.command = cmd;
       const params = new URLSearchParams(paramsObj);
       const res = await fetch(url, {
@@ -390,7 +427,10 @@ async function run() {
         if (notifyJs) {
           try {
             const statArg = command === 'done' ? 'SELESAI' : 'KENDALA';
-            execSync(`node "${notifyJs}" "Tugas: ${taskId}" --status ${statArg} --detail "${report.replace(/"/g, '\\"')}"`, { stdio: 'inherit' });
+            const notifyArgs = [];
+            if (computedDuration) notifyArgs.push(`--duration "${computedDuration}"`);
+            notifyArgs.push(`--detail "${report.replace(/"/g, '\\"')}"`);
+            execSync(`node "${notifyJs}" "Tugas: ${taskId}" --status ${statArg} ${notifyArgs.join(' ')}`, { stdio: 'inherit' });
           } catch (e) {}
         }
       } else {

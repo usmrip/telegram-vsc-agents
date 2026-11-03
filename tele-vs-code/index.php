@@ -3007,8 +3007,8 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $now = date('Y-m-d H:i:s');
 
         // Hitung Durasi Pengerjaan Tugas
-        $durationText = "";
-        if (!empty($task['created_at'])) {
+        $durationText = trim($_POST['duration'] ?? ($_GET['duration'] ?? ''));
+        if (!$durationText && !empty($task['created_at'])) {
             $createdTs = strtotime($task['created_at']);
             $nowTs = strtotime($now);
             $diffSec = max(0, $nowTs - $createdTs);
