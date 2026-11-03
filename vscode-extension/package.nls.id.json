@@ -23,6 +23,8 @@
   "command.pullTasks": "Tarik Antrean Sekarang (Manual Webhook Sync)",
   "command.startCliWorker": "Jalankan Autonomous CLI Worker di Terminal",
   "command.uploadMedia": "Unggah File / Media Dokumentasi ke Server Biru",
-  "command.showMenu": "Buka Menu Utama Tele-vs-Code"
+  "command.showMenu": "Buka Menu Utama Tele-vs-Code",
+  "command.setAgentCronInterval": "Atur Interval Pemantauan Berkala Agent (Auto-Schedule / Cron)",
+  "config.agentCronInterval.description": "Interval waktu pemeriksaan berkala TASK_QUEUE.md oleh AI Agent dalam menit (Default: 3 menit)",
+  "config.autoScheduleAgent.description": "Otomatis jalankan timer pemantauan berkala untuk AI Agent saat ekstensi dimuat atau saat agen diganti"
 }
-

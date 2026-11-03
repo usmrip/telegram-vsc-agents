@@ -80,6 +80,7 @@ Ketika sebuah tugas ditujukan ke Agent (misal `Antigravity AI Agent` atau `@agen
 1. **Pemicu Cron Otomatis pada Agent:**
    - Setiap kali Agent aktif di sesi workspace, Agent WAJIB mengaktifkan pemantauan berkala (*autonomous background schedule / cron daemon*) menggunakan fasilitas scheduler yang tersedia (misal: tool `schedule` dengan `CronExpression: "*/3 * * * *"` atau timer loop).
    - Melalui mekanisme cron ini, Agent secara otomatis terbangun secara berkala untuk membaca `TASK_QUEUE.md` dan langsung mengeksekusi antrean tugas yang masuk secara berurutan hingga tuntas 100%, **tanpa menunggu prompt manual dari pengguna di IDE Chat**.
+   - Ekstensi VS Code Tele-vs-Code menyediakan konfigurasi interval waktu berkala yang dapat disesuaikan (default: 3 menit, rentang 1-60m) melalui setting `telegramNotifier.agentCronInterval` atau perintah `telegramNotifier.setAgentCronInterval`, serta tersimpan di `config.env` (`TELE_AGENT_CRON_INTERVAL`).
    - Hal ini menjamin pengguna yang berada di luar ruangan (hanya menggunakan Telegram di HP) tetap mendapatkan eksekusi coding yang cepat dan laporan penyelesaian tugas yang akurat.
 
 2. **Dukungan Perintah Jadwal dari Telegram:**

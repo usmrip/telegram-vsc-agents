@@ -15,7 +15,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
         ...options,
         headers: {
           'Connection': 'close',
-          'User-Agent': 'Tele-vs-Code/1.0.9',
+          'User-Agent': 'Tele-vs-Code/1.0.10',
           ...(options.headers || {})
         },
         signal: options.signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined)

@@ -23,6 +23,8 @@
   "command.pullTasks": "Pull Tasks Now (Instant Webhook Sync)",
   "command.startCliWorker": "Run Autonomous CLI Worker in Terminal",
   "command.uploadMedia": "Upload File / Media Documentation to Biru Server",
-  "command.showMenu": "Open Tele-vs-Code Main Menu"
+  "command.showMenu": "Open Tele-vs-Code Main Menu",
+  "command.setAgentCronInterval": "Set Agent Periodic Check Interval (Auto-Schedule / Cron)",
+  "config.agentCronInterval.description": "Periodic check interval in minutes for AI Agent to inspect and load TASK_QUEUE.md (Default: 3 minutes)",
+  "config.autoScheduleAgent.description": "Automatically start periodic auto-schedule timer for AI Agent when extension loads or agent changes"
 }
-

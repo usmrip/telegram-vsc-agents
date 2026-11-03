@@ -51,7 +51,7 @@ async function safeFetch(url, options = {}, maxRetries = 2) {
     try {
       const fetchHeaders = {
         'Connection': 'close',
-        'User-Agent': 'Tele-vs-Code/1.0.9',
+        'User-Agent': 'Tele-vs-Code/1.0.10',
         ...(options.headers || {})
       };
       const opt = {
@@ -122,6 +122,13 @@ const I18N = {
     agentManualTitle: "Ketik Perintah Terminal Kustom untuk AI Agent",
     agentManualPrompt: "Contoh: agy --dangerously-skip-permissions -p \"{prompt}\" atau /usr/local/bin/my-agent --task \"{instruction}\"",
     agentEmptyToast: "ℹ️ Agent Handler dikosongkan. Tugas dari Telegram hanya akan dicatat ke TASK_QUEUE.md tanpa eksekusi otomatis.",
+    menuAgentCronInterval: "Atur Interval Pemantauan Berkala Agent...",
+    menuAgentCronIntervalDesc: "Jeda waktu pemeriksaan TASK_QUEUE.md (Saat ini: {interval} menit)",
+    setCronIntervalTitle: "⏱️ Atur Interval Pemantauan Berkala Agent",
+    setCronIntervalPrompt: "Masukkan jeda waktu pemeriksaan berkala TASK_QUEUE.md oleh AI Agent (1 - 60 menit):",
+    setCronIntervalValidate: "Masukkan angka bulat antara 1 sampai 60 menit",
+    setCronIntervalToast: "⏱️ Interval pemantauan berkala AI Agent disetel ke: {interval} menit.",
+    agentScheduleStarted: "🚀 Jadwal pemantauan berkala AI Agent aktif ({agent}, setiap {interval}m).",
     agentSetToast: "✅ AI Agent Handler disetel ke: {agent}",
     agentRunningToast: "🤖 {agent} sedang mengeksekusi tugas {id}...",
     agentNoAgentWarning: "⚠️ [Tele-vs-Code] Tidak ditemukan AI Agent terpasang di sistem. Menggunakan pencatatan antrean saja.",
@@ -228,6 +235,13 @@ const I18N = {
     agentManualTitle: "Type Custom Terminal Command for AI Agent",
     agentManualPrompt: "Example: agy --dangerously-skip-permissions -p \"{prompt}\" or /usr/local/bin/my-agent --task \"{instruction}\"",
     agentEmptyToast: "ℹ️ Agent Handler is empty. Telegram tasks will only be logged in TASK_QUEUE.md without auto-execution.",
+    menuAgentCronInterval: "Set Agent Periodic Check Interval...",
+    menuAgentCronIntervalDesc: "TASK_QUEUE.md check interval (Current: {interval} min)",
+    setCronIntervalTitle: "⏱️ Set Agent Periodic Check Interval",
+    setCronIntervalPrompt: "Enter periodic check interval for AI Agent to check TASK_QUEUE.md (1 - 60 minutes):",
+    setCronIntervalValidate: "Please enter an integer between 1 and 60 minutes",
+    setCronIntervalToast: "⏱️ AI Agent periodic check interval set to: {interval} minutes.",
+    agentScheduleStarted: "🚀 AI Agent periodic check schedule active ({agent}, every {interval}m).",
     agentSetToast: "✅ AI Agent Handler set to: {agent}",
     agentRunningToast: "🤖 {agent} is executing task {id}...",
     agentNoAgentWarning: "⚠️ [Tele-vs-Code] No AI Agent found on your system. Using queue logging only.",

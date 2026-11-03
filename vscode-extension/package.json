@@ -2,7 +2,7 @@
   "name": "tele-vs-code",
   "displayName": "Tele-vs-Code",
   "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "publisher": "BiruIndonesiaCreative",
   "author": {
     "name": "usmrip",
@@ -187,6 +187,20 @@
           "default": false,
           "description": "Otomatis jalankan AI Agent handler yang dipilih saat tugas baru masuk dari Telegram",
           "markdownDescription": "Jika `true`, AI Agent handler yang dipilih akan otomatis langsung dipanggil di terminal saat tugas baru masuk tanpa harus mengklik toast notification."
+        },
+        "telegramNotifier.agentCronInterval": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Interval waktu pemeriksaan berkala TASK_QUEUE.md oleh AI Agent dalam menit (Default: 3 menit)",
+          "markdownDescription": "Interval waktu (dalam menit) untuk AI Agent memeriksa dan memuat `TASK_QUEUE.md` secara berkala (Default: `3` menit)."
+        },
+        "telegramNotifier.autoScheduleAgent": {
+          "type": "boolean",
+          "default": true,
+          "description": "Otomatis jalankan timer pemantauan berkala untuk AI Agent saat ekstensi dimuat atau saat agen diganti",
+          "markdownDescription": "Jika `true`, ekstensi akan otomatis mengaktifkan jadwal pemantauan berkala untuk AI Agent saat ekstensi dimuat atau saat agen diganti."
         }
       }
     },
@@ -294,6 +308,11 @@
       {
         "command": "telegramNotifier.uploadMedia",
         "title": "Unggah File / Media Dokumentasi ke Server Biru",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.setAgentCronInterval",
+        "title": "Atur Interval Pemantauan Berkala Agent (Auto-Schedule / Cron)",
         "category": "Tele-vs-Code"
       }
     ],
