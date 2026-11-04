@@ -85,7 +85,10 @@ function resolveDbPath() {
 
 define('DB_FILE', resolveDbPath());
 function getLatestVsixFile() {
-    $candidates = glob(__DIR__ . '/tele-vs-code-*.vsix');
+    $candidates = array_merge(
+        glob(__DIR__ . '/publish/tele-vs-code-*.vsix') ?: [],
+        glob(__DIR__ . '/tele-vs-code-*.vsix') ?: []
+    );
     if (!empty($candidates)) {
         usort($candidates, function($a, $b) {
             $verA = preg_replace('/^.*tele-vs-code-|\.vsix$/', '', $a);

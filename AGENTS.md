@@ -132,3 +132,30 @@ Dalam ekosistem Tele-vs-Code, baik sistem ekstensi, runner CLI, maupun AI Agent 
 
 3. **Pencarian Lampiran & Media Dokumentasi:**
    - Selain mencari file lampiran di folder lokal (`attachments/<TASK-ID>/`), jika file fisik belum ada di disk lokal, unduh atau arahkan langsung ke tautan server remote Biru (`https://biru.co.id/tele-vs-code/uploads/...`).
+
+---
+
+## 🖥️ 7. PERTIMBANGAN INSTALASI VSIX DI SERVER (REMOTE SSH / LINUX / HEADLESS)
+Saat ekstensi Tele-vs-Code (VSIX) diinstal dan dijalankan di lingkungan server (Remote SSH, WSL, Dev Containers, code-server, openvscode-server, atau Linux VPS headless):
+
+1. **Dukungan Multi-Binary Server:**
+   - Skrip instalasi (`install-vsix.js` / `install-vsix.sh`) secara cerdas mendeteksi varian binary editor di server:
+     - `code`, `code-server`, `openvscode-server`, `cursor`, `codium`, `vscodium`
+     - Path server Linux standar: `/usr/bin/code-server`, `/usr/local/bin/code-server`, `/snap/bin/code`, serta instalasi internal `~/.vscode-server/bin/*/bin/code-server`.
+   - Hal ini memastikan paket VSIX dapat diinstal dengan mulus baik di desktop lokal maupun di server remote.
+
+2. **Eksekusi Sisi Server (Workspace Extension Kind):**
+   - Konfigurasi `extensionKind: ["workspace", "ui"]` memastikan bahwa saat pengguna terhubung ke Remote SSH, Tele-vs-Code berjalan langsung di sisi host server remote tempat workspace dan berkas `TASK_QUEUE.md` berada, bukan di laptop/klien lokal.
+
+3. **Izin Eksekusi Skrip Runner di Linux Server (chmod +x):**
+   - Saat inisialisasi berkas di server Linux/macOS, seluruh skrip tools di `.vscode/tele-vs-code/` (`tele-worker`, `tele-notify`, `tele-task`, `*.sh`) otomatis disetel dengan izin eksekusi `chmod 755` (`0o755`) agar dapat dieksekusi oleh AI Agent maupun terminal runner tanpa kendala *permission denied*.
+
+4. **Resiliensi Headless & Non-Intrusive Notifications:**
+   - Di server headless tanpa tampilan GUI:
+     - Error koneksi, webhook timeout, atau server offline TIDAK PERNAH memunculkan pop-up modal yang memblokir, melainkan tampil sebagai indikator di status bar dan tercatat rapi di log output.
+     - Auto-resolve proyek otomatis mengaitkan Project Key tanpa memaksa interaksi GUI wizard.
+
+5. **Background Worker & Cron Scheduler Mandiri di Server:**
+   - Pemantauan antrean di server remote dapat berjalan secara mandiri dan persisten menggunakan:
+     - Fitur autonomous cron daemon internal AI Agent (misal tool `schedule` dengan interval 3 menit).
+     - Atau background CLI worker: `nohup node .vscode/tele-vs-code/tele-worker.js > tele-worker.log 2>&1 &` atau via `tmux` / `systemd`.
