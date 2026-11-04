@@ -4962,13 +4962,39 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
         font-weight: 600;
         text-decoration: none;
         z-index: 9999;
-        transition: all 0.25s ease;
+        transition: opacity 0.45s cubic-bezier(0.16, 1, 0.3, 1), transform 0.45s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s ease;
         border: 1px solid rgba(255, 255, 255, 0.2);
         border-right: none;
     }
     .floating-feedback-btn:hover {
         background: #0369a1;
         padding-right: 16px;
+    }
+    @media (max-width: 768px) {
+        /* Di versi mobile: saat pertama kali dibuka tidak dimunculkan */
+        .floating-feedback-btn {
+            top: auto;
+            bottom: 22px;
+            right: 16px;
+            border-radius: 9999px;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55), 0 0 16px rgba(2, 132, 199, 0.4);
+            padding: 9px 16px;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(28px) scale(0.9);
+            will-change: transform, opacity;
+        }
+        .floating-feedback-btn:hover {
+            padding-right: 16px;
+            background: #0369a1;
+        }
+        /* Saat discroll ke bawah, munculkan dengan animasi smooth */
+        .floating-feedback-btn.is-visible {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0) scale(1);
+        }
     }
     @media (max-width: 640px) {
         .navbar-actions {
@@ -7352,6 +7378,12 @@ function toggleProjectCard(id) {
 <!-- ==================================================================== -->
 <!-- MODAL REGULASI, PRIVASI & KERAHASIAAN DATA (Dual Language ID & EN)    -->
 <!-- ==================================================================== -->
+<!-- Floating Feedback Button -->
+<a href="https://ayo.ke/feedback-tele-vs-code" target="_blank" rel="noopener noreferrer" class="floating-feedback-btn" id="floatingFeedbackBtn" title="Kirim Saran / Laporkan Bug">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+    <span><?= __t('Feedback', 'Feedback') ?></span>
+</a>
+
 <div id="modalPrivacy" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closePrivacyModal()">
     <div class="modal-content" style="max-width: 620px; padding: 28px 24px; text-align: left;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -7743,5 +7775,40 @@ function openImageModal(e, url, title) {
 
 </script>
 
+
+<script>
+// Floating Feedback Button: Di mobile sembunyikan saat pertama dibuka, munculkan dengan animasi smooth saat discroll ke bawah
+(function initFloatingButtonMobileScroll() {
+    const floatBtn = document.getElementById('floatingFeedbackBtn');
+    if (!floatBtn) return;
+
+    let ticking = false;
+    function checkScroll() {
+        if (window.innerWidth <= 768) {
+            // Threshold scroll 50px untuk memicu animasi muncul yang halus
+            if (window.scrollY > 50) {
+                floatBtn.classList.add('is-visible');
+            } else {
+                floatBtn.classList.remove('is-visible');
+            }
+        } else {
+            // Pada desktop selalu tampil normal
+            floatBtn.classList.remove('is-visible');
+        }
+        ticking = false;
+    }
+
+    function onScroll() {
+        if (!ticking) {
+            window.requestAnimationFrame(checkScroll);
+            ticking = true;
+        }
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    checkScroll();
+})();
+</script>
 </body>
 </html>
