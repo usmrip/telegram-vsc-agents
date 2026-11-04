@@ -138,6 +138,21 @@ function formatDuration(startTime, endTime = new Date()) {
   }
 }
 
+// Selain cari di lokal, cari juga di remote server Biru
+async function fetchRemoteTask(taskId) {
+  if (!secretKey || !taskId) return null;
+  try {
+    const cleanId = taskId.startsWith('#') ? taskId : '#' + taskId;
+    const url = `${normalizedUrl}?action=get_task&secret=${secretKey}&id=${encodeURIComponent(cleanId)}`;
+    const res = await safeFetch(url, { timeout: 8000 }, 2);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ok && data.task) return data.task;
+    }
+  } catch (e) {}
+  return null;
+}
+
 function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', attachmentUrl = '', attachmentType = '', attachmentName = '', agent = 'Antigravity AI Agent') {
   try {
     if (!fs.existsSync(queueFile)) {
@@ -356,12 +371,32 @@ async function run() {
         // Perbarui status di TASK_QUEUE.md lokal menjadi [IN_PROGRESS]
         updateLocalQueueFile(taskId, '', '', 'IN_PROGRESS', note);
 
-        // Cari instruksi dari TASK_QUEUE.md lokal
+        // 1. Cari instruksi dari TASK_QUEUE.md lokal
         let foundInst = '';
         if (fs.existsSync(queueFile)) {
           const qText = fs.readFileSync(queueFile, 'utf-8');
           const m = new RegExp(`### \\[.*?\\]\\s+${taskId}[\\s\\S]*?-\\s+\\*\\*Instruksi:\\*\\*\\s*([^\\r\\n]+)`, 'i').exec(qText);
           if (m) foundInst = m[1].trim();
+        }
+
+        // 2. SELAIN CARI DI LOKAL, CARI JUGA DI REMOTE SERVER
+        let remoteTask = null;
+        if (!foundInst || (data && data.instruction)) {
+          foundInst = (data && data.instruction) ? data.instruction : '';
+          if (!foundInst) {
+            remoteTask = await fetchRemoteTask(taskId);
+            if (remoteTask && remoteTask.instruction) foundInst = remoteTask.instruction;
+          }
+        }
+
+        // Jika di TASK_QUEUE.md lokal tugas belum ada sama sekali, sinkronkan dari data remote/server
+        if (foundInst) {
+          const senderName = (data && data.sender) || (remoteTask && remoteTask.sender) || 'Telegram User';
+          const agentName = (data && data.agent) || (remoteTask && remoteTask.agent) || 'Antigravity AI Agent';
+          const attachUrl = (data && data.attachment_url) || (remoteTask && remoteTask.attachment_url) || '';
+          const attachType = (data && data.attachment_type) || (remoteTask && remoteTask.attachment_type) || '';
+          const attachName = (data && data.attachment_name) || (remoteTask && remoteTask.attachment_name) || '';
+          updateLocalQueueFile(taskId, foundInst, senderName, 'IN_PROGRESS', note, attachUrl, attachType, attachName, agentName);
         }
 
         const notifyJs = getNotifyScript();
@@ -395,15 +430,25 @@ async function run() {
     for (let i = 3; i < args.length; i++) {
       if (args[i] === '--command' || args[i] === '-c') cmd = args[++i] || cmd;
     }
-
     try {
       let computedDuration = '';
+      let localStartTime = '';
       if (fs.existsSync(queueFile)) {
         const qText = fs.readFileSync(queueFile, 'utf-8');
         const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
         const mActive = new RegExp(`### \\[.*?\\]\\s+${escapedId}[\\s\\S]*?-\\s+\\*\\*Waktu:\\*\\*\\s*([^\\r\\n]+)`, 'i').exec(qText);
         if (mActive) {
-          computedDuration = formatDuration(mActive[1].trim(), new Date());
+          localStartTime = mActive[1].trim();
+          computedDuration = formatDuration(localStartTime, new Date());
+        }
+      }
+
+      // SELAIN CARI DI LOKAL, CARI JUGA DI REMOTE SERVER (untuk waktu mulai / durasi akurat)
+      let remoteTaskDone = null;
+      if (!localStartTime) {
+        remoteTaskDone = await fetchRemoteTask(taskId);
+        if (remoteTaskDone && remoteTaskDone.created_at) {
+          computedDuration = formatDuration(remoteTaskDone.created_at, new Date());
         }
       }
 

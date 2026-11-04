@@ -1053,6 +1053,19 @@ function activate(context) {
 
     const home = os.homedir();
     const localAppData = process.env.LOCALAPPDATA || (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData', 'Local') : '');
+    // Selain cari di path lokal, cari juga di remote environment (WSL, SSH remote, nvm, snap, homebrew)
+    const remoteAndExtraPaths = [
+      path.join(home, '.nvm', 'versions', 'node', 'current', 'bin', binName),
+      path.join(home, '.npm-global', 'bin', binName),
+      path.join(home, '.config', 'yarn', 'global', 'node_modules', '.bin', binName),
+      path.join(home, '.pnpm', binName),
+      `/snap/bin/${binName}`,
+      `/opt/homebrew/bin/${binName}`,
+      `/root/.local/bin/${binName}`,
+      `/root/.antigravity/bin/${binName}`,
+      `/home/linuxbrew/.linuxbrew/bin/${binName}`
+    ];
+
     const standardPaths = [
       ...extraPaths,
       path.join(home, '.local', 'bin', binName),
@@ -1064,6 +1077,7 @@ function activate(context) {
       path.join(home, '.cargo', 'bin', `${binName}.exe`),
       `/usr/local/bin/${binName}`,
       `/usr/bin/${binName}`,
+      ...remoteAndExtraPaths,
       localAppData ? path.join(localAppData, binName, 'bin', `${binName}.exe`) : '',
       localAppData ? path.join(localAppData, 'Programs', binName, `${binName}.exe`) : ''
     ].filter(Boolean);
@@ -2460,8 +2474,21 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
         // Jika tidak ada yang IN_PROGRESS, ambil tugas PENDING pertama
         match = /###\s+\[(PENDING|WAITING|QUEUE)\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/i.exec(activeSection);
       }
+
+      // SELAIN CARI DI LOKAL, CARI JUGA DI REMOTE SERVER
+      if (!match && cur.secretKey) {
+        log('info', 'Tugas tidak ditemukan di antrean lokal. Mencari juga di remote server...');
+        await pullTaskQueue(true);
+        if (fs.existsSync(queueFile)) {
+          const freshContent = fs.readFileSync(queueFile, 'utf-8');
+          const freshActive = freshContent.split('## ✅ Riwayat Tugas Selesai')[0];
+          match = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/i.exec(freshActive) ||
+                  /###\s+\[(PENDING|WAITING|QUEUE)\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/i.exec(freshActive);
+        }
+      }
+
       if (!match) {
-        vscode.window.showInformationMessage('ℹ️ Tidak ada tugas aktif [PENDING] atau [IN_PROGRESS] di antrean TASK_QUEUE.md.');
+        vscode.window.showInformationMessage('ℹ️ Tidak ada tugas aktif [PENDING] atau [IN_PROGRESS] baik di lokal maupun di server remote.');
         return;
       }
 
@@ -2652,13 +2679,28 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
       return;
     }
     const qContent = fs.readFileSync(qPath, 'utf-8');
-    const taskMatch = qContent.match(/###\s*\[(PENDING|IN_PROGRESS)\]\s*(#TASK-[A-Za-z0-9_-]+)/i);
-    const taskId = taskMatch ? taskMatch[2] : '';
-    const instMatch = qContent.match(/-\s*\*\*Instruksi:\*\*\s*(.*)/i);
-    const inst = instMatch ? instMatch[1].trim() : '';
+    let taskMatch = qContent.match(/###\s*\[(PENDING|IN_PROGRESS)\]\s*(#TASK-[A-Za-z0-9_-]+)/i);
+    let taskId = taskMatch ? taskMatch[2] : '';
+    let instMatch = qContent.match(/-\s*\*\*Instruksi:\*\*\s*(.*)/i);
+    let inst = instMatch ? instMatch[1].trim() : '';
+
+    // SELAIN CARI DI LOKAL, CARI JUGA DI REMOTE SERVER
+    if (!taskId && cur.secretKey) {
+      log('info', 'Tugas tidak ditemukan di antrean lokal. Mencari juga di remote server...');
+      await pullTaskQueue(true);
+      if (fs.existsSync(qPath)) {
+        const freshContent = fs.readFileSync(qPath, 'utf-8');
+        taskMatch = freshContent.match(/###\s*\[(PENDING|IN_PROGRESS)\]\s*(#TASK-[A-Za-z0-9_-]+)/i);
+        if (taskMatch) {
+          taskId = taskMatch[2];
+          instMatch = freshContent.match(/-\s*\*\*Instruksi:\*\*\s*(.*)/i);
+          inst = instMatch ? instMatch[1].trim() : '';
+        }
+      }
+    }
 
     if (!taskId) {
-      vscode.window.showInformationMessage('ℹ️ Tidak ada tugas berstatus [PENDING] atau [IN_PROGRESS] di antrean.');
+      vscode.window.showInformationMessage('ℹ️ Tidak ada tugas berstatus [PENDING] atau [IN_PROGRESS] baik di lokal maupun di remote server.');
       return;
     }
 

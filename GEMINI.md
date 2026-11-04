@@ -114,3 +114,21 @@ Ketika sebuah tugas ditujukan ke Agent (misal `Antigravity AI Agent` atau `@agen
      1. Mendaftarkan background schedule/timer (misal tool `schedule` dengan `CronExpression: "*/3 * * * *"` atau timer loop berulang).
      2. Membaca `TASK_QUEUE.md` secara berkala.
      3. Mengambil dan mengeksekusi tugas berstatus `[PENDING]` / `[WAITING]` satu per satu secara sekuensial hingga 100% selesai.
+
+---
+
+## 🔍 6. STRATEGI PENCARIAN DUA ARAH (SELAIN CARI DI LOKAL, CARI JUGA DI REMOTE)
+Dalam ekosistem Tele-vs-Code, baik sistem ekstensi, runner CLI, maupun AI Agent wajib menerapkan prinsip pencarian dua arah (Dual-Search Strategy):
+
+1. **Pencarian Antrean Tugas & Instruksi:**
+   - Saat memeriksa antrean tugas berikutnya atau mencari instruksi spesifik dari suatu Task ID:
+     👉 **Langkah 1:** Cari terlebih dahulu di berkas lokal `TASK_QUEUE.md`.
+     👉 **Langkah 2 (Pencarian Remote):** Jika tugas atau instruksi belum ditemukan di lokal, sistem WAJIB mencari ke Server Remote Biru (`https://biru.co.id/tele-vs-code/?action=get_task&id=<TASK-ID>` atau `action=pull`).
+     👉 **Langkah 3 (Sinkronisasi Otomatis):** Data tugas dari remote otomatis disinkronkan ke `TASK_QUEUE.md` lokal dengan status yang sesuai (`[PENDING]` atau `[IN_PROGRESS]`).
+
+2. **Pencarian AI Agent & Binary Executor (findCli):**
+   - Selain mencari di lingkungan instalasi lokal pengguna (`PATH`, `AppData`, `~/.local/bin`), sistem juga mencari di remote environments (Remote SSH, WSL, Dev Containers, snap, homebrew, nvm node binaries, dll.).
+   - Jika binary CLI tidak ditemukan di lokal maupun remote, sistem secara cerdas melakukan fallback ke **Agent IDE** yang langsung mengeksekusi di jendela Chat IDE.
+
+3. **Pencarian Lampiran & Media Dokumentasi:**
+   - Selain mencari file lampiran di folder lokal (`attachments/<TASK-ID>/`), jika file fisik belum ada di disk lokal, unduh atau arahkan langsung ke tautan server remote Biru (`https://biru.co.id/tele-vs-code/uploads/...`).

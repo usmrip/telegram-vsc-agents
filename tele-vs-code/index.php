@@ -12,7 +12,7 @@ $actionParam = $_GET['action'] ?? ($_POST['action'] ?? '');
 $isApiOrWebhook = (
     strpos($reqUri, '/tele-vs-code/webhook') !== false ||
     isset($_GET['is_webhook']) ||
-    in_array($actionParam, ['pull', 'api_pull', 'push', 'api_push', 'done', 'api_done', 'failed', 'api_failed', 'in_progress', 'api_in_progress', 'status', 'api_status', 'projects', 'api_projects', 'webhook', 'upload', 'upload_media', 'api_upload_media', 'media_list', 'api_media_list'])
+    in_array($actionParam, ['pull', 'api_pull', 'push', 'api_push', 'done', 'api_done', 'failed', 'api_failed', 'in_progress', 'api_in_progress', 'status', 'api_status', 'projects', 'api_projects', 'webhook', 'upload', 'upload_media', 'api_upload_media', 'media_list', 'api_media_list', 'get_task', 'api_get_task', 'task'])
 );
 
 if (!$isApiOrWebhook && session_status() === PHP_SESSION_NONE) {
@@ -1215,6 +1215,7 @@ if ($action === 'status') $action = 'api_status';
 if ($action === 'projects') $action = 'api_projects';
 if ($action === 'upload' || $action === 'upload_media' || $action === 'upload_file') $action = 'api_upload_media';
 if ($action === 'media_list' || $action === 'get_media') $action = 'api_media_list';
+if ($action === 'get_task' || $action === 'task') $action = 'api_get_task';
 
 // Deteksi jika diakses via endpoint /tele-vs-code/webhook
 $reqUri = $_SERVER['REQUEST_URI'] ?? '';
@@ -2629,7 +2630,7 @@ if ($action === 'attachment') {
 }
 
 // REST API untuk VS Code Extension & Worker Agent
-if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in_progress', 'api_status', 'api_projects', 'api_upload_media', 'api_media_list'])) {
+if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in_progress', 'api_status', 'api_projects', 'api_upload_media', 'api_media_list', 'api_get_task'])) {
     $apiKey = $_GET['secret'] ?? ($_POST['secret'] ?? ($_GET['key'] ?? ($_POST['key'] ?? ($_SERVER['HTTP_X_API_KEY'] ?? ''))));
     if (!$apiKey) {
         http_response_code(401);
@@ -3135,10 +3136,53 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
             'ok' => true,
             'id' => $taskId,
             'status' => 'IN_PROGRESS',
+            'instruction' => $task['instruction'] ?? '',
+            'sender' => $task['sender'] ?? 'Telegram User',
+            'agent' => !empty($task['assigned_agent']) ? $task['assigned_agent'] : 'Antigravity AI Agent',
+            'attachment_url' => $task['attachment_url'] ?? '',
+            'attachment_type' => $task['attachment_type'] ?? '',
+            'attachment_name' => $task['attachment_name'] ?? '',
+            'created_at' => $task['created_at'] ?? '',
             'start_notified' => ($alreadyNotified || $notifiedByServer) ? 1 : 0,
             'already_notified' => $alreadyNotified ? true : false,
             'notified_now' => $notifiedByServer
         ]);
+        exit;
+    }
+
+    // Ambil Data Spesifik Satu Tugas (Selain cari di lokal, cari juga di remote)
+    if ($action === 'api_get_task') {
+        $taskId = trim($_GET['id'] ?? ($_POST['id'] ?? ''));
+        if (!$taskId) {
+            echo json_encode(['ok' => false, 'error' => 'Parameter id tugas wajib diisi']);
+            exit;
+        }
+        $cleanId = ltrim($taskId, '#');
+        $stmtT = $db->prepare("SELECT t.*, p.name as project_name, p.code as project_code FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE (t.id = ? OR t.id = ? OR t.id LIKE ?) AND t.user_id = ? LIMIT 1");
+        $stmtT->execute([$taskId, '#' . $cleanId, '%' . $cleanId . '%', $user['id']]);
+        $taskRow = $stmtT->fetch(PDO::FETCH_ASSOC);
+        if ($taskRow) {
+            echo json_encode([
+                'ok' => true,
+                'task' => [
+                    'id' => $taskRow['id'],
+                    'instruction' => $taskRow['instruction'],
+                    'sender' => $taskRow['sender'],
+                    'status' => $taskRow['status'],
+                    'agent' => !empty($taskRow['assigned_agent']) ? $taskRow['assigned_agent'] : 'Antigravity AI Agent',
+                    'notes' => $taskRow['notes'],
+                    'attachment_url' => $taskRow['attachment_url'],
+                    'attachment_type' => $taskRow['attachment_type'],
+                    'attachment_name' => $taskRow['attachment_name'],
+                    'created_at' => $taskRow['created_at'],
+                    'updated_at' => $taskRow['updated_at'],
+                    'project_name' => $taskRow['project_name'],
+                    'project_code' => $taskRow['project_code']
+                ]
+            ]);
+        } else {
+            echo json_encode(['ok' => false, 'error' => 'Tugas tidak ditemukan di server remote']);
+        }
         exit;
     }
 
