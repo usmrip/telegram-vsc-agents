@@ -1227,6 +1227,9 @@ function activate(context) {
     return `Periksa file TASK_QUEUE.md dan selesaikan seluruh tugas aktif sampai tuntas 100% sesuai AGENTS.md. ${periodicDirective}`;
   }
 
+  // Quota Guard: Cache pemicuan tugas terakhir untuk mencegah eksekusi berulang (hemat kuota)
+  const recentlyDispatchedTasks = new Map();
+
   // Eksekusi tugas melalui Agent Handler terpilih
   async function executeTaskWithAgent(taskId, instruction, agentOverride = null) {
     const cur = getEffectiveConfig();
@@ -1239,13 +1242,24 @@ function activate(context) {
 
     const targetFolder = cur.folder || process.cwd();
     const queueFile = path.join(targetFolder, 'TASK_QUEUE.md');
+    // Quota Guard: Cek apakah instruksi atau tugas serupa baru saja dipicu dalam 60 detik (cooldown)
+    const taskKey = ((taskId || '').toLowerCase().trim()) + '::' + ((instruction || '').toLowerCase().trim());
+    const nowTime = Date.now();
+    if (taskKey !== '::' && recentlyDispatchedTasks.has(taskKey)) {
+      const lastTime = recentlyDispatchedTasks.get(taskKey);
+      if (nowTime - lastTime < 60000 && (!agentOverride || !agentOverride.force)) {
+        log('info', `[Quota Guard] Tugas ${taskId || instruction} baru saja dipicu ${Math.round((nowTime - lastTime) / 1000)} detik lalu. Melewati pemicuan ganda untuk hemat kuota.`);
+        return { executed: false, reason: 'Deduplikasi Quota Guard (cooldown aktif)' };
+      }
+    }
+    if (taskKey !== '::') recentlyDispatchedTasks.set(taskKey, nowTime);
 
     // Aturan Sekuensial & Anti Re-Execution: Periksa tugas KENDALA / FAILED dan IN_PROGRESS
     if (taskId && fs.existsSync(queueFile)) {
       try {
         const qText = fs.readFileSync(queueFile, 'utf-8');
-        const escapedCurrentId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\// Aturan Sekuensial: Periksa apakah ada tugas lain yang masih [IN_PROGRESS]');
-        const isAlreadyFailed = new RegExp('###\\s+\\[(FAILED|KENDALA)\\]\\s+' + escapedCurrentId, 'i').test(qText);
+        const cleanTaskId = taskId.replace(/^#/, '');
+        const isAlreadyFailed = new RegExp('###\\s+\\[(FAILED|KENDALA)\\]\\s+#?' + cleanTaskId, 'i').test(qText);
         if (isAlreadyFailed && (!agentOverride || !agentOverride.force)) {
           const warnMsg = '⚠️ [Tele-vs-Code] Tugas ' + taskId + ' ditandai KENDALA / FAILED. Tugas yang berkendala tidak boleh dieksekusi berulang-ulang secara otomatis.';
           log('warn', warnMsg);

@@ -195,3 +195,24 @@ Perintah sistem yang berisiko tinggi atau destruktif **DILARANG KERAS** diekseku
 
 3. **Pencegahan Terenkripsi (Anti-Public Inspection):**
    - Pola dan aturan pencegahan perintah berbahaya dienkripsi secara kriptografis di sistem agar daftar kata kunci dan pola proteksi tidak dapat dibaca, dipelajari, atau dieksploitasi oleh publik di repository terbuka.
+
+---
+
+## ⚡ 10. ATURAN HEMAT KUOTA & PENCEGAHAN PERINTAH BERULANG (QUOTA GUARD)
+Untuk menghemat pemakaian kuota token AI Agent, API, dan sumber daya sistem:
+
+1. **Deduplikasi Perintah Otomatis (Server & Extension Level):**
+   - Perintah/instruksi yang sama persis tidak akan dimasukkan ke antrean tugas ganda apabila tugas serupa masih berstatus `[PENDING]`, `[WAITING]`, atau `[IN_PROGRESS]`.
+   - Diterapkan jeda pengaman (*cooldown window* 60 detik) untuk tugas yang baru selesai (`[DONE]`) guna mencegah spam klik ganda dari Telegram.
+   - Pemicu agent di VS Code extension (`executeTaskWithAgent`) dilengkapi cache deduplikasi sehingga tugas atau instruksi yang sama tidak di-dispatch berulang kali ke terminal/Chat IDE dalam kurun waktu 60 detik.
+
+2. **Smart Idle Mode pada Pemantauan Berkala (Zero-Token Consumption):**
+   - Saat AI Agent dibangunkan oleh autonomous cron/scheduler berkala:
+     - Jika bagian `## ⏳ Tugas Aktif` kosong (tidak ada tugas `[PENDING]` atau `[WAITING]`):
+       👉 AI Agent WAJIB langsung kembali ke kondisi idle (standby) dengan output seringkas mungkin tanpa memanggil tool yang tidak perlu atau menghasilkan token panjang yang memboroskan kuota.
+     - JANGAN PERNAH menjalankan serangkaian tool pencarian atau inspeksi file berulang jika tidak ada antrean tugas baru yang masuk.
+
+3. **Penyelesaian Sekuensial Menjamin Efisiensi:**
+   - Fokus 100% pada satu tugas aktif hingga selesai sebelum beralih ke tugas berikutnya.
+   - Setiap tugas yang telah tuntas langsung dipindahkan ke riwayat `[DONE]` agar tidak pernah diproses kembali oleh worker maupun agent.
+

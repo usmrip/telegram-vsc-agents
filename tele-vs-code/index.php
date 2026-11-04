@@ -2446,6 +2446,68 @@ if ($action === 'webhook') {
             $taskSender = $displayName . ' (Private Chat)';
         }
 
+        // ======================================================================
+        // ATURAN HEMAT KUOTA & ANTI PERINTAH BERULANG (QUOTA GUARD / DEDUPLICATION)
+        // ======================================================================
+        // Cek apakah perintah serupa sedang aktif (PENDING / WAITING / IN_PROGRESS)
+        // atau baru saja selesai (DONE) dalam kurun waktu 60 detik (cooldown spam)
+        $cleanInstLower = strtolower(trim(preg_replace('/\s+/', ' ', $instruction)));
+
+        if ($cleanInstLower !== '') {
+            $stmtDup = $db->prepare("SELECT id, status, instruction, created_at, updated_at FROM tasks WHERE project_id = ? AND status IN ('PENDING', 'WAITING', 'IN_PROGRESS') ORDER BY id DESC LIMIT 10");
+            $stmtDup->execute([$targetProject['id']]);
+            $activeTasks = $stmtDup->fetchAll(PDO::FETCH_ASSOC);
+            $stmtDup->closeCursor();
+
+            $isDuplicate = false;
+            $dupTask = null;
+            foreach ($activeTasks as $at) {
+                $existingText = strtolower(trim(preg_replace('/\s+/', ' ', $at['instruction'] ?? '')));
+                if ($existingText === $cleanInstLower) {
+                    $isDuplicate = true;
+                    $dupTask = $at;
+                    break;
+                }
+            }
+
+            // Jika tidak ada di antrean aktif, cek apakah baru saja selesai (cooldown 60 detik)
+            if (!$isDuplicate) {
+                $stmtRecent = $db->prepare("SELECT id, status, instruction, updated_at FROM tasks WHERE project_id = ? AND status = 'DONE' AND updated_at >= datetime('now', '-60 seconds') ORDER BY id DESC LIMIT 5");
+                $stmtRecent->execute([$targetProject['id']]);
+                $recentTasks = $stmtRecent->fetchAll(PDO::FETCH_ASSOC);
+                $stmtRecent->closeCursor();
+
+                foreach ($recentTasks as $rt) {
+                    $existingText = strtolower(trim(preg_replace('/\s+/', ' ', $rt['instruction'] ?? '')));
+                    if ($existingText === $cleanInstLower) {
+                        $isDuplicate = true;
+                        $dupTask = $rt;
+                        break;
+                    }
+                }
+            }
+
+            if ($isDuplicate && $dupTask) {
+                $statusLabel = ($dupTask['status'] === 'IN_PROGRESS') ? 'Sedang Dikerjakan' : (($dupTask['status'] === 'DONE') ? 'Baru Saja Selesai' : 'Dalam Antrean');
+                $replyDup = "⚠️ <b>PERINTAH SERUPA SUDAH ADA (QUOTA GUARD)</b>\n"
+                          . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                          . "💡 <b>Penghematan Kuota AI Agent:</b>\n"
+                          . "Perintah ini tidak ditambahkan lagi karena tugas serupa sudah tercatat sebelumnya untuk menghemat pemakaian kuota/token AI Agent.\n\n"
+                          . "📌 <b>Task ID Terkait:</b> <code>" . htmlspecialchars($dupTask['id']) . "</code>\n"
+                          . "📊 <b>Status Saat Ini:</b> <code>" . $statusLabel . " (" . htmlspecialchars($dupTask['status']) . ")</code>\n\n"
+                          . "⏳ <i>Harap tunggu hingga tugas tersebut selesai dikerjakan.</i>";
+
+                callTelegram($targetProject['bot_token'] ?? $project['bot_token'], 'sendMessage', [
+                    'chat_id' => $incomingChatId,
+                    'text' => $replyDup,
+                    'parse_mode' => 'HTML',
+                    'reply_to_message_id' => $messageId
+                ]);
+                echo "OK";
+                exit;
+            }
+        }
+
         // Unduh file lampiran jika ada
         if ($attachmentFileId && !empty($targetProject['bot_token'])) {
             $fileInfo = callTelegram($targetProject['bot_token'], 'getFile', ['file_id' => $attachmentFileId]);
@@ -3137,6 +3199,27 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
             }
         }
         if (!$assignedAgent) $assignedAgent = 'Antigravity AI Agent';
+
+        // Quota Guard: Cek apakah instruksi serupa sedang aktif untuk project ini
+        $cleanInstLower = strtolower(trim(preg_replace('/\s+/', ' ', $instruction)));
+        if ($cleanInstLower !== '') {
+            $stmtChk = $db->prepare("SELECT id, status FROM tasks WHERE user_id = ? AND project_id = ? AND status IN ('PENDING', 'WAITING', 'IN_PROGRESS') ORDER BY id DESC LIMIT 5");
+            $stmtChk->execute([$user['id'], $prjId]);
+            $existingActive = $stmtChk->fetchAll(PDO::FETCH_ASSOC);
+            $stmtChk->closeCursor();
+
+            foreach ($existingActive as $ea) {
+                if (strtolower(trim(preg_replace('/\s+/', ' ', $ea['instruction'] ?? ''))) === $cleanInstLower) {
+                    echo json_encode([
+                        'ok' => true,
+                        'id' => $ea['id'],
+                        'message' => "Perintah serupa sudah ada di antrean aktif (" . $ea['id'] . ") dengan status " . $ea['status'] . ". Duplikasi dicegah untuk hemat kuota agent.",
+                        'deduplicated' => true
+                    ]);
+                    exit;
+                }
+            }
+        }
 
         $now = date('Y-m-d H:i:s');
         $stmtIns = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, notes, command, assigned_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
