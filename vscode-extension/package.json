@@ -154,6 +154,7 @@
           "enum": [
             "",
             "auto",
+            "ide",
             "agy",
             "claude",
             "cline",
@@ -164,7 +165,8 @@
           ],
           "enumDescriptions": [
             "(Kosong / Nonaktif) Jangan jalankan apapun secara otomatis, hanya catat ke TASK_QUEUE.md",
-            "(Auto) Deteksi otomatis AI Agent terpasang di sistem",
+            "(Auto) Deteksi otomatis AI Agent terpasang di sistem (fallback ke Agent IDE jika CLI belum terpasang)",
+            "Agent IDE (VS Code Chat / Antigravity / Copilot / Gemini) - Eksekusi langsung di Chat IDE tanpa CLI eksternal",
             "Google Antigravity CLI (agy)",
             "Claude Code CLI (claude)",
             "Cline Autonomous Coding Agent (cline)",

@@ -4,59 +4,6 @@ const dns = require('dns');
 if (typeof dns.setDefaultResultOrder === 'function') {
   dns.setDefaultResultOrder('ipv4first');
 }
-
-// Robust HTTP Fetch dengan Auto-Retry & Connection Close
-async function safeFetch(url, options = {}, maxRetries = 2) {
-  let lastErr = null;
-  const timeoutMs = options.timeout || 15000;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const opt = {
-        ...options,
-        headers: {
-          'Connection': 'close',
-          'User-Agent': 'Tele-vs-Code-CLI/1.0.15',
-          ...(options.headers || {})
-        },
-        signal: options.signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined)
-      };
-      return await fetch(url, opt);
-    } catch (err) {
-      lastErr = err;
-      if (err.name === 'AbortError' && options.signal && options.signal.aborted) throw err;
-      if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
-      }
-    }
-  }
-  const causeDetail = lastErr && lastErr.cause ? (lastErr.cause.code || lastErr.cause.message || '') : '';
-  const errorMsg = causeDetail && !lastErr.message.includes(causeDetail) ? `${lastErr.message} (${causeDetail})` : (lastErr ? lastErr.message : 'Network request failed');
-  const wrapped = new Error(errorMsg);
-  if (lastErr && lastErr.cause) wrapped.cause = lastErr.cause;
-  throw wrapped;
-}
-
-async function safeFetchJson(url, options = {}, maxRetries = 2) {
-  let lastErr = null;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const res = await safeFetch(url, options, 0);
-      const text = await res.text();
-      try {
-        return JSON.parse(text);
-      } catch (jErr) {
-        throw new Error(`Respons server bukan JSON yang valid (${text.substring(0, 100) || 'kosong'})`);
-      }
-    } catch (err) {
-      lastErr = err;
-      if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
-      }
-    }
-  }
-  throw lastErr;
-}
-
 // ==============================================================================
 // Task Queue Manager CLI (tele-task)
 // Menjembatani perintah dari IDE Chat / Terminal langsung ke Dashboard Server
@@ -336,7 +283,8 @@ async function run() {
       const operator = `${os.userInfo().username}@${os.hostname()}`;
       let url = `${normalizedUrl}?action=pull&secret=${secretKey}&limit=5&format=json&mark=0&workspace_folder=${encodeURIComponent(cwd)}&operator=${encodeURIComponent(operator)}`;
       if (projectKey) url += `&project=${encodeURIComponent(projectKey)}`;
-      const data = await safeFetchJson(url);
+      const res = await fetch(url);
+      const data = await res.json();
       if (data.ok && Array.isArray(data.tasks) && data.tasks.length > 0) {
         console.log(`📥 Menarik ${data.tasks.length} tugas baru dari server...`);
         for (const t of data.tasks) {
@@ -396,11 +344,12 @@ async function run() {
     try {
       const url = `${normalizedUrl}?action=start&secret=${secretKey}&id=${encodeURIComponent(taskId)}`;
       const params = new URLSearchParams({ notes: note, status: 'IN_PROGRESS' });
-      const data = await safeFetchJson(url, {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params.toString()
       });
+      const data = await res.json();
       if (data.ok) {
         console.log(`⚡ [${taskId}] Status di server berhasil diperbarui ke: IN_PROGRESS`);
 
@@ -464,11 +413,12 @@ async function run() {
       if (computedDuration) paramsObj.duration = computedDuration;
       if (cmd) paramsObj.command = cmd;
       const params = new URLSearchParams(paramsObj);
-      const data = await safeFetchJson(url, {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params.toString()
       });
+      const data = await res.json();
 
       if (data.ok) {
         console.log(`✅ [${taskId}] Status di server berhasil diperbarui ke: ${command.toUpperCase()}`);
@@ -505,7 +455,8 @@ async function run() {
     if (secretKey) {
       try {
         const url = `${normalizedUrl}?action=projects&secret=${secretKey}`;
-        const data = await safeFetchJson(url);
+        const res = await fetch(url);
+        const data = await res.json();
         if (data.ok && Array.isArray(data.projects)) {
           console.log(`\n📋 Daftar Proyek di Server Biru:`);
           for (const p of data.projects) {
@@ -523,7 +474,8 @@ async function run() {
   } else if (command === 'list') {
     try {
       const url = `${normalizedUrl}?action=status&secret=${secretKey}`;
-      const data = await safeFetchJson(url);
+      const res = await fetch(url);
+      const data = await res.json();
       if (data.ok) {
         console.log('📊 Ringkasan Antrean Dashboard:');
         console.log(`   Menunggu (PENDING)    : ${data.summary.PENDING}`);

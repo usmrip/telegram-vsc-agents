@@ -113,6 +113,10 @@ const I18N = {
     agentAutoLabel: "$(sparkle) [Auto] Deteksi Otomatis Agen Terbaik yang Terpasang",
     agentAutoDesc: "Otomatis memilih agent pertama yang terdeteksi di sistem (Linux/macOS/Windows)",
     agentAutoDetail: "Mencari CLI: agy, claude, cline, roo, gemini, copilot di PATH atau ekstensi VS Code",
+    agentIdeLabel: "$(comment-discussion) [Agent IDE] Eksekusi Langsung di Chat IDE (VS Code / Antigravity / Copilot / Gemini)",
+    agentIdeDesc: "Solusi tanpa CLI: Otomatis salin prompt ke clipboard dan buka Chat IDE",
+    agentIdeDetail: "Sangat direkomendasikan jika CLI agents (agy/claude/gemini) belum terpasang di komputer",
+    agentIdeToast: "📋 [Agent IDE] Prompt tugas {id} disalin ke clipboard dan Chat dibuka! Tempel (Ctrl+V) dan kirim ke Agent IDE.",
     agentInstalledHeader: "Agen AI Terdeteksi di Sistem / VS Code",
     agentOtherHeader: "Agen AI Lainnya",
     agentCustomHeader: "Kustom / Input Manual",
@@ -226,6 +230,10 @@ const I18N = {
     agentAutoLabel: "$(sparkle) [Auto] Auto-Detect Best Installed Agent",
     agentAutoDesc: "Automatically selects the first agent detected on your system (Linux/macOS/Windows)",
     agentAutoDetail: "Searches for CLI: agy, claude, cline, roo, gemini, copilot in PATH or VS Code extensions",
+    agentIdeLabel: "$(comment-discussion) [Agent IDE] Direct Execution in IDE Chat (VS Code / Antigravity / Copilot / Gemini)",
+    agentIdeDesc: "No external CLI required: Auto-copies prompt to clipboard and opens IDE Chat",
+    agentIdeDetail: "Highly recommended if CLI agents are not installed on your system",
+    agentIdeToast: "📋 [Agent IDE] Task {id} prompt copied to clipboard and Chat opened! Paste (Ctrl+V) and send to Agent IDE.",
     agentInstalledHeader: "AI Agents Detected on System / VS Code",
     agentOtherHeader: "Other AI Agents",
     agentCustomHeader: "Custom / Manual Input",
@@ -1070,6 +1078,25 @@ function activate(context) {
   function detectAvailableAgents() {
     const agents = [];
 
+    // 0. Agent IDE (VS Code Chat / Antigravity Chat / Copilot / Gemini)
+    // Agen interaktif yang berjalan langsung di IDE (tanpa membutuhkan CLI eksternal)
+    const ideAgents = [];
+    if (vscode.extensions.all.some(e => /antigravity/i.test(e.id))) ideAgents.push('Antigravity');
+    if (vscode.extensions.all.some(e => /copilot/i.test(e.id))) ideAgents.push('Copilot');
+    if (vscode.extensions.all.some(e => /gemini/i.test(e.id))) ideAgents.push('Gemini');
+    if (vscode.extensions.all.some(e => /cline|claude-dev/i.test(e.id))) ideAgents.push('Cline');
+    if (vscode.extensions.all.some(e => /roo/i.test(e.id))) ideAgents.push('Roo');
+    const ideSummary = ideAgents.length > 0 ? ideAgents.join(', ') : 'VS Code Chat';
+
+    agents.push({
+      id: 'ide',
+      name: `Agent IDE (${ideSummary})`,
+      installed: true,
+      cliPath: null,
+      isIde: true,
+      detail: `Eksekusi langsung di Chat IDE (${ideSummary}) - Tanpa butuh CLI`
+    });
+
     // 1. Google Antigravity (AGY)
     const agyCli = findCli('agy');
     const hasAgyExt = vscode.extensions.all.some(e => /antigravity/i.test(e.id));
@@ -1149,7 +1176,7 @@ function activate(context) {
   }
 
   // Eksekusi tugas melalui Agent Handler terpilih
-  function executeTaskWithAgent(taskId, instruction, agentOverride = null) {
+  async function executeTaskWithAgent(taskId, instruction, agentOverride = null) {
     const cur = getEffectiveConfig();
     const handler = (agentOverride || cur.agentHandler || '').trim();
 
@@ -1196,22 +1223,66 @@ function activate(context) {
     }
     const prompt = buildAgentPrompt(taskId, instruction);
 
+    let activeHandler = handler;
+    if (activeHandler === 'auto') {
+      // Prioritas 1: Cari CLI agent yang benar-benar terpasang di PATH
+      const detectedCli = detectAvailableAgents().find(a => a.installed && !a.isIde && a.cliPath);
+      if (detectedCli) {
+        activeHandler = detectedCli.id;
+      } else {
+        // SOLUSI jika CLI agents tidak terinstall dan yang ada IDE agents:
+        // Otomatis arahkan ke 'ide' (Agent IDE) dengan penyalinan prompt & buka Chat
+        activeHandler = 'ide';
+        log('info', 'CLI Agent tidak ditemukan di PATH. Mengalihkan otomatis ke Agent IDE.');
+      }
+    }
+
+    // Penanganan khusus untuk Agent IDE (Chat IDE interaktif, tanpa perlu terminal CLI)
+    if (activeHandler === 'ide') {
+      try {
+        await vscode.env.clipboard.writeText(prompt);
+      } catch (clipErr) {
+        log('warn', `Gagal menyalin prompt ke clipboard: ${clipErr.message}`);
+      }
+
+      // Buka panel chat IDE
+      try {
+        await vscode.commands.executeCommand('workbench.action.chat.open');
+      } catch (chatErr) {
+        try {
+          await vscode.commands.executeCommand('workbench.action.quickchat.open');
+        } catch (qcErr) {}
+      }
+
+      const taskDisplay = taskId ? ` ${taskId}` : '';
+      const msg = (cur.language === 'en'
+        ? `📋 [Agent IDE] Task${taskDisplay} prompt copied to clipboard and Chat opened! Paste (Ctrl+V) and send to Agent IDE.`
+        : `📋 [Agent IDE] Prompt tugas${taskDisplay} disalin ke clipboard dan Chat dibuka! Tempel (Ctrl+V) dan kirim ke Agent IDE.`);
+
+      showTimedNotification(msg, 15, 'Buka Chat', 'Buka TASK_QUEUE.md').then(async (act) => {
+        if (act === 'Buka Chat') {
+          try {
+            await vscode.commands.executeCommand('workbench.action.chat.open');
+          } catch (e) {
+            await vscode.commands.executeCommand('workbench.action.quickchat.open');
+          }
+        } else if (act === 'Buka TASK_QUEUE.md') {
+          if (fs.existsSync(queueFile)) {
+            const doc = await vscode.workspace.openTextDocument(queueFile);
+            await vscode.window.showTextDocument(doc);
+          }
+        }
+      });
+
+      return { executed: true, handler: 'ide', method: 'clipboard+chat_open' };
+    }
+
+    // Terminal runner untuk CLI Agents
     let term = vscode.window.terminals.find(t => t.name === 'Tele-vs-Code Agent');
     if (!term) {
       term = vscode.window.createTerminal({ name: 'Tele-vs-Code Agent', cwd: targetFolder });
     }
     term.show();
-
-    let activeHandler = handler;
-    if (activeHandler === 'auto') {
-      const detected = detectAvailableAgents().find(a => a.installed);
-      if (detected) {
-        activeHandler = detected.id;
-      } else {
-        vscode.window.showWarningMessage('⚠️ [Tele-vs-Code] Tidak ditemukan AI Agent terpasang di sistem. Menggunakan pencatatan antrean saja.');
-        return { executed: false, reason: 'Tidak ada AI Agent terpasang' };
-      }
-    }
 
     if (activeHandler === 'custom') {
       const rawCmd = (cur.customAgentCommand || '').trim();
@@ -1405,6 +1476,10 @@ function activate(context) {
       statusBarAgent.text = '$(robot) Agent: Auto';
       statusBarAgent.color = '#38bdf8';
       statusBarAgent.tooltip = 'AI Agent Handler: Deteksi Otomatis (Klik untuk mengubah)';
+    } else if (h === 'ide') {
+      statusBarAgent.text = '$(comment-discussion) Agent: IDE Chat';
+      statusBarAgent.color = '#38bdf8';
+      statusBarAgent.tooltip = 'AI Agent Handler: Agent IDE (Chat IDE Aktif)\nKlik untuk mengubah';
     } else if (h === 'custom') {
       statusBarAgent.text = '$(tools) Agent: Custom';
       statusBarAgent.color = '#fbbf24';
@@ -1849,7 +1924,8 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                 await vscode.env.clipboard.writeText(prompt);
 
                 const currentHandler = (cur.agentHandler || '').trim();
-                const runBtnLabel = currentHandler ? i18n('btnRunVia', { agent: currentHandler === 'custom' ? 'Custom Agent' : currentHandler.toUpperCase() }) : i18n('btnSelectAgent');
+                const agentDisplayName = currentHandler === 'ide' ? 'Agent IDE' : (currentHandler === 'custom' ? 'Custom Agent' : currentHandler.toUpperCase());
+                const runBtnLabel = currentHandler ? i18n('btnRunVia', { agent: agentDisplayName }) : i18n('btnSelectAgent');
 
                 // Jika autoDispatchAgent aktif dan handler terisi, periksa aturan sekuensial
                 if (cur.autoDispatchAgent && currentHandler) {
@@ -2061,7 +2137,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                 // 1.5. Pilih AI Agent Handler
         {
           label: '$(robot) ' + t('menuAgentHandler'),
-          description: cur.agentHandler ? t('menuAgentActiveDesc', { agent: cur.agentHandler.toUpperCase() }) : t('menuAgentInactiveDesc'),
+          description: cur.agentHandler ? t('menuAgentActiveDesc', { agent: cur.agentHandler === 'ide' ? 'AGENT IDE' : cur.agentHandler.toUpperCase() }) : t('menuAgentInactiveDesc'),
           cmd: 'telegramNotifier.selectAgentHandler'
         },
         // Ganti Bahasa / Switch Language
@@ -2447,6 +2523,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     const cur = getEffectiveConfig();
     const detectedAgents = detectAvailableAgents();
 
+    const hasAnyCliInstalled = detectedAgents.some(a => a.installed && !a.isIde && a.cliPath);
     const quickPickItems = [
       {
         id: '',
@@ -2459,11 +2536,17 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
         label: t('agentAutoLabel'),
         description: t('agentAutoDesc'),
         detail: t('agentAutoDetail')
+      },
+      {
+        id: 'ide',
+        label: hasAnyCliInstalled ? t('agentIdeLabel') : `$(star-full) ${t('agentIdeLabel')} (Rekomendasi)`,
+        description: hasAnyCliInstalled ? t('agentIdeDesc') : '✅ Solusi Terbaik: Tanpa perlu instalasi CLI eksternal',
+        detail: hasAnyCliInstalled ? t('agentIdeDetail') : 'Gunakan antarmuka Chat AI yang sudah aktif di IDE Anda (Antigravity / Copilot / Gemini)'
       }
     ];
 
     // Tambahkan daftar agen terpasang
-    const installed = detectedAgents.filter(a => a.installed);
+    const installed = detectedAgents.filter(a => a.installed && a.id !== 'ide');
     const notInstalled = detectedAgents.filter(a => !a.installed);
 
     if (installed.length > 0) {
@@ -2500,7 +2583,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
 
     const chosen = await vscode.window.showQuickPick(quickPickItems, {
       title: t('selectAgentTitle'),
-      placeHolder: `Agent Handler Aktif Saat Ini: ${cur.agentHandler ? cur.agentHandler.toUpperCase() : 'Nonaktif / Kosong'}`
+      placeHolder: `Agent Handler Aktif Saat Ini: ${cur.agentHandler ? (cur.agentHandler === 'ide' ? 'AGENT IDE' : cur.agentHandler.toUpperCase()) : 'Nonaktif / Kosong'}`
     });
 
     if (chosen === undefined) return;
@@ -2580,17 +2663,25 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     }
 
     if (!cur.agentHandler) {
-      const act = await vscode.window.showWarningMessage(
-        `⚠️ Agent Handler saat ini kosong / dinonaktifkan. Pilih agen terlebih dahulu untuk mengeksekusi tugas ${taskId}.`,
-        'Pilih Agent Handler', 'Tutup'
+      const act = await vscode.window.showInformationMessage(
+        `💡 Agent Handler belum disetel. Jalankan tugas ${taskId} menggunakan Agent IDE (Chat IDE)?`,
+        'Ya, Jalankan via Agent IDE', 'Pilih Agent Lain', 'Tutup'
       );
-      if (act === 'Pilih Agent Handler') {
+      if (act === 'Ya, Jalankan via Agent IDE') {
+        const vsConfig = vscode.workspace.getConfiguration('telegramNotifier');
+        await vsConfig.update('agentHandler', 'ide', vscode.ConfigurationTarget.Global);
+        updateStatusBarAgent();
+        updateStatusBar();
+        await executeTaskWithAgent(taskId, inst, 'ide');
+        return;
+      } else if (act === 'Pilih Agent Lain') {
         vscode.commands.executeCommand('telegramNotifier.selectAgentHandler');
+        return;
       }
       return;
     }
 
-    executeTaskWithAgent(taskId, inst);
+    await executeTaskWithAgent(taskId, inst);
   }));
 
   // 3. Setup Wizard: Input Secret & Project Key -> Fetch Biru Server -> Test -> Konfirmasi Otomasi

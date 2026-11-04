@@ -78,8 +78,14 @@ Dalam lingkungan kerja dengan beberapa AI Agent sekaligus (misal: Antigravity, C
      - Atau menggunakan opsi `--agent <nama_agent>`
    - Eksekutor yang dipilih akan tercatat pada field `- **Agent:**` di `TASK_QUEUE.md` dan tampil pada notifikasi Telegram & Dashboard.
 
-2. **Aturan Eksekusi Multi-Agent:**
-   - Jika field `- **Agent:**` menunjuk ke Agent Anda secara spesifik (atau jika default `Antigravity AI Agent` / tidak ditentukan): Anda WAJIB langsung mengeksekusinya.
+2. **Aturan Eksekusi Multi-Agent & Solusi Tanpa CLI (Agent IDE Mode):**
+   - Jika field `- **Agent:**` menunjuk ke Agent Anda secara spesifik (atau jika default `Antigravity AI Agent`, `Agent IDE`, atau tidak ditentukan): Anda WAJIB langsung mengeksekusinya.
+   - **SOLUSI JIKA CLI AGENTS TIDAK TERPASANG:**
+     - Jika CLI agents (`agy`, `claude`, `gemini`, dll.) belum terpasang di sistem pengguna:
+       1. Sistem Tele-vs-Code menyediakan handler resmi `Agent IDE` (`telegramNotifier.agentHandler: "ide"`).
+       2. Jika handler disetel ke `auto` dan sistem mendeteksi tidak ada CLI agent di PATH, Tele-vs-Code otomatis melakukan fallback ke `Agent IDE`.
+       3. Tele-vs-Code secara otomatis menyalin prompt resmi tugas ke clipboard dan membuka jendela Chat IDE (`workbench.action.chat.open`). Pengguna cukup menempelkan prompt (`Ctrl+V`) ke Chat IDE.
+       4. Agent IDE yang membaca prompt pemicu (`baca TASK_QUEUE.md secara berkala...`) wajib mendaftarkan task scheduler berkala (cron daemon) sehingga seluruh antrean berikutnya dikerjakan secara otonom tanpa memerlukan binary CLI eksternal.
    - Jika field `- **Agent:**` menunjuk ke Agent lain (misal `Claude Agent` sementara Anda adalah `Antigravity`):
      - Biarkan agent tersebut mengeksekusinya jika sesi kerjanya sedang aktif di terminal/workspace.
      - Jika pengguna secara eksplisit meminta Anda di chat ini untuk menangani antrean ("handle task queue", "proses antrian"), Anda dapat mengambil alih (fallback executor) dan menuntaskannya hingga 100% selesai.
