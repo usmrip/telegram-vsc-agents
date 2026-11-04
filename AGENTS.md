@@ -159,3 +159,22 @@ Saat ekstensi Tele-vs-Code (VSIX) diinstal dan dijalankan di lingkungan server (
    - Pemantauan antrean di server remote dapat berjalan secara mandiri dan persisten menggunakan:
      - Fitur autonomous cron daemon internal AI Agent (misal tool `schedule` dengan interval 3 menit).
      - Atau background CLI worker: `nohup node .vscode/tele-vs-code/tele-worker.js > tele-worker.log 2>&1 &` atau via `tmux` / `systemd`.
+
+---
+
+## 🛑 8. ATURAN TUGAS BERKENDALA (ANTI RE-EXECUTION LOOP)
+Tugas yang mengalami kendala teknis, error, atau gagal dieksekusi **DILARANG KERAS** dieksekusi berulang-ulang oleh automated background workers, polling routines, atau AI Agent:
+
+1. **Penanganan Otomatis Saat Terjadi Kendala/Error:**
+   - Ketika proses eksekusi kode, tool, atau runner menemukan error fatal atau exception yang memblokir:
+     👉 Segera tandai tugas dengan status `[FAILED]` (atau `KENDALA`).
+     👉 Pindahkan blok tugas dari `## ⏳ Tugas Aktif` ke bagian `## ✅ Riwayat Tugas Selesai` di `TASK_QUEUE.md` dengan penanda `[FAILED]`.
+     👉 Kirimkan laporan status kendala ke Telegram hanya satu kali via `tele-notify.js "<Judul>" --status KENDALA --detail "<Penyebab>"`.
+     👉 Sinkronkan status `FAILED` ke server remote agar antrean tidak lagi ditarik (`api_failed`).
+
+2. **Larangan Eksekusi Berulang (Anti-Looping Guard):**
+   - Runner berkala (`tele-worker.js`, background cron, dan interval sync ekstensi) WAJIB memfilter dan melompati setiap tugas yang berstatus `FAILED`, `KENDALA`, `ERROR`, atau `GAGAL`.
+   - Perintah `tele-task start "<TASK-ID>"` secara ketat memblokir eksekusi tugas yang telah ditandai `[FAILED]` / `[KENDALA]`.
+   - Eksekusi ulang tugas berkendala HANYA dimungkinkan jika:
+     a) Pengguna memberikan instruksi perbaikan baru dari Telegram atau Chat IDE (membuat Task ID baru), ATAU
+     b) Pengguna/Agent menyertakan flag paksa `--force` secara eksplisit (`node .vscode/tele-vs-code/tele-task.js start "<TASK-ID>" --force`).

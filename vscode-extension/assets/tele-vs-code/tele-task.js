@@ -161,7 +161,8 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
     let content = fs.readFileSync(queueFile, 'utf-8');
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
-    if (status === 'DONE' || status === 'FAILED') {
+    if (status === 'DONE' || status === 'FAILED' || status === 'KENDALA') {
+      const finalStatus = (status === 'KENDALA' || status === 'FAILED') ? 'FAILED' : 'DONE';
       let finalInstruction = instruction;
       let finalSender = sender;
 
@@ -189,7 +190,7 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
       }
       const durationStr = formatDuration(taskStartTime, now);
       const durationLine = durationStr ? `- **Durasi:** ${durationStr}\n` : '';
-      const doneBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${finalSender || 'IDE Chat'}\n- **Agent:** ${agent || 'Antigravity AI Agent'}\n${durationLine}- **Instruksi:** ${cleanInstruction}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
+      const doneBlock = `### [${finalStatus}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${finalSender || 'IDE Chat'}\n- **Agent:** ${agent || 'Antigravity AI Agent'}\n${durationLine}- **Instruksi:** ${cleanInstruction}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
       const doneMarker = '## ✅ Riwayat Tugas Selesai';
       if (content.includes(doneMarker)) {
         content = content.replace(doneMarker, `${doneMarker}\n\n${doneBlock}`);
@@ -417,9 +418,11 @@ async function run() {
     } catch (err) {
       console.error(`❌ Network error: ${err.message}`);
     }
-  } else if (command === 'done' || command === 'failed') {
+  } else if (['done', 'selesai', 'sukses', 'success', 'failed', 'kendala', 'error', 'fail', 'gagal'].includes(command)) {
+    const isFailCmd = ['failed', 'kendala', 'error', 'fail', 'gagal'].includes(command);
+    const isDoneCmd = !isFailCmd;
     const taskId = args[1] || '';
-    const report = args[2] || (command === 'done' ? 'Selesai 100%' : 'Gagal');
+    const report = args[2] || (isDoneCmd ? 'Selesai 100%' : 'Gagal');
 
     if (!taskId) {
       console.error('[ERROR] Task ID wajib disertakan!');
@@ -452,7 +455,7 @@ async function run() {
         }
       }
 
-      const act = command === 'done' ? 'done' : 'failed';
+      const act = isDoneCmd ? 'done' : 'failed';
       const url = `${normalizedUrl}?action=${act}&secret=${secretKey}&id=${encodeURIComponent(taskId)}`;
       const paramsObj = { notes: report, result: report };
       if (computedDuration) paramsObj.duration = computedDuration;
@@ -466,14 +469,14 @@ async function run() {
       const data = await res.json();
 
       if (data.ok) {
-        console.log(`✅ [${taskId}] Status di server berhasil diperbarui ke: ${command.toUpperCase()}`);
+        console.log(`✅ [${taskId}] Status di server berhasil diperbarui ke: ${isDoneCmd ? 'DONE' : 'FAILED'}`);
         updateLocalQueueFile(taskId, '', 'IDE Chat', command.toUpperCase(), report);
 
         // Kirim laporan ke Telegram via tele-notify
         const notifyJs = getNotifyScript();
         if (notifyJs) {
           try {
-            const statArg = command === 'done' ? 'SELESAI' : 'KENDALA';
+            const statArg = isDoneCmd ? 'SELESAI' : 'KENDALA';
             const notifyArgs = [];
             if (computedDuration) notifyArgs.push(`--duration "${computedDuration}"`);
             notifyArgs.push(`--detail "${report.replace(/"/g, '\\"')}"`);

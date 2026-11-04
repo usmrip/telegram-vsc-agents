@@ -1202,6 +1202,21 @@ function activate(context) {
     const targetFolder = cur.folder || process.cwd();
     const queueFile = path.join(targetFolder, 'TASK_QUEUE.md');
 
+    // Aturan Sekuensial & Anti Re-Execution: Periksa tugas KENDALA / FAILED dan IN_PROGRESS
+    if (taskId && fs.existsSync(queueFile)) {
+      try {
+        const qText = fs.readFileSync(queueFile, 'utf-8');
+        const escapedCurrentId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\// Aturan Sekuensial: Periksa apakah ada tugas lain yang masih [IN_PROGRESS]');
+        const isAlreadyFailed = new RegExp('###\\s+\\[(FAILED|KENDALA)\\]\\s+' + escapedCurrentId, 'i').test(qText);
+        if (isAlreadyFailed && (!agentOverride || !agentOverride.force)) {
+          const warnMsg = '⚠️ [Tele-vs-Code] Tugas ' + taskId + ' ditandai KENDALA / FAILED. Tugas yang berkendala tidak boleh dieksekusi berulang-ulang secara otomatis.';
+          log('warn', warnMsg);
+          vscode.window.showWarningMessage(warnMsg);
+          return { executed: false, reason: 'Tugas ditandai kendala (anti re-execution loop)' };
+        }
+      } catch (errCheck) {}
+    }
+
     // Aturan Sekuensial: Periksa apakah ada tugas lain yang masih [IN_PROGRESS]
     if (taskId && fs.existsSync(queueFile)) {
       try {
@@ -1707,6 +1722,32 @@ async function markServerTaskFailed(cur, taskId, notes = '') {
   } catch (e) {}
 }
 
+function appendFailedToTaskQueueFile(queueFile, task, reason) {
+  try {
+    if (!fs.existsSync(queueFile)) return;
+    let content = fs.readFileSync(queueFile, 'utf-8');
+    const escapedId = (task.id || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\async function processActiveLocalTasks(cur) {');
+    const regexActive = new RegExp('### \\[(PENDING|WAITING|QUEUE|IN_PROGRESS|FAILED|KENDALA)\\]\\s+' + escapedId + '[\\s\\S]*?(?=(###|##|$))', 'g');
+    content = content.replace(regexActive, '');
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const agentName = task.assigned_agent || task.agent || 'Antigravity AI Agent';
+    const failedBlock = '### [FAILED] ' + task.id + '\n' +
+      '- **Waktu:** ' + now + '\n' +
+      '- **Pengirim:** ' + (task.sender || 'Telegram') + '\n' +
+      '- **Agent:** ' + agentName + '\n' +
+      '- **Instruksi:** ' + (task.instruction || '').replace(/\r?\n/g, ' ') + '\n' +
+      '- **Status:** FAILED\n' +
+      '- **Laporan Agent:** ' + (reason || 'Pengerjaan tugas mengalami kendala') + '\n\n';
+    const doneMarker = '## ✅ Riwayat Tugas Selesai';
+    if (content.includes(doneMarker)) {
+      content = content.replace(doneMarker, doneMarker + '\n\n' + failedBlock);
+    } else {
+      content += '\n\n' + doneMarker + '\n\n' + failedBlock;
+    }
+    fs.writeFileSync(queueFile, content, 'utf-8');
+  } catch (e) {}
+}
+
 async function processActiveLocalTasks(cur) {
   const queueFile = path.join(cur.folder, 'TASK_QUEUE.md');
   if (!fs.existsSync(queueFile)) return;
@@ -1718,6 +1759,12 @@ async function processActiveLocalTasks(cur) {
     while ((match = regex.exec(activeSection)) !== null) {
       const taskId = match[2].startsWith('#') ? match[2] : `#${match[2]}`;
       const block = match[3];
+      const mStat = block.match(/-\s+\*\*Status:\*\*\s*([^\r\n]+)/i);
+      const taskStat = mStat ? mStat[1].trim().toUpperCase() : (match[1] || '').toUpperCase();
+      if (['FAILED', 'KENDALA', 'ERROR', 'GAGAL'].includes(taskStat)) {
+        continue;
+      }
+
       const mInst = block.match(/-\s+\*\*Instruksi:\*\*\s*([^\r\n]+)/i);
       const mSender = block.match(/-\s+\*\*Pengirim:\*\*\s*([^\r\n]+)/i);
       const mTime = block.match(/-\s+\*\*Waktu:\*\*\s*([^\r\n]+)/i);
@@ -1747,7 +1794,17 @@ async function processActiveLocalTasks(cur) {
             showTimedNotification(`✅ Tugas [${taskObj.id}] berhasil dieksekusi: ${rep}`, 10);
           }
         } catch (execErr) {
+          log('error', '❌ Gagal eksekusi tugas lokal [' + taskObj.id + ']: ' + execErr.message);
           await markServerTaskFailed(cur, taskObj.id, execErr.message);
+          appendFailedToTaskQueueFile(queueFile, taskObj, execErr.message);
+          try {
+            await sendTelegramMessage(cur.botToken, cur.chatId, 'Gagal: ' + taskObj.id, 'KENDALA', [
+              'Instruksi: ' + inst.substring(0, 90),
+              'Penyebab: ' + execErr.message,
+              'Pengirim: ' + sender
+            ], cur.project, cur.timezone);
+          } catch (nErr) {}
+          showTimedNotification('🚨 Tugas [' + taskObj.id + '] mengalami kendala: ' + execErr.message, 10);
         }
       }
     }
@@ -1841,6 +1898,14 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
             }
           }
 
+          // Jika tugas di server berstatus FAILED / KENDALA, JANGAN masukkan ke Tugas Aktif
+          if (taskItem.status === 'FAILED' || taskItem.status === 'KENDALA') {
+            if (!content.includes(taskItem.id)) {
+              appendFailedToTaskQueueFile(queueFile, taskItem, taskItem.notes || taskItem.result || 'Pengerjaan tugas mengalami kendala');
+            }
+            continue;
+          }
+
           // Catat tugas ke TASK_QUEUE.md (Hak ubah status: Tugas baru dari server masuk sebagai PENDING)
           const agentName = taskItem.assigned_agent || taskItem.agent || 'Antigravity AI Agent';
           const targetStatus = (taskItem.status === 'DONE' || taskItem.status === 'FAILED') ? taskItem.status : (taskItem.status === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'PENDING');
@@ -1901,6 +1966,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
               }
             } catch (execErr) {
               await markServerTaskFailed(cur, taskItem.id, execErr.message);
+              appendFailedToTaskQueueFile(queueFile, taskItem, execErr.message);
               log('error', `[TUGAS GAGAL] ID: ${taskItem.id} gagal: ${execErr.message}`);
               setStatusBarState('warning', `Gagal [${taskItem.id}]`, execErr.message);
               try {

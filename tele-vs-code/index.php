@@ -218,6 +218,9 @@ function runDatabaseMigrations($pdo) {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )");
+    try {
+        $pdo->exec("ALTER TABLE tasks ADD COLUMN retry_count INTEGER DEFAULT 0");
+    } catch (Exception $e) {}
 
     // Table Tasks (Assigned to User and Project)
     $pdo->exec("CREATE TABLE IF NOT EXISTS tasks (
@@ -232,6 +235,7 @@ function runDatabaseMigrations($pdo) {
         notes TEXT,
         result TEXT DEFAULT '',
         command TEXT DEFAULT '',
+        retry_count INTEGER DEFAULT 0,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )");
 
@@ -2944,7 +2948,33 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 
         $stmtTasks = $db->prepare($sql);
         $stmtTasks->execute($params);
-        $pending = $stmtTasks->fetchAll(PDO::FETCH_ASSOC);
+        $allPulled = $stmtTasks->fetchAll(PDO::FETCH_ASSOC);
+        $pending = [];
+        $nowTime = date('Y-m-d H:i:s');
+        foreach ($allPulled as $pt) {
+            if ($pt['status'] === 'IN_PROGRESS') {
+                $curRetry = (int)($pt['retry_count'] ?? 0) + 1;
+                if ($curRetry >= 3) {
+                    // ATURAN MUTLAK: Tugas yang berkendala tidak boleh dieksekusi berulang-ulang!
+                    $failReason = 'Otomatis ditandai KENDALA (melebihi batas 3x percobaan tanpa penyelesaian)';
+                    $updF = $db->prepare("UPDATE tasks SET status = 'FAILED', updated_at = ?, notes = ?, result = ?, retry_count = ? WHERE id = ?");
+                    $updF->execute([$nowTime, $failReason, $failReason, $curRetry, $pt['id']]);
+                    if (!empty($pt['bot_token']) && !empty($pt['chat_id']) && empty($user['block_notify'])) {
+                        $pName = htmlspecialchars($pt['project_name'] ?: 'Tele-vs-Code');
+                        callTelegram($pt['bot_token'], 'sendMessage', [
+                            'chat_id' => $pt['chat_id'],
+                            'text' => "<b>🚨 Tugas {$pt['id']}: KENDALA</b>\n\n📁 <b>Proyek:</b> <code>$pName</code>\n🕒 <b>Waktu:</b> $nowTime\n📋 <b>Penyebab Kendala:</b> $failReason\n\n🛑 <i>Tugas dihentikan untuk mencegah loop eksekusi berulang-ulang. Silakan kirim instruksi baru untuk mencoba kembali.</i>",
+                            'parse_mode' => 'HTML'
+                        ]);
+                    }
+                    continue; // Jangan masukkan ke daftar tugas aktif
+                } else {
+                    $updR = $db->prepare("UPDATE tasks SET retry_count = ?, updated_at = ? WHERE id = ?");
+                    $updR->execute([$curRetry, $nowTime, $pt['id']]);
+                }
+            }
+            $pending[] = $pt;
+        }
 
         if ($mark && !empty($pending)) {
             $now = date('Y-m-d H:i:s');

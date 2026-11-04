@@ -241,6 +241,10 @@ function sendNotification(title, status, details = []) {
 
 // Catat tugas aktif ke TASK_QUEUE.md (Status: IN_PROGRESS)
 function recordActiveTask(task) {
+  if (task.status === 'FAILED' || task.status === 'KENDALA') {
+    appendFailedToTaskQueueFile(task, task.notes || 'Tugas mengalami kendala');
+    return;
+  }
   try {
     if (!fs.existsSync(queueFile)) return;
     let content = fs.readFileSync(queueFile, 'utf-8');
@@ -287,6 +291,35 @@ function formatDuration(startTime, endTime = new Date()) {
   } catch (e) {
     return '';
   }
+}
+
+function appendFailedToTaskQueueFile(task, reason) {
+  try {
+    if (!fs.existsSync(queueFile)) return;
+    let content = fs.readFileSync(queueFile, 'utf-8');
+    const escapedId = (task.id || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\function appendToTaskQueueFile(task, report) {');
+    const regexActive = new RegExp('### \\[(PENDING|WAITING|QUEUE|IN_PROGRESS|FAILED|KENDALA)\\]\\s+' + escapedId + '[\\s\\S]*?(?=(###|##|$))', 'g');
+    content = content.replace(regexActive, '');
+
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const durStr = formatDuration(task.created_at, now);
+    const durLine = durStr ? '- **Durasi:** ' + durStr + '\n' : '';
+    const agentName = task.assigned_agent || task.agent || 'Antigravity AI Agent';
+    const failedBlock = '### [FAILED] ' + task.id + '\n' +
+      '- **Waktu:** ' + now + '\n' +
+      '- **Pengirim:** ' + (task.sender || 'Telegram') + '\n' +
+      '- **Agent:** ' + agentName + '\n' +
+      durLine + '- **Instruksi:** ' + (task.instruction || '').replace(/\r?\n/g, ' ') + '\n' +
+      '- **Status:** FAILED\n' +
+      '- **Laporan Agent:** ' + (reason || 'Pengerjaan tugas mengalami kendala') + '\n\n';
+    const doneMarker = '## ✅ Riwayat Tugas Selesai';
+    if (content.includes(doneMarker)) {
+      content = content.replace(doneMarker, doneMarker + '\n\n' + failedBlock);
+    } else {
+      content += '\n\n' + doneMarker + '\n\n' + failedBlock;
+    }
+    fs.writeFileSync(queueFile, content, 'utf-8');
+  } catch (err) {}
 }
 
 function appendToTaskQueueFile(task, report) {
@@ -449,6 +482,7 @@ async function executeTask(task) {
   } catch (dirErr) {
     console.error(`❌ Gagal eksekusi langsung: ${dirErr.message}`);
     await markTaskStatus(task.id, 'FAILED', dirErr.message);
+    appendFailedToTaskQueueFile(task, dirErr.message);
     sendNotification(`Gagal: ${task.id}`, 'KENDALA', [
       `Instruksi: ${inst.substring(0, 90)}`,
       `Penyebab: ${dirErr.message}`
@@ -502,6 +536,7 @@ async function executeTask(task) {
     } catch (err) {
       console.error(`❌ Gagal mengeksekusi utilitas: ${err.message}`);
       await markTaskStatus(task.id, 'FAILED', err.message);
+      appendFailedToTaskQueueFile(task, err.message);
       sendNotification(`Gagal: ${task.id}`, 'KENDALA', [
         `Instruksi: ${inst.substring(0, 90)}`,
         `Penyebab: ${err.message}`
@@ -544,6 +579,13 @@ async function processActiveLocalTasks() {
         continue;
       }
       const block = match[3];
+      const mStat = block.match(/-\s+\*\*Status:\*\*\s*([^\r\n]+)/i);
+      const isKendala = mStat && ['FAILED', 'KENDALA', 'ERROR', 'GAGAL'].includes(mStat[1].trim().toUpperCase());
+      if (isKendala || taskStatus === 'FAILED' || taskStatus === 'KENDALA') {
+        // Tugas yang ditandai kendala: JANGAN dieksekusi berulang-ulang!
+        continue;
+      }
+
       const mInst = block.match(/-\s+\*\*Instruksi:\*\*\s*([^\r\n]+)/i);
       const mSender = block.match(/-\s+\*\*Pengirim:\*\*\s*([^\r\n]+)/i);
       const mTime = block.match(/-\s+\*\*Waktu:\*\*\s*([^\r\n]+)/i);
@@ -572,6 +614,13 @@ async function processActiveLocalTasks() {
           }
         } catch (err) {
           console.error(`❌ Gagal eksekusi tugas lokal [${taskObj.id}]: ${err.message}`);
+          await markTaskStatus(taskObj.id, 'FAILED', err.message);
+          appendFailedToTaskQueueFile(taskObj, err.message);
+          sendNotification(`Gagal: ${taskObj.id}`, 'KENDALA', [
+            `Instruksi: ${inst.substring(0, 90)}`,
+            `Penyebab: ${err.message}`,
+            `Pengirim: ${sender}`
+          ]);
         }
       }
     }
