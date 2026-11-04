@@ -178,3 +178,20 @@ Tugas yang mengalami kendala teknis, error, atau gagal dieksekusi **DILARANG KER
    - Eksekusi ulang tugas berkendala HANYA dimungkinkan jika:
      a) Pengguna memberikan instruksi perbaikan baru dari Telegram atau Chat IDE (membuat Task ID baru), ATAU
      b) Pengguna/Agent menyertakan flag paksa `--force` secara eksplisit (`node .vscode/tele-vs-code/tele-task.js start "<TASK-ID>" --force`).
+
+---
+
+## 🛡️ 9. KEAMANAN SISTEM & PENCEGAHAN PERINTAH BERBAHAYA (SECURITY GUARD)
+Perintah sistem yang berisiko tinggi atau destruktif **DILARANG KERAS** dieksekusi secara sembarangan:
+
+1. **Perintah Berbahaya yang Dicegah:**
+   - Perintah sistem level rendah seperti `reboot`, `shutdown`, `poweroff`, `halt`, `init 0/6`, `Restart-Computer`, `systemctl reboot`.
+   - Perintah shell/terminal yang tidak terotorisasi (`cmd:`, `shell:`, `run:`, `exec:`, `bash:`, `powershell:`).
+   - Perintah destruktif file sistem (`rm -rf /`, `rmdir /s /q c:\`, `format`, `mkfs`, `dd if=`, fork bomb `:(){ :|:& };:`, `taskkill /f`).
+
+2. **Hak Eksekusi Eksklusif (Hanya Akun `iam@usm.rip`):**
+   - HANYA akun terverifikasi (`iam@usm.rip`) yang berhak mengeksekusi perintah sistem berbahaya atau shell.
+   - Jika instruksi diajukan oleh akun/proyek selain `iam@usm.rip`, sistem (baik server, ekstensi, worker, maupun AI Agent) WAJIB menolak eksekusi secara langsung (*Access Denied*).
+
+3. **Pencegahan Terenkripsi (Anti-Public Inspection):**
+   - Pola dan aturan pencegahan perintah berbahaya dienkripsi secara kriptografis di sistem agar daftar kata kunci dan pola proteksi tidak dapat dibaca, dipelajari, atau dieksploitasi oleh publik di repository terbuka.

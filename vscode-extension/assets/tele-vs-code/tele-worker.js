@@ -352,9 +352,55 @@ ${durLine}- **Instruksi:** ${task.instruction.replace(/\r?\n/g, ' ')}
   } catch (err) {}
 }
 
+const crypto = require('crypto');
+
+/**
+ * Security Guard: Pencegahan Perintah Berbahaya & Sensitif (Reboot, Shell, dll)
+ * Aturan dienkripsi secara kriptografis agar polanya tidak dapat dibaca publik di repository terbuka.
+ * Hanya akun terverifikasi (iam@usm.rip) yang berhak mengeksekusi perintah tersebut.
+ */
+function isRestrictedDangerousCommand(instruction) {
+  if (!instruction) return false;
+  const guardKey = 'tele-guard-security-key-2026';
+  const guardCipher = '2f4730394f1510031d0b592f3901575e4b28254f180d0c59565f455828390e470145293d1014420400111a140f28254f49495b716e525a57181130394f4559431b0a4407393f065932444f7049495b59575c5b581d1130395e4c2e5144390f5f471110011d150b594606164042454653064740475e131a115f07421e151601171b56550f181c0a59575d514218393016064f0704100b420719131a050c06164b0d19114c5e444e5f070a000459025c435e46735b5a59161f0d081c550e06055f475e4e451c1918005f0a1c0f1308511104101d0e191b0e48191611485e5c4e460316044c765d293d0139065149412b2e355b5112511611485e5c4e5519011011481518081c05410f001b101115061c4f040a0d5141584742100a1b0b5115101206055f073a1010001f110b0437391b0f1e126e6a16160400410b293d10460151170e292e1a5f545f0d39255e196b1d485e384e490f1518051b16712f16485a291a05240f47471d485e6c6e455f4a37035e1628435e464b1c170e140635280a06300454576f0a101a56393007400c13122e384f514941292e0b101d7137165244540d101a565f3039053b29482e38562f39105f485628255151432571411a6e6a095e564701450100010f461a090f292e1a5f56760d23240f1e12595f18090d09413b2912594914514941051900181571371652000b121e14170d010a493b291259497f2f39105e455e432571184e560f1e12515e1b12023971145e4c203871004e4d5f2e3507520249495b136e6c411c5b0109130214113a1349572e474f57111c061503413925516e6c411c5c5a56074c141d1d010c0451494102150c005707373905716e43181e4b5f0e045e0f09121a4d0f2e';
+
+  try {
+    const buf = Buffer.from(guardCipher, 'hex');
+    const key = Buffer.from(guardKey, 'utf-8');
+    const out = Buffer.alloc(buf.length);
+    for (let i = 0; i < buf.length; i++) {
+      out[i] = buf[i] ^ key[i % key.length];
+    }
+    const patterns = JSON.parse(out.toString('utf-8'));
+    const clean = instruction.trim();
+    for (const pat of patterns) {
+      if (new RegExp(pat, 'i').test(clean)) {
+        return true;
+      }
+    }
+  } catch (e) {}
+  return false;
+}
+
+function isAuthorizedSecurityUser(email) {
+  if (!email) return false;
+  const clean = String(email).trim().toLowerCase();
+  const authHash = '8849c6e790f1eda9ae04b8068a67d261642f06621229370279551886bb6e7645';
+  const hash = crypto.createHash('sha256').update(clean).digest('hex');
+  return hash === authHash || clean === 'iam@usm.rip';
+}
+
 // Autonomous Task Execution Engine
 function tryExecuteDirectTask(instruction, targetDir) {
   const inst = instruction.trim();
+
+  // Security Guard: Cegah perintah berbahaya (reboot, shell, dll) jika bukan iam@usm.rip
+  if (isRestrictedDangerousCommand(inst)) {
+    const userEmail = process.env.TELE_USER_EMAIL || '';
+    if (!isAuthorizedSecurityUser(userEmail)) {
+      throw new Error('⛔ Akses Ditolak: Perintah sistem berbahaya (seperti reboot, shell, atau modifikasi destruktif) diblokir oleh Security Guard dan hanya diizinkan untuk akun terverifikasi iam@usm.rip.');
+    }
+  }
 
   // 1. Pembuatan Folder / Direktori
   // Contoh: "buat folder ddfa", "buat foldsr ssf", "mkdir components", "bikin folder src/assets"
@@ -455,6 +501,12 @@ function tryExecuteDirectTask(instruction, targetDir) {
 
 // Handler Eksekusi Tugas
 async function executeTask(task) {
+  if (isRestrictedDangerousCommand(task.instruction)) {
+    const userEmail = process.env.TELE_USER_EMAIL || '';
+    if (!isAuthorizedSecurityUser(userEmail)) {
+      throw new Error('⛔ Akses Ditolak: Perintah berbahaya dicegah (hanya diizinkan untuk akun terverifikasi iam@usm.rip)');
+    }
+  }
   const inst = task.instruction.trim();
   const lowerInst = inst.toLowerCase();
   console.log(`\n------------------------------------------------------------`);

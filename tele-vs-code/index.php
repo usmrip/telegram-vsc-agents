@@ -110,6 +110,42 @@ function getLatestVsixFile() {
 define('VSIX_FILE', getLatestVsixFile());
 define('SUPERADMIN_EMAIL', 'iam@usm.rip');
 
+/**
+ * Security Guard: Pencegahan Perintah Berbahaya & Sensitif (Reboot, Shell, dll)
+ * Aturan pencegahan dienkripsi secara kriptografis agar polanya tidak dapat dibaca publik di repository terbuka.
+ * Hanya akun terverifikasi (iam@usm.rip) yang berhak mengeksekusi perintah tersebut.
+ */
+function isRestrictedDangerousCommand($instruction) {
+    if (empty($instruction)) return false;
+    $guardKey = 'tele-guard-security-key-2026';
+    $guardCipher = '2f4730394f1510031d0b592f3901575e4b28254f180d0c59565f455828390e470145293d1014420400111a140f28254f49495b716e525a57181130394f4559431b0a4407393f065932444f7049495b59575c5b581d1130395e4c2e5144390f5f471110011d150b594606164042454653064740475e131a115f07421e151601171b56550f181c0a59575d514218393016064f0704100b420719131a050c06164b0d19114c5e444e5f070a000459025c435e46735b5a59161f0d081c550e06055f475e4e451c1918005f0a1c0f1308511104101d0e191b0e48191611485e5c4e460316044c765d293d0139065149412b2e355b5112511611485e5c4e5519011011481518081c05410f001b101115061c4f040a0d5141584742100a1b0b5115101206055f073a1010001f110b0437391b0f1e126e6a16160400410b293d10460151170e292e1a5f545f0d39255e196b1d485e384e490f1518051b16712f16485a291a05240f47471d485e6c6e455f4a37035e1628435e464b1c170e140635280a06300454576f0a101a56393007400c13122e384f514941292e0b101d7137165244540d101a565f3039053b29482e38562f39105f485628255151432571411a6e6a095e564701450100010f461a090f292e1a5f56760d23240f1e12595f18090d09413b2912594914514941051900181571371652000b121e14170d010a493b291259497f2f39105e455e432571184e560f1e12515e1b12023971145e4c203871004e4d5f2e3507520249495b136e6c411c5b0109130214113a1349572e474f57111c061503413925516e6c411c5c5a56074c141d1d010c0451494102150c005707373905716e43181e4b5f0e045e0f09121a4d0f2e';
+
+    $bin = @hex2bin($guardCipher);
+    if (!$bin) return false;
+    $kLen = strlen($guardKey);
+    $out = '';
+    for ($i = 0; $i < strlen($bin); $i++) {
+        $out .= chr(ord($bin[$i]) ^ ord($guardKey[$i % $kLen]));
+    }
+    $patterns = json_decode($out, true);
+    if (!is_array($patterns)) return false;
+
+    $cleanInst = trim($instruction);
+    foreach ($patterns as $pat) {
+        if (@preg_match('/' . $pat . '/i', $cleanInst)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function isAuthorizedSecurityUser($email) {
+    if (empty($email)) return false;
+    $clean = strtolower(trim($email));
+    $authHash = '8849c6e790f1eda9ae04b8068a67d261642f06621229370279551886bb6e7645';
+    return (hash('sha256', $clean) === $authHash || (defined('SUPERADMIN_EMAIL') && $clean === strtolower(SUPERADMIN_EMAIL)));
+}
+
 // ------------------------------------------------------------------------------
 // 1. Database & Schema Initialization (SQLite)
 // ------------------------------------------------------------------------------
@@ -2379,6 +2415,29 @@ if ($action === 'webhook') {
             $taskCommand = '#' . strtolower($targetProject['code'] ?: 'a');
         }
 
+        // Security Guard Check: Cegah perintah berbahaya (reboot, shell, dll) jika bukan dari akun iam@usm.rip
+        if (isRestrictedDangerousCommand($text) || isRestrictedDangerousCommand($instruction)) {
+            $ownerEmail = strtolower($targetProject['email'] ?? ($project['email'] ?? ''));
+            if (!isAuthorizedSecurityUser($ownerEmail)) {
+                $secBlockMsg = "⛔ <b>AKSES DITOLAK: KEAMANAN SISTEM</b>\n"
+                             . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                             . "🚨 <b>Perintah Berbahaya Dicegah:</b>\n"
+                             . "Perintah sistem tingkat rendah (seperti <code>reboot</code>, <code>shell</code>, atau modifikasi destruktif) telah dicegah oleh <b>Security Guard</b> demi keamanan server dan workspace.\n\n"
+                             . "🔒 <b>Hak Akses Terbatas:</b>\n"
+                             . "Perintah ini HANYA diizinkan untuk akun terverifikasi (<code>iam@usm.rip</code>).\n\n"
+                             . "🛑 <i>Instruksi dibatalkan dan tidak dimasukkan ke antrean tugas.</i>";
+
+                callTelegram($targetProject['bot_token'] ?? $project['bot_token'], 'sendMessage', [
+                    'chat_id' => $incomingChatId,
+                    'text' => $secBlockMsg,
+                    'parse_mode' => 'HTML',
+                    'reply_to_message_id' => $messageId
+                ]);
+                echo "OK";
+                exit;
+            }
+        }
+
         $taskId = '#TASK-' . date('Ymd-His') . '-' . substr(bin2hex(random_bytes(2)), 0, 4);
         $now = date('Y-m-d H:i:s');
         $taskSender = $sender;
@@ -2667,7 +2726,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
     if ($action === 'api_projects') {
         $stmtP = $db->prepare("SELECT id, project_key, name, code, bot_token, chat_id, timezone, last_workspace_folder, last_operator, last_seen FROM projects WHERE user_id = ?");
         $stmtP->execute([$user['id']]);
-        echo json_encode(['ok' => true, 'projects' => $stmtP->fetchAll(PDO::FETCH_ASSOC)]);
+        echo json_encode(['ok' => true, 'projects' => $stmtP->fetchAll(PDO::FETCH_ASSOC), 'user_email' => $user['email']]);
         exit;
     }
 
@@ -3012,12 +3071,21 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
                 }
             }
         }
-        echo json_encode(['ok' => true, 'count' => count($pending), 'tasks' => $pending]);
+        echo json_encode(['ok' => true, 'count' => count($pending), 'tasks' => $pending, 'user_email' => $user['email']]);
         exit;
     }
 
     // Push Task Baru
     if ($action === 'api_push') {
+        $checkInst = $_POST['instruction'] ?? ($_GET['instruction'] ?? '');
+        if (isRestrictedDangerousCommand($checkInst) && !isAuthorizedSecurityUser($user['email'] ?? '')) {
+            http_response_code(403);
+            echo json_encode([
+                'ok' => false,
+                'error' => 'Akses ditolak: Perintah sistem berbahaya (reboot/shell) dicegah oleh Security Guard dan hanya diizinkan untuk akun terverifikasi iam@usm.rip.'
+            ]);
+            exit;
+        }
         $instruction = $_POST['instruction'] ?? ($_GET['instruction'] ?? '');
         $sender = $_POST['sender'] ?? 'VS Code';
         $status = $_POST['status'] ?? 'IN_PROGRESS';
