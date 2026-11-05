@@ -592,9 +592,20 @@ Setiap kali Anda menerima giliran bicara, prompt, atau instruksi apapun dari USE
 > ⚠️ **ATURAN MUTLAK:** JANGAN PERNAH mengirimkan status \`SELESAI\` sebelum tugas benar-benar 100% tuntas dan teruji.
 `;
 
-  const targetRuleFiles = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.cursorrules'];
+  const targetRuleFiles = [
+    'AGENTS.md',
+    'CLAUDE.md',
+    'GEMINI.md',
+    '.cursorrules',
+    path.join('.github', 'copilot-instructions.md'),
+    path.join('.vscode', 'copilot-instructions.md')
+  ];
   for (const rf of targetRuleFiles) {
     const rPath = path.join(wsFolder, rf);
+    const rDir = path.dirname(rPath);
+    if (!fs.existsSync(rDir)) {
+      try { fs.mkdirSync(rDir, { recursive: true }); } catch (e) {}
+    }
     if (!fs.existsSync(rPath)) {
       try { fs.writeFileSync(rPath, agentRuleTpl, 'utf-8'); } catch (e) {}
     } else {
@@ -1735,56 +1746,75 @@ function activate(context) {
     // =========================================================================
     if (activeHandler === 'ide' || activeHandler.startsWith('ide-')) {
       try {
-        await vscode.env.clipboard.writeText(prompt);
-      } catch (clipErr) {}
-
-      const hasAntigravity = vscode.extensions.all.some(e => /antigravity/i.test(e.id));
-      let handledBy = '';
-
-      // 1. Antigravity IDE Chat
-      if ((activeHandler === 'ide' || activeHandler === 'ide-antigravity') && hasAntigravity) {
         try {
-          await vscode.commands.executeCommand('antigravity.panel.focus');
-          await vscode.commands.executeCommand('antigravity.addContext', prompt);
-          await new Promise(resolve => setTimeout(resolve, 450));
-          await vscode.commands.executeCommand('antigravity.triggerSend');
-          handledBy = 'Antigravity IDE Chat';
-        } catch (agyErr) {
-          log('warn', `Gagal auto-send via Antigravity RPC: ${agyErr.message}`);
-        } finally {
-          isDispatchingAgentMutex = false;
-        }
-      }
+          await vscode.env.clipboard.writeText(prompt);
+        } catch (clipErr) {}
 
-      // 2. Cline / Roo IDE Extension
-      if (!handledBy && (activeHandler === 'ide-cline' || activeHandler === 'ide-roo')) {
-        try {
-          const extCmd = activeHandler === 'ide-cline' ? 'claude-dev.SidebarProvider.focus' : 'roo-cline.SidebarProvider.focus';
-          await vscode.commands.executeCommand(extCmd);
-          handledBy = activeHandler === 'ide-cline' ? 'Cline IDE Agent' : 'Roo Code IDE Agent';
-        } catch (e) {}
-      }
+        const hasAntigravity = vscode.extensions.all.some(e => /antigravity/i.test(e.id));
+        let handledBy = '';
 
-      // 3. VS Code Chat Standar (Copilot / Gemini)
-      if (!handledBy) {
-        try {
-          await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt, isPartialQuery: false });
-          await vscode.commands.executeCommand('workbench.action.chat.submit');
-          handledBy = activeHandler === 'ide-copilot' ? 'GitHub Copilot Chat IDE' : (activeHandler === 'ide-gemini' ? 'Gemini Chat IDE' : 'VS Code Chat IDE');
-        } catch (chatErr) {
+        // 1. Antigravity IDE Chat
+        if ((activeHandler === 'ide' || activeHandler === 'ide-antigravity') && hasAntigravity) {
           try {
-            await vscode.commands.executeCommand('workbench.action.quickchat.open', { query: prompt, isPartialQuery: false });
-            handledBy = 'VS Code QuickChat IDE';
-          } catch (qcErr) {}
+            await vscode.commands.executeCommand('antigravity.panel.focus');
+            await vscode.commands.executeCommand('antigravity.addContext', prompt);
+            await new Promise(resolve => setTimeout(resolve, 450));
+            await vscode.commands.executeCommand('antigravity.triggerSend');
+            handledBy = 'Antigravity IDE Chat';
+          } catch (agyErr) {
+            log('warn', `Gagal auto-send via Antigravity RPC: ${agyErr.message}`);
+          }
         }
-      }
 
-      if (handledBy) {
-        if (taskKey && taskKey !== 'inst::') recentlyDispatchedTasks.set(taskKey, nowTime);
-        markTaskActuallyOnProcess(taskId, instruction, targetFolder, activeHandler, handledBy);
-        return { executed: true, handler: activeHandler, agentName: handledBy };
+        // 2. Cline / Roo IDE Extension
+        if (!handledBy && (activeHandler === 'ide-cline' || activeHandler === 'ide-roo')) {
+          try {
+            const extCmd = activeHandler === 'ide-cline' ? 'claude-dev.SidebarProvider.focus' : 'roo-cline.SidebarProvider.focus';
+            await vscode.commands.executeCommand(extCmd);
+            handledBy = activeHandler === 'ide-cline' ? 'Cline IDE Agent' : 'Roo Code IDE Agent';
+          } catch (e) {}
+        }
+
+        // 3. GitHub Copilot Chat & VS Code Chat Standar
+        if (!handledBy) {
+          try {
+            // Fokuskan ke panel Copilot Chat jika Copilot dipilih
+            if (activeHandler === 'ide-copilot') {
+              try {
+                await vscode.commands.executeCommand('workbench.panel.chat.view.copilot.focus');
+              } catch (cf1) {
+                try {
+                  await vscode.commands.executeCommand('github.copilot.chat.focus');
+                } catch (cf2) {}
+              }
+            }
+
+            // Buka chat standar dengan query prompt
+            await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt, isPartialQuery: false });
+            // Jeda 450ms agar input editor Copilot Chat siap sebelum submit
+            await new Promise(resolve => setTimeout(resolve, 450));
+            try {
+              await vscode.commands.executeCommand('workbench.action.chat.submit');
+            } catch (chatSubmitErr) {}
+
+            handledBy = activeHandler === 'ide-copilot' ? 'GitHub Copilot Chat IDE' : (activeHandler === 'ide-gemini' ? 'Gemini Chat IDE' : 'VS Code Chat IDE');
+          } catch (chatErr) {
+            try {
+              await vscode.commands.executeCommand('workbench.action.quickchat.open', { query: prompt, isPartialQuery: false });
+              handledBy = 'VS Code QuickChat IDE';
+            } catch (qcErr) {}
+          }
+        }
+
+        if (handledBy) {
+          if (taskKey && taskKey !== 'inst::') recentlyDispatchedTasks.set(taskKey, nowTime);
+          markTaskActuallyOnProcess(taskId, instruction, targetFolder, activeHandler, handledBy);
+          return { executed: true, handler: activeHandler, agentName: handledBy };
+        }
+        return { executed: false, reason: 'Tidak ada panel Chat IDE yang merespons' };
+      } finally {
+        isDispatchingAgentMutex = false;
       }
-      return { executed: false, reason: 'Tidak ada panel Chat IDE yang merespons' };
     }
 
     // =========================================================================
