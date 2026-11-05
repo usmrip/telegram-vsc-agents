@@ -5910,8 +5910,9 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                         <form method="POST" action="?action=do_reset_password">
                             <input type="hidden" name="token" value="<?= htmlspecialchars($resetToken) ?>">
                             <div class="form-group">
-                                <label><?= __t('Password Baru (Min 6 Karakter):', 'New Password (Min 6 Chars):') ?></label>
+                                <label><?= __t('Password Baru:', 'New Password:') ?></label>
                                 <input type="password" name="new_password" minlength="6" placeholder="Password baru" required autocomplete="new-password">
+                                <small style="color: var(--text-muted); font-size: 11px; margin-top: 4px; display: block;"><?= __t('Minimal 6 karakter.', 'Min 6 characters.') ?></small>
                             </div>
                             <div class="form-group" style="margin-bottom: 20px;">
                                 <label><?= __t('Konfirmasi Password Baru:', 'Confirm New Password:') ?></label>
@@ -6032,8 +6033,9 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                         </div>
                         <div class="grid-2" style="gap: 10px;">
                             <div class="form-group" style="margin-bottom: 0;">
-                                <label style="font-size: 11.5px;"><?= __t('Password Baru (Min 6 Karakter):', 'New Password (Min 6 Chars):') ?></label>
+                                <label style="font-size: 11.5px;"><?= __t('Password Baru:', 'New Password:') ?></label>
                                 <input type="password" name="new_password" minlength="6" placeholder="<?= __t('Password baru', 'New password') ?>" style="height: 38px;">
+                                <small style="color: var(--text-muted); font-size: 11px; margin-top: 4px; display: block;"><?= __t('Minimal 6 karakter.', 'Min 6 characters.') ?></small>
                             </div>
                             <div class="form-group" style="margin-bottom: 0;">
                                 <label style="font-size: 11.5px;"><?= __t('Ulangi Password Baru:', 'Confirm New Password:') ?></label>
@@ -6807,8 +6809,9 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                                     <input type="password" name="current_password" placeholder="Password lama" required>
                                 </div>
                                 <div class="form-group">
-                                    <label>Password Baru (Min 6 Karakter):</label>
+                                    <label>Password Baru:</label>
                                     <input type="password" name="new_password" minlength="6" placeholder="Password baru" required>
+                                    <small style="color: var(--text-muted); font-size: 11px; margin-top: 4px; display: block;">Minimal 6 karakter.</small>
                                 </div>
                                 <div class="form-group">
                                     <label>Konfirmasi Password Baru:</label>
