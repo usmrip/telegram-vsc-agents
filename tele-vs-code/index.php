@@ -1413,7 +1413,7 @@ if ($action === 'check_task_updates') {
     $lastHash = $_GET['hash'] ?? '';
 
     // Ambil data status dan tugas terbaru untuk user ini (30 tugas teratas)
-    $stmtU = $db->prepare("SELECT id, status, updated_at, created_at, instruction, notes, result, sender, project_id, command FROM tasks WHERE user_id = ? ORDER BY created_at DESC, updated_at DESC, rowid DESC LIMIT 40");
+    $stmtU = $db->prepare("SELECT id, status, updated_at, created_at, instruction, notes, result, sender, project_id, command, assigned_agent FROM tasks WHERE user_id = ? ORDER BY created_at DESC, updated_at DESC, rowid DESC LIMIT 40");
     $stmtU->execute([$currentUser['id']]);
     $recentTasks = $stmtU->fetchAll(PDO::FETCH_ASSOC);
 
@@ -6718,7 +6718,12 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                                                     $s = $sec % 60;
                                                     $durBadge = ($h > 0) ? "{$h}j {$m}m" : (($m > 0) ? "{$m}m {$s}s" : "{$s}s");
                                                 }
+                                                $agentName = !empty($t['assigned_agent']) ? $t['assigned_agent'] : 'Antigravity AI Agent';
                                                 ?>
+                                                <span class="badge badge-agent" style="background: rgba(168, 85, 247, 0.12); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.32); font-weight: 500; display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 6px; font-size: 11px;" title="Dikerjakan oleh: <?= htmlspecialchars($agentName) ?>">
+                                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>
+                                                    <span><?= htmlspecialchars($agentName) ?></span>
+                                                </span>
                                                 <span class="badge badge-done" title="Durasi pengerjaan: <?= $durBadge ?>">DONE <?= $durBadge ? "($durBadge)" : "" ?></span>
                                             <?php else: ?>
                                                 <span class="badge badge-failed"><?= htmlspecialchars($t['status']) ?></span>
@@ -6831,9 +6836,17 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                                         <div class="task-card-row-result">
                                             <?php if (!empty($resText)): ?>
                                                 <div class="task-result-box task-result-done">
-                                                    <div class="res-header">
-                                                        <?= renderSvg('check', 12) ?>
-                                                        <span>Result:</span>
+                                                    <div class="res-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+                                                        <div style="display: flex; align-items: center; gap: 6px;">
+                                                            <?= renderSvg('check', 12) ?>
+                                                            <span>Result:</span>
+                                                        </div>
+                                                        <div style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-secondary); font-weight: normal;">
+                                                            <span>Eksekutor:</span>
+                                                            <span style="color: #c084fc; font-weight: 600; background: rgba(168,85,247,0.12); border: 1px solid rgba(168,85,247,0.25); border-radius: 4px; padding: 1px 6px;">
+                                                                🤖 <?= htmlspecialchars(!empty($t['assigned_agent']) ? $t['assigned_agent'] : 'Antigravity AI Agent') ?>
+                                                            </span>
+                                                        </div>
                                                     </div>
                                                     <div class="task-result-content"><?= nl2br(htmlspecialchars($resText)) ?></div>
                                                 </div>
@@ -8241,6 +8254,7 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
             <div><span style="color: var(--text-muted);">Pengirim:</span> <b id="mTaskSender" style="color: #fff;"></b></div>
             <div><span style="color: var(--text-muted);">Waktu Masuk:</span> <span id="mTaskTime" style="color: #fff;"></span></div>
             <div><span style="color: var(--text-muted);">Status:</span> <span id="mTaskStatusBadge"></span></div>
+            <div style="grid-column: span 2;"><span style="color: var(--text-muted);">Eksekutor Agent:</span> <b id="mTaskAgent" style="color: #c084fc; display: inline-flex; align-items: center; gap: 4px;"></b></div>
         </div>
 
         <div class="form-group">
@@ -9281,7 +9295,8 @@ function openImageModal(e, url, title) {
                             const metaRight = cardEl.querySelector('.task-meta-right');
                             if (metaRight) {
                                 if (t.status === 'DONE') {
-                                    metaRight.innerHTML = '<span class="badge badge-done" title="Selesai 100%">DONE</span>';
+                                    const agName = t.assigned_agent || 'Antigravity AI Agent';
+                                    metaRight.innerHTML = '<span class="badge badge-agent" style="background: rgba(168, 85, 247, 0.12); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.32); font-weight: 500; display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 6px; font-size: 11px;" title="Dikerjakan oleh: ' + agName + '"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg><span>' + agName + '</span></span> <span class="badge badge-done" title="Selesai 100%">DONE</span>';
                                 } else if (t.status === 'IN_PROGRESS') {
                                     metaRight.innerHTML = '<span class="badge badge-progress">PROGRESS</span>';
                                 } else if (t.status === 'PENDING') {

@@ -93,6 +93,7 @@
         const mTaskInstruction = document.getElementById('mTaskInstruction');
         const mTaskCommand = document.getElementById('mTaskCommand');
         const mTaskResult = document.getElementById('mTaskResult');
+        const mTaskAgent = document.getElementById('mTaskAgent');
         const mTaskStatusSelect = document.getElementById('mTaskStatusSelect');
         const badgeContainer = document.getElementById('mTaskStatusBadge');
 
@@ -103,6 +104,7 @@
         if (mTaskTime) mTaskTime.textContent = (task.created_at || '') + ' ' + (tzAbbr || 'WIB');
         if (mTaskInstruction) mTaskInstruction.textContent = task.instruction || '';
         if (mTaskCommand) mTaskCommand.value = task.command || '';
+        if (mTaskAgent) mTaskAgent.textContent = '🤖 ' + (task.assigned_agent || 'Antigravity AI Agent');
 
         const resVal = task.result || task.notes || '';
         if (mTaskResult) mTaskResult.value = resVal;
