@@ -1221,10 +1221,11 @@ function activate(context) {
 
   // Format Prompt Resmi AI Agent (Event-Driven / On-Demand, Bebas Looping Penguras Token)
   function buildAgentPrompt(taskId = '', instruction = '') {
-    if (taskId) {
-      return `Periksa file TASK_QUEUE.md dan selesaikan tugas ${taskId} ("${instruction || ''}") sampai tuntas 100% sesuai panduan AGENTS.md.`;
+    const cleanId = taskId ? (taskId.startsWith('#') ? taskId : '#' + taskId) : '';
+    if (cleanId) {
+      return `Periksa file TASK_QUEUE.md dan selesaikan tugas ${cleanId} sampai tuntas 100% sesuai panduan AGENTS.md.`;
     }
-    return `Periksa file TASK_QUEUE.md dan selesaikan tugas aktif yang ada sampai tuntas 100% sesuai panduan AGENTS.md.`;
+    return `Periksa file TASK_QUEUE.md dan selesaikan antrean tugas aktif yang ada sampai tuntas 100% sesuai panduan AGENTS.md.`;
   }
 
   // Quota Guard: Cache pemicuan tugas terakhir untuk mencegah eksekusi berulang (hemat kuota)
@@ -1386,11 +1387,12 @@ function activate(context) {
 
     if (activeHandler === 'agy') {
       const agyBin = findCli('agy');
+      const isPowershell = !process.env.SHELL && process.platform === 'win32';
       const cmd = agyBin ? `"${agyBin}"` : 'agy';
-      if (process.platform === 'win32') {
-        term.sendText(`& ${cmd} --dangerously-skip-permissions -p "${prompt.replace(/"/g, '`"')}"`);
+      if (isPowershell) {
+        term.sendText(`& ${cmd} --dangerously-skip-permissions -p "${prompt}"`);
       } else {
-        term.sendText(`${cmd} --dangerously-skip-permissions -p "${prompt.replace(/"/g, '\"')}"`);
+        term.sendText(`${cmd} --dangerously-skip-permissions -p "${prompt}"`);
       }
       vscode.window.showInformationMessage(`🤖 Antigravity CLI (agy) sedang mengeksekusi tugas ${taskId || ''}...`);
       return { executed: true, handler: 'agy' };
@@ -1398,11 +1400,10 @@ function activate(context) {
 
     if (activeHandler === 'claude') {
       const cmd = process.platform === 'win32' ? 'claude.cmd' : 'claude';
-      term.sendText(`${cmd} -p "${prompt.replace(/"/g, '\"')}"`);
+      term.sendText(`${cmd} -p "${prompt}"`);
       vscode.window.showInformationMessage(`🧠 Claude Code sedang mengeksekusi tugas ${taskId || ''}...`);
       return { executed: true, handler: 'claude' };
     }
-
     if (activeHandler === 'cline') {
       term.sendText(`cline -y "${prompt.replace(/"/g, '\"')}"`);
       vscode.window.showInformationMessage(`⚡ Cline sedang mengeksekusi tugas ${taskId || ''}...`);
@@ -1828,8 +1829,7 @@ async function processActiveLocalTasks(cur) {
     const activeSection = queueContent.split('## ✅ Riwayat Tugas Selesai')[0];
     const regex = /###\s+\[(PENDING|IN_PROGRESS)\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/gi;
     let match;
-    const hasAnyInProgress = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i.test(activeSection);
-
+    const tasks = [];
     while ((match = regex.exec(activeSection)) !== null) {
       const taskId = match[2].startsWith('#') ? match[2] : `#${match[2]}`;
       const block = match[3];
@@ -1838,67 +1838,98 @@ async function processActiveLocalTasks(cur) {
       if (['FAILED', 'KENDALA', 'ERROR', 'GAGAL', 'DONE'].includes(taskStat)) {
         continue;
       }
-
       const mInst = block.match(/-\s+\*\*Instruksi:\*\*\s*([^\r\n]+)/i);
       const mSender = block.match(/-\s+\*\*Pengirim:\*\*\s*([^\r\n]+)/i);
       const mTime = block.match(/-\s+\*\*Waktu:\*\*\s*([^\r\n]+)/i);
-
       if (mInst) {
-        const inst = mInst[1].trim();
-        const sender = mSender ? mSender[1].trim() : 'Telegram';
-        const taskObj = {
+        tasks.push({
           id: taskId,
-          instruction: inst,
-          sender: sender,
+          status: taskStat,
+          instruction: mInst[1].trim(),
+          sender: mSender ? mSender[1].trim() : 'Telegram',
           created_at: mTime ? mTime[1].trim() : new Date().toISOString()
-        };
-        try {
-          const execRes = tryExecuteDirectTask(inst, cur.folder, cur);
-          if (execRes && execRes.executed) {
-            const rep = execRes.report;
-            await markServerTaskDone(cur, taskObj.id, rep);
-            appendDoneToTaskQueueFile(queueFile, taskObj, rep);
-            try {
-              await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${taskObj.id}`, 'SELESAI', [
-                `Instruksi: ${inst.substring(0, 90)}`,
-                `Hasil: ${rep}`,
-                `Pengirim: ${sender}`
-              ], cur.project, cur.timezone);
-            } catch (nErr) {}
-            showTimedNotification(`✅ Tugas [${taskObj.id}] berhasil dieksekusi: ${rep}`, 10);
-            continue;
-          }
-        } catch (execErr) {
-          log('error', '❌ Gagal eksekusi tugas lokal [' + taskObj.id + ']: ' + execErr.message);
-          await markServerTaskFailed(cur, taskObj.id, execErr.message);
-          appendFailedToTaskQueueFile(queueFile, taskObj, execErr.message);
-          try {
-            await sendTelegramMessage(cur.botToken, cur.chatId, 'Gagal: ' + taskObj.id, 'KENDALA', [
-              'Instruksi: ' + inst.substring(0, 90),
-              'Penyebab: ' + execErr.message,
-              'Pengirim: ' + sender
-            ], cur.project, cur.timezone);
-          } catch (nErr) {}
-          showTimedNotification('🚨 Tugas [' + taskObj.id + '] mengalami kendala: ' + execErr.message, 10);
-          continue;
-        }
-
-        // Tugas non-direct (coding / AI Agent):
-        // Jika statusnya PENDING dan autoDispatchAgent aktif, periksa aturan sekuensial
-        if (taskStat === 'PENDING' && cur.autoDispatchAgent && (cur.agentHandler || 'auto') !== 'none') {
-          if (!hasAnyInProgress) {
-            log('info', `[Auto-Dispatch] Mengalihkan tugas pending ${taskObj.id} ke AI Agent Handler (${cur.agentHandler || 'auto'})...`);
-            await executeTaskWithAgent(taskObj.id, taskObj.instruction);
-            // Sesuai aturan sekuensial murni: hanya dispatch 1 tugas pada satu waktu!
-            break;
-          } else {
-            log('info', `[SEKUENSIAL] Menunda auto-dispatch ${taskObj.id} karena masih ada tugas yang sedang [IN_PROGRESS].`);
-            break;
-          }
-        }
+        });
       }
     }
-  } catch (e) {}
+
+    if (tasks.length === 0) return;
+
+    // 1. Cek apakah ada tugas yang saat ini berstatus IN_PROGRESS
+    const currentInProgress = tasks.find(t => t.status === 'IN_PROGRESS');
+    if (currentInProgress) {
+      // Direct task check: eksekusi gratis 0 token jika tugas berupa shell/file sederhana
+      try {
+        const execRes = tryExecuteDirectTask(currentInProgress.instruction, cur.folder, cur);
+        if (execRes && execRes.executed) {
+          const rep = execRes.report;
+          await markServerTaskDone(cur, currentInProgress.id, rep);
+          appendDoneToTaskQueueFile(queueFile, currentInProgress, rep);
+          try {
+            await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${currentInProgress.id}`, 'SELESAI', [
+              `Instruksi: ${currentInProgress.instruction.substring(0, 90)}`,
+              `Hasil: ${rep}`,
+              `Pengirim: ${currentInProgress.sender}`
+            ], cur.project, cur.timezone);
+          } catch (nErr) {}
+          showTimedNotification(`✅ Tugas [${currentInProgress.id}] berhasil dieksekusi: ${rep}`, 10);
+          // Rekursif ke tugas berikutnya secara berantai sampai semua tugas tuntas
+          return processActiveLocalTasks(cur);
+        }
+      } catch (execErr) {
+        log('error', '❌ Gagal eksekusi tugas lokal [' + currentInProgress.id + ']: ' + execErr.message);
+        await markServerTaskFailed(cur, currentInProgress.id, execErr.message);
+        appendFailedToTaskQueueFile(queueFile, currentInProgress, execErr.message);
+        return processActiveLocalTasks(cur);
+      }
+
+      // Jika tugas AI Agent sedang IN_PROGRESS, pastikan sudah di-dispatch
+      if (cur.autoDispatchAgent && (cur.agentHandler || 'auto') !== 'none') {
+        const taskKey = ((currentInProgress.id || '').toLowerCase().trim()) + '::' + ((currentInProgress.instruction || '').toLowerCase().trim());
+        if (!recentlyDispatchedTasks.has(taskKey) || (Date.now() - recentlyDispatchedTasks.get(taskKey) >= 60000)) {
+          log('info', `[Auto-Dispatch] Melanjutkan pemicuan tugas IN_PROGRESS ${currentInProgress.id} ke AI Agent Handler (${cur.agentHandler || 'auto'})...`);
+          await executeTaskWithAgent(currentInProgress.id, currentInProgress.instruction);
+        }
+      }
+      return; // Sesuai aturan sekuensial murni: tugas PENDING harus menunggu IN_PROGRESS selesai
+    }
+
+    // 2. Jika tidak ada tugas IN_PROGRESS, ambil tugas PENDING yang pertama
+    const firstPending = tasks.find(t => t.status === 'PENDING');
+    if (!firstPending) return;
+
+    // Coba eksekusi direct task terlebih dahulu
+    try {
+      const execRes = tryExecuteDirectTask(firstPending.instruction, cur.folder, cur);
+      if (execRes && execRes.executed) {
+        const rep = execRes.report;
+        await markServerTaskDone(cur, firstPending.id, rep);
+        appendDoneToTaskQueueFile(queueFile, firstPending, rep);
+        try {
+          await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${firstPending.id}`, 'SELESAI', [
+            `Instruksi: ${firstPending.instruction.substring(0, 90)}`,
+            `Hasil: ${rep}`,
+            `Pengirim: ${firstPending.sender}`
+          ], cur.project, cur.timezone);
+        } catch (nErr) {}
+        showTimedNotification(`✅ Tugas [${firstPending.id}] berhasil dieksekusi: ${rep}`, 10);
+        // Otomatis berlanjut ke tugas PENDING berikutnya!
+        return processActiveLocalTasks(cur);
+      }
+    } catch (execErr) {
+      log('error', '❌ Gagal eksekusi tugas lokal [' + firstPending.id + ']: ' + execErr.message);
+      await markServerTaskFailed(cur, firstPending.id, execErr.message);
+      appendFailedToTaskQueueFile(queueFile, firstPending, execErr.message);
+      return processActiveLocalTasks(cur);
+    }
+
+    // Tugas coding/AI Agent: dispatch otomatis ke Agent Handler terpilih
+    if (cur.autoDispatchAgent && (cur.agentHandler || 'auto') !== 'none') {
+      log('info', `[Auto-Dispatch] Mengalihkan tugas pending ${firstPending.id} ke AI Agent Handler (${cur.agentHandler || 'auto'})...`);
+      await executeTaskWithAgent(firstPending.id, firstPending.instruction);
+    }
+  } catch (e) {
+    log('error', `Gagal processActiveLocalTasks: ${e.message}`);
+  }
 }
 
 function appendDoneToTaskQueueFile(queueFile, task, report) {

@@ -25,7 +25,8 @@ Setiap kali Anda menerima giliran bicara, prompt, atau instruksi apapun dari USE
           - Tandai selesai menggunakan perintah:
             `node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"`
             *(Perintah ini otomatis memperbarui status di server menjadi DONE, mencatat riwayat ke TASK_QUEUE.md, dan mengirim notifikasi SELESAI ke Telegram)*.
-          - Baru setelah itu, lanjutkan ke tugas `[PENDING]` berikutnya (satu per satu).
+          - **Lanjutkan ke tugas `[PENDING]` berikutnya satu per satu secara berurutan sampai SELURUH tugas di `## ⏳ Tugas Aktif` tuntas 100%.**
+          - **Setelah tidak ada lagi tugas aktif di `TASK_QUEUE.md`, AI Agent langsung kembali ke mode standby (Smart Idle Mode) tanpa membuat cron loop atau timer di IDE.**
 
 2. **LANGKAH 2 (PENCATATAN PERINTAH BARU DARI USER):**
    - Jika tugas antrean sudah selesai atau tidak ada antrean aktif, dan user memberikan instruksi baru di chat ini:
