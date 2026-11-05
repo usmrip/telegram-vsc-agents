@@ -8008,6 +8008,33 @@ function openImageModal(e, url, title) {
                                 }
                             }
                         }
+
+                        // UPDATE DOM CARD BADGE SECARA INSTAN DI HALAMAN
+                        const cleanId = (t.id || '').replace(/^#?/, '');
+                        const cardEl = document.getElementById('task-' + t.id) || 
+                                       document.getElementById('task-#' + cleanId) || 
+                                       document.getElementById('task-' + cleanId);
+                        if (cardEl) {
+                            const metaRight = cardEl.querySelector('.task-meta-right');
+                            if (metaRight) {
+                                if (t.status === 'DONE') {
+                                    metaRight.innerHTML = '<span class="badge badge-done" title="Selesai 100%">DONE</span>';
+                                } else if (t.status === 'IN_PROGRESS') {
+                                    metaRight.innerHTML = '<span class="badge badge-progress">PROGRESS</span>';
+                                } else if (t.status === 'PENDING') {
+                                    metaRight.innerHTML = '<span class="badge badge-pending">PENDING</span>';
+                                } else if (t.status === 'FAILED') {
+                                    metaRight.innerHTML = '<span class="badge badge-failed">GAGAL</span>';
+                                }
+                            }
+                            if (t.status === 'DONE') {
+                                const oldIdeBanner = document.getElementById('activeIdeBannerContainer');
+                                if (oldIdeBanner && oldIdeBanner.innerHTML.includes(t.id)) {
+                                    oldIdeBanner.innerHTML = '';
+                                }
+                            }
+                        }
+
                         knownTaskStatus[t.id] = t.status;
                     }
 
@@ -8015,9 +8042,21 @@ function openImageModal(e, url, title) {
 
                     // Auto-refresh DOM Antrean Tugas tanpa reload halaman penuh (Seamless DOM Swap)
                     try {
-                        const currentHref = window.location.href.split('#')[0];
-                        const refreshUrl = currentHref + (currentHref.includes('?') ? '&' : '?') + '_ts=' + Date.now();
-                        const pageRes = await fetch(refreshUrl, { cache: 'no-store' });
+                        const urlObj = new URL(window.location.href);
+                        if (!urlObj.searchParams.get('tab')) {
+                            urlObj.searchParams.set('tab', 'tasks');
+                        }
+                        urlObj.searchParams.set('_ts', Date.now().toString());
+                        const refreshUrl = urlObj.toString();
+
+                        const pageRes = await fetch(refreshUrl, { 
+                            cache: 'no-store',
+                            headers: {
+                                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                                'Pragma': 'no-cache',
+                                'X-Requested-With': 'XMLHttpRequest'
+                            }
+                        });
                         if (pageRes.ok) {
                             const htmlText = await pageRes.text();
                             const parser = new DOMParser();
