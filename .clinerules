@@ -84,3 +84,4 @@ Setiap kali Anda menyelesaikan suatu tugas atau jika menemukan kendala error yan
 - Langsung simpan dan terapkan semua perubahan file, penambahan kode, dan pembuatan fitur tanpa perlu meminta konfirmasi berulang.
 - Langsung jalankan pengujian/verifikasi hingga tuntas 100%.
 - Commit hasil pekerjaan yang sudah selesai ke Git (kecuali jika ada instruksi khusus untuk tidak push ke git).
+

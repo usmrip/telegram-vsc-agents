@@ -160,6 +160,8 @@ function getDb($forceNew = false) {
         $pdo->exec("PRAGMA journal_mode = WAL;");
         $pdo->exec("PRAGMA synchronous = NORMAL;");
         $pdo->exec("PRAGMA foreign_keys = ON;");
+        $pdo->exec("PRAGMA temp_store = MEMORY;");
+        $pdo->exec("PRAGMA cache_size = -20000;");
         
         // Optimasi: Eksekusi DDL & Migrasi skema database hanya jika versi skema belum up-to-date
         $stmtVer = $pdo->query("PRAGMA user_version");
@@ -172,6 +174,25 @@ function getDb($forceNew = false) {
         }
     }
     return $pdo;
+}
+
+// Helper Eksekusi Query dengan Auto-Retry saat Lock Contention (Anti Database Locked)
+function safeDbExecute($stmt, array $params = [], int $maxRetries = 5, int $delayMs = 150) {
+    $attempts = 0;
+    while (true) {
+        $attempts++;
+        try {
+            return $stmt->execute($params);
+        } catch (\PDOException $e) {
+            $msg = $e->getMessage();
+            $isLocked = ($e->getCode() == 'HY000' && (stripos($msg, 'database is locked') !== false || stripos($msg, 'busy') !== false));
+            if ($isLocked && $attempts < $maxRetries) {
+                usleep($delayMs * 1000 * $attempts);
+                continue;
+            }
+            throw $e;
+        }
+    }
 }
 
 // Skema Migrasi Database (Hanya dijalankan saat inisialisasi / update skema)
@@ -3465,21 +3486,33 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
             }
         }
 
-        // Update Heartbeat Workspace / VS Code Instance untuk Proyek ini
+        // Update Heartbeat Workspace / VS Code Instance untuk Proyek ini (Throttled & Non-Blocking)
         if ($wsFolder || $operator) {
-            $now = date('Y-m-d H:i:s');
-            if ($prjFilter) {
-                $cleanFilter = strtolower(trim($prjFilter));
-                if (is_numeric($prjFilter)) {
-                    $updH = $db->prepare("UPDATE projects SET last_workspace_folder = ?, last_operator = ?, last_seen = ? WHERE user_id = ? AND (id = ? OR LOWER(code) = ?)");
-                    $updH->execute([$wsFolder, $operator, $now, $user['id'], (int)$prjFilter, $cleanFilter]);
+            try {
+                $now = date('Y-m-d H:i:s');
+                if ($prjFilter) {
+                    $cleanFilter = strtolower(trim($prjFilter));
+                    if (is_numeric($prjFilter)) {
+                        $updH = $db->prepare("UPDATE projects SET last_workspace_folder = ?, last_operator = ?, last_seen = ? 
+                                              WHERE user_id = ? AND (id = ? OR LOWER(code) = ?) 
+                                              AND (last_seen IS NULL OR last_seen < datetime('now', '-20 seconds') OR last_workspace_folder IS NULL OR last_workspace_folder != ? OR last_operator != ?)");
+                        safeDbExecute($updH, [$wsFolder, $operator, $now, $user['id'], (int)$prjFilter, $cleanFilter, $wsFolder, $operator], 3, 100);
+                    } else {
+                        $updH = $db->prepare("UPDATE projects SET last_workspace_folder = ?, last_operator = ?, last_seen = ? 
+                                              WHERE user_id = ? AND (project_key = ? OR LOWER(code) = ? OR LOWER(name) = ?) 
+                                              AND (last_seen IS NULL OR last_seen < datetime('now', '-20 seconds') OR last_workspace_folder IS NULL OR last_workspace_folder != ? OR last_operator != ?)");
+                        safeDbExecute($updH, [$wsFolder, $operator, $now, $user['id'], $prjFilter, $cleanFilter, $cleanFilter, $wsFolder, $operator], 3, 100);
+                    }
                 } else {
-                    $updH = $db->prepare("UPDATE projects SET last_workspace_folder = ?, last_operator = ?, last_seen = ? WHERE user_id = ? AND (project_key = ? OR LOWER(code) = ? OR LOWER(name) = ?)");
-                    $updH->execute([$wsFolder, $operator, $now, $user['id'], $prjFilter, $cleanFilter, $cleanFilter]);
+                    $updH = $db->prepare("UPDATE projects SET last_workspace_folder = ?, last_operator = ?, last_seen = ? 
+                                          WHERE user_id = ? 
+                                          AND (last_seen IS NULL OR last_seen < datetime('now', '-20 seconds') OR last_workspace_folder IS NULL OR last_workspace_folder != ? OR last_operator != ?) 
+                                          ORDER BY id ASC LIMIT 1");
+                    safeDbExecute($updH, [$wsFolder, $operator, $now, $user['id'], $wsFolder, $operator], 3, 100);
                 }
-            } else {
-                $updH = $db->prepare("UPDATE projects SET last_workspace_folder = ?, last_operator = ?, last_seen = ? WHERE user_id = ? ORDER BY id ASC LIMIT 1");
-                $updH->execute([$wsFolder, $operator, $now, $user['id']]);
+            } catch (\Throwable $hbErr) {
+                // Heartbeat adalah telemetri non-kritis; kegagalannya saat transient lock contention tidak boleh mematikan api_pull
+                error_log("Heartbeat update ignored during lock contention: " . $hbErr->getMessage());
             }
         }
 
@@ -3514,7 +3547,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
                     // ATURAN MUTLAK: Tugas yang berkendala tidak boleh dieksekusi berulang-ulang!
                     $failReason = 'Otomatis ditandai KENDALA (melebihi batas 3x percobaan tanpa penyelesaian)';
                     $updF = $db->prepare("UPDATE tasks SET status = 'FAILED', updated_at = ?, notes = ?, result = ?, retry_count = ? WHERE id = ?");
-                    $updF->execute([$nowTime, $failReason, $failReason, $curRetry, $pt['id']]);
+                    safeDbExecute($updF, [$nowTime, $failReason, $failReason, $curRetry, $pt['id']]);
                     if (!empty($pt['bot_token']) && !empty($pt['chat_id']) && empty($user['block_notify'])) {
                         $pName = htmlspecialchars($pt['project_name'] ?: 'Tele-vs-Code');
                         callTelegram($pt['bot_token'], 'sendMessage', [
@@ -3526,7 +3559,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
                     continue; // Jangan masukkan ke daftar tugas aktif
                 } else {
                     $updR = $db->prepare("UPDATE tasks SET retry_count = ?, updated_at = ? WHERE id = ?");
-                    $updR->execute([$curRetry, $nowTime, $pt['id']]);
+                    safeDbExecute($updR, [$curRetry, $nowTime, $pt['id']]);
                 }
             }
             $pending[] = $pt;
@@ -3538,7 +3571,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
                 $isNewlyStarted = ($pt['status'] === 'PENDING');
                 // Aturan: api_pull hanya memperbarui last_seen tanpa mengubah status ke IN_PROGRESS
                 $upd = $db->prepare("UPDATE tasks SET updated_at = ?, notes = 'Ditarik antrean oleh VS Code Worker' WHERE id = ?");
-                $upd->execute([$now, $pt['id']]);
+                safeDbExecute($upd, [$now, $pt['id']]);
 
                 // Kirim notifikasi Telegram jika memulai pekerjaan 1x saja (cek apakah sudah pernah dikirim)
                 if ($isNewlyStarted && empty($pt['start_notified']) && !empty($pt['bot_token']) && !empty($pt['chat_id']) && empty($pt['block_notify'])) {
@@ -3564,7 +3597,8 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
                         'text' => $startMsg,
                         'parse_mode' => 'HTML'
                     ]);
-                    $db->prepare("UPDATE tasks SET start_notified = 1 WHERE id = ?")->execute([$pt['id']]);
+                    $updNotif = $db->prepare("UPDATE tasks SET start_notified = 1 WHERE id = ?");
+                    safeDbExecute($updNotif, [$pt['id']]);
                 }
             }
         }
@@ -3658,7 +3692,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 
         $now = date('Y-m-d H:i:s');
         $stmtIns = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, notes, command, assigned_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmtIns->execute([$taskId, $user['id'], $prjId, $instruction, $sender, $status, $now, $now, $notes, $command, $assignedAgent]);
+        safeDbExecute($stmtIns, [$taskId, $user['id'], $prjId, $instruction, $sender, $status, $now, $now, $notes, $command, $assignedAgent]);
 
         // Kirim Notifikasi ke Telegram Bot Proyek agar user melihat update langsung di HP/Telegram
         $notifiedByServer = false;
@@ -3729,7 +3763,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         }
 
         $upd = $db->prepare("UPDATE tasks SET status = 'IN_PROGRESS', updated_at = ?, notes = ? WHERE id = ? AND user_id = ?");
-        $upd->execute([$now, $notes, $taskId, $user['id']]);
+        safeDbExecute($upd, [$now, $notes, $taskId, $user['id']]);
 
         $alreadyNotified = !empty($task['start_notified']);
         $notifiedByServer = false;
@@ -3874,10 +3908,10 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 
         if ($cmdParam) {
             $upd = $db->prepare("UPDATE tasks SET status = ?, updated_at = ?, notes = ?, result = ?, command = ? WHERE id = ? AND user_id = ?");
-            $upd->execute([$stat, $now, $notes, $result, $cmdParam, $taskId, $user['id']]);
+            safeDbExecute($upd, [$stat, $now, $notes, $result, $cmdParam, $taskId, $user['id']]);
         } else {
             $upd = $db->prepare("UPDATE tasks SET status = ?, updated_at = ?, notes = ?, result = ? WHERE id = ? AND user_id = ?");
-            $upd->execute([$stat, $now, $notes, $result, $taskId, $user['id']]);
+            safeDbExecute($upd, [$stat, $now, $notes, $result, $taskId, $user['id']]);
         }
 
         // Kirim Notifikasi ke Bot Telegram Proyek (Hanya jika TIDAK DIBLOKIR oleh Superadmin)
@@ -5102,7 +5136,7 @@ if ($currentUser) {
             $taskId = '#TASK-' . substr(bin2hex(random_bytes(2)), 0, 4);
             $now = date('Y-m-d H:i:s');
             $ins = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, command) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)");
-            $ins->execute([$taskId, $currentUser['id'], $prjId, $instruction, $sender, $now, $now, $command]);
+            safeDbExecute($ins, [$taskId, $currentUser['id'], $prjId, $instruction, $sender, $now, $now, $command]);
 
             // Kirim Notifikasi ke Telegram Bot Proyek agar user melihat update langsung di Telegram
             if ($prjId > 0) {
@@ -5158,10 +5192,10 @@ if ($currentUser) {
 
         if ($commandText) {
             $upd = $db->prepare("UPDATE tasks SET status = ?, updated_at = ?, notes = ?, result = ?, command = ? WHERE id = ? AND user_id = ?");
-            $upd->execute([$newStat, $now, $resultText, $resultText, $commandText, $tid, $currentUser['id']]);
+            safeDbExecute($upd, [$newStat, $now, $resultText, $resultText, $commandText, $tid, $currentUser['id']]);
         } else {
             $upd = $db->prepare("UPDATE tasks SET status = ?, updated_at = ?, notes = ?, result = ? WHERE id = ? AND user_id = ?");
-            $upd->execute([$newStat, $now, $resultText, $resultText, $tid, $currentUser['id']]);
+            safeDbExecute($upd, [$newStat, $now, $resultText, $resultText, $tid, $currentUser['id']]);
         }
         $successMsg = "✅ Tugas <b>$tid</b> berhasil diperbarui ke status $newStat dan hasil pekerjaan tersimpan!";
         $currentTab = 'tasks';
@@ -5179,10 +5213,10 @@ if ($currentUser) {
 
         if ($newStat) {
             $upd = $db->prepare("UPDATE tasks SET status = ?, result = ?, notes = ?, command = ?, updated_at = ? WHERE id = ? AND user_id = ?");
-            $upd->execute([$newStat, $resultText, $resultText, $commandText, $now, $tid, $currentUser['id']]);
+            safeDbExecute($upd, [$newStat, $resultText, $resultText, $commandText, $now, $tid, $currentUser['id']]);
         } else {
             $upd = $db->prepare("UPDATE tasks SET result = ?, notes = ?, command = ?, updated_at = ? WHERE id = ? AND user_id = ?");
-            $upd->execute([$resultText, $resultText, $commandText, $now, $tid, $currentUser['id']]);
+            safeDbExecute($upd, [$resultText, $resultText, $commandText, $now, $tid, $currentUser['id']]);
         }
         $successMsg = "✅ Hasil / Result pekerjaan untuk tugas <b>$tid</b> berhasil disimpan ke database!";
         $currentTab = 'tasks';
