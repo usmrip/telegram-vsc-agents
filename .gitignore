@@ -25,6 +25,10 @@ backups/
 *.zip
 attachments/
 coba/
+scratch/
+*beta*.vsix
+*-beta*.vsix
+tele-vs-code-latest.vsix
 
 # System & Editor
 .vscode/
