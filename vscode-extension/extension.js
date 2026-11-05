@@ -13,7 +13,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 const crypto = require('crypto');
 
@@ -2297,37 +2297,27 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                 const agentDisplayName = currentHandler === 'ide' ? 'Agent IDE' : (currentHandler === 'custom' ? 'Custom Agent' : currentHandler.toUpperCase());
                 const runBtnLabel = currentHandler !== 'none' ? i18n('btnRunVia', { agent: agentDisplayName }) : i18n('btnSelectAgent');
 
-                // Sesuai instruksi: Jika autoDispatchAgent aktif dan handler bukan 'none',
-                // JANGAN munculkan notifikasi pop-up dialog yang menuntut klik manual,
-                // tapi LANGSUNG eksekusi sesuai dengan agen yang dipilih
-                if (cur.autoDispatchAgent && currentHandler !== 'none') {
+                // Sesuai instruksi: JANGAN PERNAH memunculkan notifikasi pop-up dialog yang menuntut klik manual ([Run via AUTO]).
+                // Sesuai aturan: LANGSUNG eksekusi seketika sesuai agen yang dipilih!
+                const taskAgentOverride = resolveAgentHandlerFromText(taskItem.assigned_agent);
+                const currentHandler = (taskAgentOverride || cur.agentHandler || 'auto').trim();
+
+                // Notifikasi toast informatif murni (auto-fading 4 detik, tanpa tombol yang menuntut klik)
+                if (cur.showToastOnNewTask !== false) {
+                  showTimedNotification(`⚡ [${shortTaskId(taskItem.id)}] Tugas Baru: "${instBrief}"`, 4);
+                }
+
+                if (currentHandler !== 'none') {
                   const qContentNow = fs.existsSync(queueFile) ? fs.readFileSync(queueFile, 'utf-8') : '';
                   const activeSec = qContentNow.split('## ✅ Riwayat Tugas Selesai')[0];
                   const mActive = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i.exec(activeSec);
                   if (!mActive || isSameTaskId(mActive[1], taskItem.id)) {
-                    const taskAgentOverride = resolveAgentHandlerFromText(taskItem.assigned_agent);
                     executeTaskWithAgent(taskItem.id, taskItem.instruction, taskAgentOverride);
                   } else {
                     log('info', `[SEKUENSIAL] Menunda auto-dispatch ${taskItem.id} karena tugas ${mActive[1]} masih [IN_PROGRESS].`);
                   }
                 } else {
-                  // HANYA tampilkan dialog pop-up jika autoDispatchAgent dinonaktifkan (mode manual) atau handler 'none'
-                  showTimedNotification(
-                    `⚡ [${taskItem.id}] Tugas Baru: "${instBrief}" (Prompt disalin ke clipboard)`,
-                    15,
-                    runBtnLabel,
-                    'Buka TASK_QUEUE'
-                  ).then(async (act) => {
-                    if (act === runBtnLabel) {
-                      if (!currentHandler) {
-                        vscode.commands.executeCommand('telegramNotifier.selectAgentHandler');
-                      } else {
-                        executeTaskWithAgent(taskItem.id, taskItem.instruction);
-                      }
-                    } else if (act === 'Buka TASK_QUEUE') {
-                      vscode.commands.executeCommand('telegramNotifier.openQueue');
-                    }
-                  });
+                  vscode.commands.executeCommand('telegramNotifier.selectAgentHandler');
                 }
               }
             }
@@ -2443,23 +2433,8 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
       startAutoWorker();
     }
 
-    // Popup Panduan Manual: Muncul setiap kali VSIX diaktifkan (Startup)
-    setTimeout(() => {
-      showTimedNotification(
-        "🤖 Tele-vs-Code Siap! Prioritas Pekerja: Antigravity AI Agent. Ketik 'proses antrian' di Chat AI untuk menyelesaikan TASK_QUEUE.md.",
-        10,
-        "📋 Salin Prompt AI",
-        "📖 Buka TASK_QUEUE.md"
-      ).then(act => {
-        if (act === "📋 Salin Prompt AI") {
-          const prompt = buildAgentPrompt('', '');
-          vscode.env.clipboard.writeText(prompt);
-          showTimedNotification("📋 Prompt 'proses antrian' berhasil disalin ke clipboard! Tempelkan di Chat AI Agent Anda.", 5);
-        } else if (act === "📖 Buka TASK_QUEUE.md") {
-          vscode.commands.executeCommand("telegramNotifier.openQueue");
-        }
-      });
-    }, 2500);
+    // Startup info via StatusBar (bebas modal toast yang mengganggu)
+    log('info', 'Tele-vs-Code aktif dan siap memproses tugas.');
   }, 1200);
 
   // 1. Menu Utama via Status Bar
@@ -3764,7 +3739,7 @@ TIMEZONE="${matchedProject.timezone || 'Asia/Jakarta'}"
     });
   }));
 
-  // 8b. Tambah Tugas Baru dari IDE ke TASK_QUEUE & Telegram
+  // 8b. Tambah Tugas Baru dari IDE ke Dashboard Server & TASK_QUEUE
   context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.addTask', async () => {
     const cur = getEffectiveConfig();
     const inst = await vscode.window.showInputBox({
@@ -3774,21 +3749,116 @@ TIMEZONE="${matchedProject.timezone || 'Asia/Jakarta'}"
     });
     if (!inst || !inst.trim()) return;
 
-    try {
+    const trimmedInst = inst.trim();
+    let assignedAgent = cur.agentHandler === 'ide' ? 'Antigravity AI Agent' : (cur.agentHandler ? `${cur.agentHandler.toUpperCase()} Agent` : 'Antigravity AI Agent');
+    const mAgt = trimmedInst.match(/(?:^|\s)@(\w+)/i);
+    if (mAgt) {
+      assignedAgent = `${mAgt[1].charAt(0).toUpperCase() + mAgt[1].slice(1).toLowerCase()} Agent`;
+    }
+
+    let newTaskId = '';
+    let successServer = false;
+
+    // 1. Push langsung ke Dashboard Server Biru via HTTP API
+    if (cur.secretKey && cur.webhookUrl) {
+      try {
+        const baseUrl = cur.webhookUrl.replace(/\/webhook\/?$/, '/').replace(/\/$/, '');
+        let targetUrl = `${baseUrl}/?action=push&secret=${encodeURIComponent(cur.secretKey)}`;
+        if (cur.project) targetUrl += `&project=${encodeURIComponent(cur.project)}`;
+
+        const postBody = new URLSearchParams({
+          instruction: trimmedInst,
+          sender: 'VS Code IDE',
+          status: 'PENDING',
+          notes: 'Dibuat langsung via VS Code IDE',
+          command: 'tele-task add',
+          agent: assignedAgent,
+          is_ide: '1'
+        }).toString();
+
+        const res = await safeFetch(targetUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': `Tele-vs-Code/${context.extension?.packageJSON?.version || '1.0.25'}`
+          },
+          body: postBody,
+          timeout: 8000
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          if (json.ok && json.id) {
+            newTaskId = json.id;
+            successServer = true;
+          }
+        }
+      } catch (err) {
+        log('warn', `Push langsung via HTTP ke server: ${err.message}`);
+      }
+    }
+
+    // 2. Fallback jika HTTP gagal: gunakan tele-task.js dengan execFileSync
+    if (!newTaskId) {
       const candidates = [
         path.join(cur.folder, '.vscode', 'tele-vs-code', 'tele-task.js'),
         path.join(cur.folder, 'tele-task.js')
       ];
       const taskJs = candidates.find(p => fs.existsSync(p));
       if (taskJs) {
-        execSync(`node "${taskJs}" add "${inst.trim().replace(/"/g, '\\"')}" --sender "VS Code IDE" --status IN_PROGRESS`, { cwd: cur.folder, stdio: 'inherit' });
-        vscode.window.showInformationMessage(`✅ Tugas berhasil ditambahkan ke antrean & notifikasi Telegram terkirim!`);
-        taskProvider.refresh();
-      } else {
-        vscode.window.showErrorMessage('❌ Skrip tele-task.js tidak ditemukan di folder workspace.');
+        try {
+          const resOut = execFileSync(process.execPath || 'node', [
+            taskJs, 'add', trimmedInst,
+            '--sender', 'VS Code IDE',
+            '--status', 'PENDING',
+            ...(cur.project ? ['--project', cur.project] : [])
+          ], { cwd: cur.folder, encoding: 'utf-8', timeout: 10000 });
+          const mId = resOut.match(/(?:#TASK-[A-Za-z0-9_-]+|#TASK-[a-zA-Z0-9]{4})/);
+          if (mId) newTaskId = mId[0];
+        } catch (e) {
+          log('error', `Fallback tele-task.js gagal: ${e.message}`);
+        }
       }
+    }
+
+    if (!newTaskId) {
+      newTaskId = `#TASK-${Math.random().toString(36).substring(2, 6)}`;
+    }
+
+    // 3. Catat ke file TASK_QUEUE.md lokal
+    const queueFile = path.join(cur.folder, 'TASK_QUEUE.md');
+    try {
+      let qContent = fs.existsSync(queueFile) ? fs.readFileSync(queueFile, 'utf-8') : '';
+      const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const taskBlock = `\n### [PENDING] ${shortTaskId(newTaskId)}\n- **Waktu:** ${nowStr}\n- **Pengirim:** VS Code IDE\n- **Agent:** ${assignedAgent}\n- **Instruksi:** ${trimmedInst}\n- **Status:** PENDING\n`;
+
+      if (qContent.includes('## ⏳ Tugas Aktif')) {
+        qContent = qContent.replace('## ⏳ Tugas Aktif', `## ⏳ Tugas Aktif\n${taskBlock}`);
+      } else {
+        qContent = `## ⏳ Tugas Aktif\n${taskBlock}\n\n## ✅ Riwayat Tugas Selesai\n` + qContent;
+      }
+      fs.writeFileSync(queueFile, qContent, 'utf-8');
     } catch (e) {
-      vscode.window.showErrorMessage(`❌ Gagal menambah tugas: ${e.message}`);
+      log('warn', `Gagal memperbarui TASK_QUEUE.md: ${e.message}`);
+    }
+
+    taskProvider.refresh();
+    await updateStatusBar();
+
+    const shortId = shortTaskId(newTaskId);
+    showTimedNotification(
+      `✅ [${shortId}] Tugas IDE berhasil dicatat ke antrean & Dashboard Server!`,
+      5
+    );
+
+    // 4. Auto-dispatch jika autoDispatchAgent aktif dan tidak ada tugas IN_PROGRESS lain
+    if (cur.autoDispatchAgent && (cur.agentHandler || 'auto') !== 'none') {
+      const qContentNow = fs.existsSync(queueFile) ? fs.readFileSync(queueFile, 'utf-8') : '';
+      const activeSec = qContentNow.split('## ✅ Riwayat Tugas Selesai')[0];
+      const mActive = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i.exec(activeSec);
+      if (!mActive || isSameTaskId(mActive[1], newTaskId)) {
+        executeTaskWithAgent(newTaskId, trimmedInst, resolveAgentHandlerFromText(assignedAgent));
+      }
     }
   }));
 

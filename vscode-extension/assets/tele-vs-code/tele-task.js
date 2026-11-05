@@ -55,12 +55,30 @@ const localVscodeConf = path.join(cwd, '.vscode', 'tele-vs-code', 'config.env');
 const localConf = path.join(cwd, 'config.env');
 const localEnv = path.join(cwd, '.env');
 
+function parseJsonConfig(filePath) {
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const res = {};
+    if (parsed['telegramNotifier.webhookUrl']) res.AGENTS_TELE_WEBHOOK_URL = parsed['telegramNotifier.webhookUrl'];
+    if (parsed['telegramNotifier.secretKey']) res.AGENTS_TELE_SECRET = parsed['telegramNotifier.secretKey'];
+    if (parsed['telegramNotifier.project']) res.AGENTS_TELE_PROJECT = parsed['telegramNotifier.project'];
+    return res;
+  } catch (e) {
+    return {};
+  }
+}
+
+const localSettingsJson = path.join(cwd, '.vscode', 'settings.json');
+const cfgSettings = parseJsonConfig(localSettingsJson);
 const cfgGlobal = parseEnvFile(globalConf);
 const cfgVscode = parseEnvFile(localVscodeConf);
 const cfgLocal = parseEnvFile(localConf);
 const cfgEnv = parseEnvFile(localEnv);
 
 const webhookUrl = process.env.AGENTS_TELE_WEBHOOK_URL ||
+                   cfgSettings.AGENTS_TELE_WEBHOOK_URL ||
                    cfgVscode.AGENTS_TELE_WEBHOOK_URL ||
                    cfgLocal.AGENTS_TELE_WEBHOOK_URL ||
                    cfgEnv.AGENTS_TELE_WEBHOOK_URL ||
@@ -68,6 +86,7 @@ const webhookUrl = process.env.AGENTS_TELE_WEBHOOK_URL ||
                    'https://biru.co.id/tele-vs-code/webhook';
 
 const secretKey = process.env.AGENTS_TELE_SECRET ||
+                  cfgSettings.AGENTS_TELE_SECRET ||
                   cfgVscode.AGENTS_TELE_SECRET ||
                   cfgLocal.AGENTS_TELE_SECRET ||
                   cfgEnv.AGENTS_TELE_SECRET ||
@@ -75,6 +94,7 @@ const secretKey = process.env.AGENTS_TELE_SECRET ||
                   '';
 
 let projectKey = process.env.AGENTS_TELE_PROJECT ||
+                 cfgSettings.AGENTS_TELE_PROJECT ||
                  cfgVscode.AGENTS_TELE_PROJECT ||
                  cfgLocal.AGENTS_TELE_PROJECT ||
                  cfgEnv.AGENTS_TELE_PROJECT ||

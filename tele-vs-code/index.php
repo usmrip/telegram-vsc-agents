@@ -3333,6 +3333,40 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $stmtIns = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, notes, command, assigned_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $stmtIns->execute([$taskId, $user['id'], $prjId, $instruction, $sender, $status, $now, $now, $notes, $command, $assignedAgent]);
 
+        // Kirim Notifikasi ke Telegram Bot Proyek agar user melihat update langsung di HP/Telegram
+        if ($prjId > 0) {
+            $stmtPrj = $db->prepare("SELECT bot_token, chat_id, name FROM projects WHERE id = ?");
+            $stmtPrj->execute([$prjId]);
+            $pData = $stmtPrj->fetch(PDO::FETCH_ASSOC);
+            if ($pData && !empty($pData['bot_token']) && !empty($pData['chat_id'])) {
+                $statBadge = ($status === 'IN_PROGRESS') ? '⚡ SEDANG DIKERJAKAN' : ($status === 'DONE' ? '✅ SELESAI' : '⏳ MENUNGGU');
+                $teleMsg = "💻 <b>PERINTAH DARI IDE CHAT / VS CODE</b>
+
+"
+                         . "🆔 <b>ID:</b> <code>$taskId</code>
+"
+                         . "📁 <b>Proyek:</b> <code>" . htmlspecialchars($pData['name']) . "</code>
+"
+                         . "👤 <b>Pengirim:</b> " . htmlspecialchars($sender) . "
+"
+                         . "🤖 <b>Agent:</b> " . htmlspecialchars($assignedAgent) . "
+"
+                         . "📊 <b>Status:</b> <b>$statBadge</b>
+"
+                         . "📝 <b>Instruksi:</b>
+" . htmlspecialchars($instruction) . "
+
+"
+                         . '🌐 <a href="https://biru.co.id/tele-vs-code/?tab=tasks">Buka Dashboard Status</a>';
+                callTelegram($pData['bot_token'], 'sendMessage', [
+                    'chat_id' => $pData['chat_id'],
+                    'text' => $teleMsg,
+                    'parse_mode' => 'HTML',
+                    'disable_web_page_preview' => true
+                ]);
+            }
+        }
+
         echo json_encode(['ok' => true, 'id' => $taskId, 'message' => "Tugas $taskId berhasil dicatat"]);
         exit;
     }
@@ -4582,7 +4616,9 @@ if ($currentUser) {
     $whitelistUsers = $stmtW->fetchAll(PDO::FETCH_ASSOC);
 
     // Filter Tasks per Project & Pagination (Default 10)
-    $filterProjectId = isset($_GET['filter_project']) ? (int)$_GET['filter_project'] : 0;
+    $filterProjectRaw = $_GET['filter_project'] ?? '';
+    $filterOnlyIde = ($filterProjectRaw === 'ide');
+    $filterProjectId = is_numeric($filterProjectRaw) ? (int)$filterProjectRaw : 0;
     $filterStatus = $_GET['filter_status'] ?? '';
     $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
     $perPage = isset($_GET['per_page']) ? max(5, min(100, (int)$_GET['per_page'])) : 10; // Default 10!
@@ -4591,7 +4627,10 @@ if ($currentUser) {
     $taskSql = "SELECT t.*, p.name as project_name, p.code as project_code, p.timezone as project_timezone FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.user_id = ?";
     $taskParams = [$currentUser['id']];
 
-    if ($filterProjectId > 0) {
+    if ($filterOnlyIde) {
+        $countSql .= " AND (t.sender LIKE '%IDE%' OR t.sender LIKE '%VS Code%' OR t.command = 'tele-task add')";
+        $taskSql .= " AND (t.sender LIKE '%IDE%' OR t.sender LIKE '%VS Code%' OR t.command = 'tele-task add')";
+    } elseif ($filterProjectId > 0) {
         $countSql .= " AND t.project_id = ?";
         $taskSql .= " AND t.project_id = ?";
         $taskParams[] = $filterProjectId;
@@ -5732,6 +5771,7 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                             <label><?= __t('Filter Proyek:', 'Filter Project:') ?></label>
                             <select name="filter_project" onchange="this.form.submit()">
                                 <option value="0"><?= __t('Semua Proyek', 'All Projects') ?> (<?= count($projects) ?> <?= __t('Proyek', 'Projects') ?>)</option>
+                                <option value="ide" <?= (!empty($filterOnlyIde)) ? 'selected' : '' ?>>💻 <?= __t('Khusus Perintah IDE Chat / VS Code', 'IDE Chat & VS Code Commands') ?></option>
                                 <?php foreach ($projects as $p): ?>
                                     <option value="<?= $p['id'] ?>" <?= $filterProjectId == $p['id'] ? 'selected' : '' ?>>
                                         <?= htmlspecialchars($p['name']) ?>
@@ -5818,6 +5858,27 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                         </div>
                     </div>
 
+                    <!-- Banner Notifikasi Tugas Aktif dari IDE Chat -->
+                    <?php
+                    $stmtActiveIde = $db->prepare("SELECT t.id, t.instruction, t.status, t.project_id, p.name as project_name FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.user_id = ? AND (t.sender LIKE '%IDE%' OR t.sender LIKE '%VS Code%' OR t.command = 'tele-task add') AND t.status IN ('PENDING', 'IN_PROGRESS') ORDER BY t.created_at DESC LIMIT 1");
+                    $stmtActiveIde->execute([$currentUser['id']]);
+                    $activeIdeTask = $stmtActiveIde->fetch(PDO::FETCH_ASSOC);
+                    ?>
+                    <?php if ($activeIdeTask): ?>
+                        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 16px;">💻</span>
+                                <div>
+                                    <span style="font-weight: 600; color: #38bdf8;">Perintah dari IDE Aktif:</span>
+                                    <code style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 1px 5px; border-radius: 4px; font-size: 12px;"><?= htmlspecialchars($activeIdeTask['id']) ?></code>
+                                    <span style="color: var(--text-secondary); margin-left: 6px; font-size: 13px;"><?= htmlspecialchars(mb_strimwidth($activeIdeTask['instruction'], 0, 80, '...')) ?></span>
+                                    <span class="badge badge-project" style="font-size: 11px; margin-left: 4px;"><?= htmlspecialchars($activeIdeTask['project_name'] ?: 'Tele VS Code') ?></span>
+                                </div>
+                            </div>
+                            <span class="badge <?= $activeIdeTask['status'] === 'IN_PROGRESS' ? 'badge-progress' : 'badge-pending' ?>"><?= $activeIdeTask['status'] ?></span>
+                        </div>
+                    <?php endif; ?>
+
                     <div id="taskCardsWrapper">
                     <?php if (empty($myTasks)): ?>
                         <div style="text-align: center; padding: 48px 16px; color: var(--text-muted);">
@@ -5886,10 +5947,20 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                                             <span class="badge badge-project">
                                                 <?= htmlspecialchars($t['project_name'] ?: 'Tanpa Proyek') ?>
                                             </span>
-                                            <span class="task-sender-badge">
-                                                <?= renderSvg('user', 12) ?>
-                                                <span><?= htmlspecialchars($t['sender']) ?></span>
-                                            </span>
+                                            <?php 
+                                            $isIdeSender = (stripos($t['sender'], 'IDE') !== false || stripos($t['sender'], 'VS Code') !== false || ($t['command'] ?? '') === 'tele-task add');
+                                            ?>
+                                            <?php if ($isIdeSender): ?>
+                                                <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); font-weight: 600; display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 6px;" title="Perintah dibuat dari IDE Chat / VS Code">
+                                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                                                    <span><?= htmlspecialchars($t['sender']) ?></span>
+                                                </span>
+                                            <?php else: ?>
+                                                <span class="task-sender-badge">
+                                                    <?= renderSvg('user', 12) ?>
+                                                    <span><?= htmlspecialchars($t['sender']) ?></span>
+                                                </span>
+                                            <?php endif; ?>
                                             <?php if ($attUrl && $isPhoto): ?>
                                                 <span class="badge-media-indicator" title="Ada Lampiran Foto">
                                                     <?= renderSvg('photo', 11) ?> Foto
