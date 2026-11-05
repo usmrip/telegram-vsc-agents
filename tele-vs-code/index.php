@@ -340,6 +340,7 @@ function runDatabaseMigrations($pdo) {
     try { $pdo->exec("ALTER TABLE projects ADD COLUMN model_email TEXT DEFAULT ''"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE projects ADD COLUMN bot_username TEXT DEFAULT ''"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE projects ADD COLUMN bot_verified_at DATETIME DEFAULT NULL"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE projects ADD COLUMN default_agent TEXT DEFAULT 'Antigravity AI Agent'"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE tasks ADD COLUMN assigned_agent TEXT DEFAULT 'Antigravity AI Agent'"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE tasks ADD COLUMN start_notified INTEGER DEFAULT 0"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE tasks ADD COLUMN done_notified INTEGER DEFAULT 0"); } catch (Exception $e) {}
@@ -348,9 +349,11 @@ function runDatabaseMigrations($pdo) {
             chat_id TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
             active_project_id INTEGER DEFAULT 0,
+            default_agent TEXT DEFAULT '',
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
     } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE chat_sessions ADD COLUMN default_agent TEXT DEFAULT ''"); } catch (Exception $e) {}
 
     // Inisialisasi kode proyek jika masih kosong
     try {
@@ -584,6 +587,81 @@ function sendTelegramWithMedia($botToken, $chatId, $text, $attachmentType = '', 
     return callTelegram($botToken, 'sendMessage', $params);
 }
 
+// Daftar AI Agent Resmi yang Didukung oleh Tele-vs-Code
+function getSupportedAiAgents() {
+    return [
+        'antigravity' => [
+            'name' => 'Antigravity AI Agent',
+            'tag' => '@antigravity',
+            'badge' => '⚡',
+            'desc' => 'Multi-Task & Autonomous Pair Programmer (Utama)',
+            'aliases' => ['anti', 'agy', 'antigrafity', 'antigraviti', 'anti-gravity']
+        ],
+        'claude' => [
+            'name' => 'Claude Agent',
+            'tag' => '@claude',
+            'badge' => '🧠',
+            'desc' => 'Claude Code CLI & Arsitektur Kompleks',
+            'aliases' => ['claud', 'anthropic']
+        ],
+        'copilot' => [
+            'name' => 'Copilot Agent',
+            'tag' => '@copilot',
+            'badge' => '🐙',
+            'desc' => 'GitHub Copilot Chat & Editor IDE',
+            'aliases' => ['github-copilot', 'gh-copilot', 'copilote']
+        ],
+        'gemini' => [
+            'name' => 'Gemini Agent',
+            'tag' => '@gemini',
+            'badge' => '🔮',
+            'desc' => 'Google Gemini CLI & Analisis Cepat',
+            'aliases' => ['gemini-cli', 'google-gemini']
+        ],
+        'cursor' => [
+            'name' => 'Cursor Agent',
+            'tag' => '@cursor',
+            'badge' => '💻',
+            'desc' => 'Cursor Editor AI Pair Programming',
+            'aliases' => ['cursor-ai']
+        ],
+        'cline' => [
+            'name' => 'Cline Agent',
+            'tag' => '@cline',
+            'badge' => '🤖',
+            'desc' => 'Autonomous Coding & Tool Execution',
+            'aliases' => []
+        ],
+        'roo' => [
+            'name' => 'Roo Agent',
+            'tag' => '@roo',
+            'badge' => '🦘',
+            'desc' => 'Roo Code Autonomous Pair Agent',
+            'aliases' => ['roo-code', 'roocode']
+        ],
+        'codex' => [
+            'name' => 'Codex Agent',
+            'tag' => '@codex',
+            'badge' => '⚡',
+            'desc' => 'OpenAI Codex CLI Automation',
+            'aliases' => []
+        ]
+    ];
+}
+
+// Helper: Resolver kode agen ke nama resmi
+function resolveAgentCodeOrName($input) {
+    $clean = strtolower(trim(ltrim($input, '@')));
+    if ($clean === '') return null;
+    $agents = getSupportedAiAgents();
+    foreach ($agents as $code => $info) {
+        if ($clean === $code || strtolower($info['name']) === $clean || in_array($clean, $info['aliases'])) {
+            return [$code, $info['name']];
+        }
+    }
+    return null;
+}
+
 // Default Telegram Bot Menu Commands
 function getDefaultCommands() {
     return [
@@ -592,6 +670,18 @@ function getDefaultCommands() {
             'category' => 'Tugas & Media',
             'example' => '/task Buatkan fitur login',
             'description' => 'Tambah tugas baru ke antrean AI Agent (bisa juga langsung kirim teks biasa, foto, dokumen, atau video).'
+        ],
+        [
+            'command' => 'agent',
+            'category' => 'AI Agent',
+            'example' => '/agent atau /agent copilot',
+            'description' => 'Lihat daftar agen AI yang siap diperintah atau ganti default agent (Antigravity, Claude, Copilot, Cursor, Gemini, dll).'
+        ],
+        [
+            'command' => 'agents',
+            'category' => 'AI Agent',
+            'example' => '/agents',
+            'description' => 'Daftar seluruh AI Agent resmi yang didukung beserta contoh perintahnya.'
         ],
         [
             'command' => 'projects',
@@ -1597,19 +1687,28 @@ if ($action === 'webhook') {
     $whitelistedUser = $myWhitelists[0] ?? null;
     $isPrivateChat = ($chatType === 'private');
 
-    // Ambil sesi chat untuk proyek aktif (/use <kode>)
+    // Ambil sesi chat untuk proyek aktif (/use <kode>) dan default agent
     $activeProjId = 0;
+    $chatDefaultAgent = '';
     if ($incomingChatId) {
         if (!empty($senderUserId)) {
-            $stmtSes = $db->prepare("SELECT active_project_id FROM chat_sessions WHERE chat_id = ?");
+            $stmtSes = $db->prepare("SELECT active_project_id, default_agent FROM chat_sessions WHERE chat_id = ?");
             $stmtSes->execute([$incomingChatId . ':' . $senderUserId]);
-            $activeProjId = (int)$stmtSes->fetchColumn();
+            $rowSes = $stmtSes->fetch(PDO::FETCH_ASSOC);
+            if ($rowSes) {
+                $activeProjId = (int)($rowSes['active_project_id'] ?? 0);
+                $chatDefaultAgent = trim($rowSes['default_agent'] ?? '');
+            }
             $stmtSes->closeCursor();
         }
         if ($activeProjId <= 0) {
-            $stmtSes = $db->prepare("SELECT active_project_id FROM chat_sessions WHERE chat_id = ?");
+            $stmtSes = $db->prepare("SELECT active_project_id, default_agent FROM chat_sessions WHERE chat_id = ?");
             $stmtSes->execute([$incomingChatId]);
-            $activeProjId = (int)$stmtSes->fetchColumn();
+            $rowSes = $stmtSes->fetch(PDO::FETCH_ASSOC);
+            if ($rowSes) {
+                if ($activeProjId <= 0) $activeProjId = (int)($rowSes['active_project_id'] ?? 0);
+                if (!$chatDefaultAgent) $chatDefaultAgent = trim($rowSes['default_agent'] ?? '');
+            }
             $stmtSes->closeCursor();
         }
     }
@@ -1624,6 +1723,9 @@ if ($action === 'webhook') {
             }
         }
     }
+
+    // Tentukan agent aktif / default agent saat ini
+    $currentAgent = !empty($chatDefaultAgent) ? $chatDefaultAgent : (!empty($activeProject['default_agent']) ? $activeProject['default_agent'] : 'Antigravity AI Agent');
 
     // Command /id & /myid - Jika sudah whitelisted
     if ($text === '/id' || $text === '/myid') {
@@ -1843,6 +1945,107 @@ if ($action === 'webhook') {
         echo "OK"; exit;
     }
 
+    // Command /agent atau /agents: Menampilkan daftar agen atau mengganti default agent
+    if (preg_match('/^\/(agents?|bot_agent|set_agent)(?:@\w+)?(?:\s+([\s\S]+))?$/i', $text, $mAgtCmd)) {
+        $rawAgtTarget = trim($mAgtCmd[2] ?? '');
+        $supported = getSupportedAiAgents();
+        $pCode = !empty($activeProject['code']) ? $activeProject['code'] : 'a';
+
+        if ($rawAgtTarget === '') {
+            // Tampilkan daftar agen yang siap diperintah
+            $listText = "";
+            foreach ($supported as $kCode => $info) {
+                $isCurrent = (strcasecmp($info['name'], $currentAgent) === 0 || strcasecmp($kCode, $currentAgent) === 0);
+                $statusBadge = $isCurrent ? " <b>[🟢 AKTIF SEKARANG]</b>" : "";
+                $listText .= "{$info['badge']} <code>{$info['tag']}</code> - <b>{$info['name']}</b>$statusBadge\n"
+                           . "   <i>{$info['desc']}</i>\n";
+            }
+
+            $reply = "🤖 <b>DAFTAR AI AGENT RESMI (TELE-VS-CODE)</b>\n"
+                   . "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                   . "🎯 <b>Agent Default Saat Ini:</b>\n"
+                   . "👉 <code>$currentAgent</code> (Proyek: <b>" . htmlspecialchars($activeProject['name']) . "</b> / <code>#$pCode</code>)\n\n"
+                   . "⚡ <b>Agen yang Siap Diperintah:</b>\n"
+                   . $listText . "\n"
+                   . "━━━━━━━━━━━━━━━━━━━━━━\n"
+                   . "🔄 <b>Ganti Default Agent untuk Chat Ini:</b>\n"
+                   . "Ketik: <code>/agent &lt;kode_agent&gt;</code>\n"
+                   . "Contoh: <code>/agent copilot</code> atau <code>/agent claude</code> atau <code>/agent antigravity</code>\n\n"
+                   . "💡 <b>Contoh Perintah Tugas Langsung:</b>\n"
+                   . "1. <b>Tugaskan langsung ke Agent tertentu:</b>\n"
+                   . "   <code>@copilot buatkan fungsi verifikasi email</code>\n"
+                   . "   <code>@claude optimasi query SQL</code>\n"
+                   . "   <code>@antigravity proses antrian sekarang</code>\n\n"
+                   . "2. <b>Kombinasi Proyek & Agent:</b>\n"
+                   . "   <code>#$pCode @copilot tambahkan validasi form</code>\n"
+                   . "   <code>/$pCode @claude perbaiki bug di index.php</code>\n\n"
+                   . "<i>(Jika tidak menyebutkan @agent, tugas otomatis dikerjakan oleh agent default: <b>$currentAgent</b>).</i>";
+
+            callTelegram($project['bot_token'], 'sendMessage', [
+                'chat_id' => $incomingChatId,
+                'text' => $reply,
+                'parse_mode' => 'HTML',
+                'reply_to_message_id' => $messageId
+            ]);
+            echo "OK"; exit;
+        } else {
+            // Pengguna ingin ganti default agent: /agent <kodeagent>
+            $matched = resolveAgentCodeOrName($rawAgtTarget);
+            if ($matched) {
+                $newAgentCode = $matched[0];
+                $newAgentName = $matched[1];
+
+                // Simpan ke sesi chat (dan ke proyek aktif jika relevan)
+                $sessionKey = ($chatType === 'private' || empty($senderUserId)) ? $incomingChatId : ($incomingChatId . ':' . $senderUserId);
+                $updSes = $db->prepare("INSERT INTO chat_sessions (chat_id, user_id, active_project_id, default_agent, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET default_agent = excluded.default_agent, updated_at = excluded.updated_at");
+                $updSes->execute([$sessionKey, $activeProject['user_id'] ?? 1, $activeProject['id'] ?? 0, $newAgentName, date('Y-m-d H:i:s')]);
+                $updSes->execute([$incomingChatId, $activeProject['user_id'] ?? 1, $activeProject['id'] ?? 0, $newAgentName, date('Y-m-d H:i:s')]);
+
+                // Update juga default_agent di project aktif
+                if (!empty($activeProject['id'])) {
+                    $db->prepare("UPDATE projects SET default_agent = ? WHERE id = ?")->execute([$newAgentName, $activeProject['id']]);
+                }
+
+                $reply = "✅ <b>DEFAULT AGENT BERHASIL DIUBAH!</b>\n\n"
+                       . "🤖 <b>Agent Default Sekarang:</b> <code>$newAgentName</code> (<code>@$newAgentCode</code>)\n"
+                       . "📁 <b>Proyek Aktif:</b> <code>" . htmlspecialchars($activeProject['name']) . "</code> (Kode: <code>#$pCode</code>)\n"
+                       . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n\n"
+                       . "👉 Semua perintah instruksi tanpa mention di chat ini selanjutnya akan otomatis dikerjakan oleh <b>$newAgentName</b>.\n\n"
+                       . "━━━━━━━━━━━━━━━━━━━━━━\n"
+                       . "💡 <b>Contoh Perintah:</b>\n"
+                       . "• Tanpa mention: <code>Buatkan modul autentikasi JWT</code> &rarr; otomatis ke <b>$newAgentName</b>\n"
+                       . "• Mention agen lain sesekali: <code>@antigravity proses antrian</code>\n"
+                       . "• Spesifik proyek & agen: <code>#$pCode @$newAgentCode buat fitur baru</code> atau <code>/$pCode @$newAgentCode jalankan unit test</code>";
+
+                callTelegram($project['bot_token'], 'sendMessage', [
+                    'chat_id' => $incomingChatId,
+                    'text' => $reply,
+                    'parse_mode' => 'HTML',
+                    'reply_to_message_id' => $messageId
+                ]);
+                echo "OK"; exit;
+            } else {
+                $validCodes = implode(', ', array_map(function($k) { return "<code>$k</code>"; }, array_keys($supported)));
+                $reply = "⚠️ <b>KODE AGENT TIDAK DIKENALI</b>\n\n"
+                       . "Kode agent '<b>" . htmlspecialchars($rawAgtTarget) . "</b>' tidak terdaftar.\n\n"
+                       . "Pilihan kode agent yang valid:\n" . $validCodes . "\n\n"
+                       . "Contoh penggunaan:\n"
+                       . "• <code>/agent copilot</code>\n"
+                       . "• <code>/agent claude</code>\n"
+                       . "• <code>/agent antigravity</code>\n"
+                       . "Ketik <code>/agent</code> untuk melihat daftar lengkap.";
+
+                callTelegram($project['bot_token'], 'sendMessage', [
+                    'chat_id' => $incomingChatId,
+                    'text' => $reply,
+                    'parse_mode' => 'HTML',
+                    'reply_to_message_id' => $messageId
+                ]);
+                echo "OK"; exit;
+            }
+        }
+    }
+
     // Command /use atau /switch untuk ganti proyek aktif
     if (preg_match('/^\/(use|switch|pilih|proyek_aktif)(?:@\w+)?(?:\s+([\s\S]+))?$/i', $text, $mUse)) {
         $rawTarget = trim($mUse[2] ?? '');
@@ -1856,11 +2059,13 @@ if ($action === 'webhook') {
                    . "📁 <b>Nama Proyek:</b> <code>" . htmlspecialchars($activeProject['name']) . "</code>\n"
                    . "🏷️ <b>Kode Tag:</b> <code>#$curCode</code> (atau <code>[#$curCode]</code>)\n"
                    . "🔑 <b>Project Key:</b> <code>" . htmlspecialchars($activeProject['project_key']) . "</code>" . $ownerInfo . "\n"
+                   . "🤖 <b>Agent Aktif:</b> <code>" . htmlspecialchars($currentAgent) . "</code>\n"
                    . "🕒 <b>Waktu Server:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n\n"
-                   . "👉 <i>Setiap pesan instruksi biasa di chat ini otomatis dikerjakan oleh VS Code proyek <b>" . htmlspecialchars($activeProject['name']) . "</b>.</i>\n\n"
+                   . "👉 <i>Setiap pesan instruksi biasa di chat ini otomatis dikerjakan oleh <b>" . htmlspecialchars($currentAgent) . "</b> di VS Code proyek <b>" . htmlspecialchars($activeProject['name']) . "</b>.</i>\n\n"
                    . "━━━━━━━━━━━━━━━━━━━━━━\n"
                    . "🔄 <b>Ganti Proyek Aktif:</b>\n"
                    . "Ketik: <code>/use &lt;kode_tag&gt;</code> (Contoh: <code>/use a</code> atau <code>/use b</code>)\n"
+                   . "🤖 <b>Ganti Default Agent:</b> Ketik <code>/agent &lt;kode&gt;</code> (Contoh: <code>/agent copilot</code>)\n"
                    . "Ketik <code>/projects</code> untuk melihat semua proyek Anda.";
             callTelegram($project['bot_token'], 'sendMessage', [
                 'chat_id' => $incomingChatId,
@@ -1924,11 +2129,12 @@ if ($action === 'webhook') {
 
                 $pCode = $foundP['code'] ?: $foundP['id'];
                 $ownerInfo = !empty($foundP['email']) ? "\n👤 <b>Akun:</b> <code>" . htmlspecialchars($foundP['email']) . "</code>" : "";
+                $effectiveAgent = !empty($chatDefaultAgent) ? $chatDefaultAgent : (!empty($foundP['default_agent']) ? $foundP['default_agent'] : $currentAgent);
 
                 if ($inlineInstruction !== '') {
                     callTelegram($project['bot_token'], 'sendMessage', [
                         'chat_id' => $incomingChatId,
-                        'text' => "🎯 <b>Proyek aktif dialihkan ke " . htmlspecialchars($foundP['name']) . " (<code>#$pCode</code>)</b>.\n⚡ Memproses instruksi...",
+                        'text' => "🎯 <b>Proyek aktif dialihkan ke " . htmlspecialchars($foundP['name']) . " (<code>#$pCode</code>)</b>.\n🤖 <b>Agent:</b> <code>" . htmlspecialchars($effectiveAgent) . "</code>\n⚡ Memproses instruksi...",
                         'parse_mode' => 'HTML',
                         'reply_to_message_id' => $messageId
                     ]);
@@ -1938,9 +2144,10 @@ if ($action === 'webhook') {
                 } else {
                     $reply = "🎯 <b>PROYEK AKTIF BERHASIL DIUBAH!</b>\n\n"
                            . "📁 <b>Proyek Saat Ini:</b> <code>" . htmlspecialchars($foundP['name']) . "</code> (Kode: <code>#$pCode</code>)" . $ownerInfo . "\n"
+                           . "🤖 <b>Agent Aktif:</b> <code>" . htmlspecialchars($effectiveAgent) . "</code>\n"
                            . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n\n"
-                           . "👉 Semua pesan instruksi dari Anda selanjutnya di chat ini akan otomatis dikerjakan oleh VS Code proyek <b>" . htmlspecialchars($foundP['name']) . "</b>.\n\n"
-                           . "<i>Gunakan tag <code>#&lt;kode&gt;</code> jika ingin menargetkan proyek lain sesekali.</i>";
+                           . "👉 Semua pesan instruksi dari Anda selanjutnya di chat ini akan otomatis dikerjakan oleh <b>" . htmlspecialchars($effectiveAgent) . "</b> di VS Code proyek <b>" . htmlspecialchars($foundP['name']) . "</b>.\n\n"
+                           . "<i>Gunakan tag <code>#&lt;kode&gt;</code> jika ingin menargetkan proyek lain sesekali, atau ketik <code>/agent &lt;kode&gt;</code> untuk mengganti agent default.</i>";
                     callTelegram($project['bot_token'], 'sendMessage', [
                         'chat_id' => $incomingChatId,
                         'text' => $reply,
@@ -2792,7 +2999,7 @@ if ($action === 'webhook') {
         }
 
         // Deteksi Agent spesifik dari perintah (misal: @antigravity, @antigrafity, @claude, @copilot, dll)
-        $assignedAgent = 'Antigravity AI Agent'; // Default: Agent Aktif saat ini
+        $assignedAgent = !empty($currentAgent) ? $currentAgent : 'Antigravity AI Agent'; // Default: Agent Aktif saat ini
         if (preg_match('/(?:^|\s)@([a-zA-Z0-9_-]+)/i', $instruction, $mAgt)) {
             $rawAgent = strtolower($mAgt[1]);
             $instruction = trim(preg_replace('/(?:^|\s)@' . preg_quote($mAgt[1], '/') . '/i', '', $instruction));

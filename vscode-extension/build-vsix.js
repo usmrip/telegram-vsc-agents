@@ -14,8 +14,51 @@ if (!fs.existsSync(pkgPath)) {
   process.exit(1);
 }
 
-const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-const version = pkg.version || '1.0.0';
+const rawPkg = fs.readFileSync(pkgPath, 'utf-8');
+const pkg = JSON.parse(rawPkg);
+
+// Parsing Argumen CLI
+const args = process.argv.slice(2);
+const isProd = args.includes('--prod') || args.includes('--publish') || args.includes('-p');
+const customLetterArg = args.find(a => a.startsWith('--letter='));
+const customLetter = customLetterArg ? customLetterArg.split('=')[1].toLowerCase().trim() : null;
+
+// Tentukan versi dasar (misal 1.0.29)
+const rawVersion = pkg.version || '1.0.0';
+const baseVersion = rawVersion.replace(/-[a-z]-beta.*$/i, '').replace(/-.*$/, '');
+
+const publishDir = path.join(path.dirname(extDir), 'publish');
+if (!fs.existsSync(publishDir)) fs.mkdirSync(publishDir, { recursive: true });
+const teleVsCodeWebDir = path.join(path.dirname(extDir), 'tele-vs-code');
+const liveWebDir = 'U:\\domains\\biru.co.id\\public_html\\tele-vs-code';
+
+let version = baseVersion;
+let modeName = 'PRODUCTION';
+
+if (!isProd) {
+  // Mode Dev: <versi-sekarang>-[a-z]-beta
+  modeName = 'DEVELOPMENT (DEV)';
+  let letter = customLetter || 'a';
+  if (!customLetter) {
+    const existingPublish = fs.existsSync(publishDir) ? fs.readdirSync(publishDir) : [];
+    const existingWeb = fs.existsSync(teleVsCodeWebDir) ? fs.readdirSync(teleVsCodeWebDir) : [];
+    const existingLive = fs.existsSync(liveWebDir) ? fs.readdirSync(liveWebDir) : [];
+    const allFiles = new Set([...existingPublish, ...existingWeb, ...existingLive]);
+
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz'.split('');
+    for (const l of alphabet) {
+      const candidate = `${pkg.name || 'tele-vs-code'}-${baseVersion}-${l}-beta.vsix`;
+      if (!allFiles.has(candidate)) {
+        letter = l;
+        break;
+      }
+    }
+  }
+  version = `${baseVersion}-${letter}-beta`;
+} else {
+  version = baseVersion;
+}
+
 const publisher = pkg.publisher || 'BiruIndonesiaCreative';
 const name = pkg.name || 'tele-vs-code';
 const displayName = pkg.displayName || 'Tele-vs-Code';
@@ -23,13 +66,25 @@ const description = pkg.description || 'Telegram sebagai pesuruh VS Code dari ma
 const minEngine = (pkg.engines && pkg.engines.vscode) ? pkg.engines.vscode.replace(/[\^~]/, '') : '1.75.0';
 
 const vsixFileName = `${name}-${version}.vsix`;
-const publishDir = path.join(path.dirname(extDir), 'publish');
-if (!fs.existsSync(publishDir)) fs.mkdirSync(publishDir, { recursive: true });
 const outputVsix = path.join(publishDir, vsixFileName);
-const teleVsCodeWebDir = path.join(path.dirname(extDir), 'tele-vs-code');
-const liveWebDir = 'U:\\domains\\biru.co.id\\public_html\\tele-vs-code';
 
-console.log(`📦 Memulai pembuatan paket VSIX resmi: ${vsixFileName}`);
+console.log(`==============================================================================`);
+console.log(`🚀 Mode Pembangunan : ${modeName}`);
+console.log(`📌 Versi Target    : ${version} (Base: ${baseVersion})`);
+console.log(`📦 Nama File VSIX  : ${vsixFileName}`);
+console.log(`==============================================================================`);
+
+// Tulis versi target ke package.json sebelum dipaketkan
+pkg.version = version;
+fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf-8');
+
+const restorePackageJson = () => {
+  if (!isProd) {
+    try {
+      // Biarkan package.json dengan versi dev atau kembalikan jika diperlukan
+    } catch (e) {}
+  }
+};
 
 // 1. Sinkronkan berkas tools ke folder assets ekstensi
 const assetsDir = path.join(extDir, 'assets', 'tele-vs-code');
@@ -65,6 +120,14 @@ if (fs.existsSync(vsceBin)) {
 
 
 
+    // Salin ke folder web lokal tele-vs-code
+    if (fs.existsSync(teleVsCodeWebDir)) {
+      try {
+        fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, vsixFileName));
+        console.log(`[LOCAL WEB] Disinkronkan ke: ${path.join(teleVsCodeWebDir, vsixFileName)}`);
+      } catch (e) {}
+    }
+
     // Salin ke server live
     if (fs.existsSync(liveWebDir)) {
       try {
@@ -84,7 +147,7 @@ if (fs.existsSync(vsceBin)) {
       if (fs.existsSync(liveWebDir)) {
         try {
           fs.copyFileSync(outputVsix, path.join(liveWebDir, aliasName));
-          console.log(`[LIVE DEPLOY] Alias \${aliasName} disinkronkan ke server live!`);
+          console.log(`[LIVE DEPLOY] Alias ${aliasName} disinkronkan ke server live!`);
         } catch (e) {}
       }
     }
