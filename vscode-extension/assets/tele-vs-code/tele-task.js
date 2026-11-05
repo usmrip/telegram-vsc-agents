@@ -235,7 +235,7 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
         if (attachmentUrl) {
           attachLines = `\n- **Lampiran:** [${attachmentName || 'Buka File'}](${attachmentUrl}) (${attachmentType || 'file'})`;
         }
-        const activeBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${sender}\n- **Instruksi:** ${instruction.replace(/\r?\n/g, ' ')}${attachLines}\n- **Status:** ${status}\n- **Catatan:** ${notes || 'Menunggu giliran eksekusi oleh AI Agent'}\n\n`;
+        const activeBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${sender}\n- **Agent:** ${agent || 'Antigravity AI Agent'}\n- **Instruksi:** ${instruction.replace(/\r?\n/g, ' ')}${attachLines}\n- **Status:** ${status}\n- **Catatan:** ${notes || 'Menunggu giliran eksekusi oleh AI Agent'}\n\n`;
         const activeMarker = '## ⏳ Tugas Aktif';
         if (content.includes(activeMarker)) {
           content = content.replace(activeMarker, `${activeMarker}\n\n${activeBlock}`);
@@ -261,24 +261,36 @@ async function run() {
     let status = 'IN_PROGRESS';
     let notes = 'Sedang dikerjakan oleh AI Agent...';
     let cmd = 'tele-task add';
+    let agent = '';
 
     for (let i = 2; i < args.length; i++) {
       if (args[i] === '--sender' || args[i] === '-u') sender = args[++i] || sender;
       else if (args[i] === '--status' || args[i] === '-s') status = (args[++i] || status).toUpperCase();
       else if (args[i] === '--notes' || args[i] === '-n') notes = args[++i] || notes;
       else if (args[i] === '--command' || args[i] === '-c') cmd = args[++i] || cmd;
+      else if (args[i] === '--agent' || args[i] === '-a') agent = args[++i] || agent;
+    }
+
+    if (!agent) {
+      const lowSender = (sender || '').toLowerCase();
+      if (lowSender.includes('cline')) agent = 'Cline Agent';
+      else if (lowSender.includes('copilot')) agent = 'Copilot Agent';
+      else if (lowSender.includes('claude')) agent = 'Claude Agent';
+      else if (lowSender.includes('gemini')) agent = 'Gemini Agent';
+      else if (lowSender.includes('roo')) agent = 'Roo Code Agent';
+      else agent = 'Antigravity AI Agent';
     }
 
     try {
       let url = `${normalizedUrl}?action=push&secret=${secretKey}`;
       if (projectKey) url += `&project=${encodeURIComponent(projectKey)}`;
-      const params = new URLSearchParams({ instruction, sender, status, notes, command: cmd, is_ide: '1' });
+      const params = new URLSearchParams({ instruction, sender, status, notes, command: cmd, is_ide: '1', agent });
       const res = await fetch(url, { method: 'POST', body: params });
       const data = await res.json();
 
       if (data.ok) {
         console.log(`✅ [${data.id}] Berhasil dicatat ke Dashboard Status Server (${status}).`);
-        updateLocalQueueFile(data.id, instruction, sender, status, notes);
+        updateLocalQueueFile(data.id, instruction, sender, status, notes, '', '', '', agent);
 
         // Kirim notifikasi ke Telegram bahwa tugas dari IDE Chat sedang diproses
         const notifyJs = getNotifyScript();

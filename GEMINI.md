@@ -94,6 +94,10 @@ Dalam lingkungan kerja dengan beberapa AI Agent sekaligus (misal: Antigravity, C
        2. Jika handler disetel ke `auto` dan sistem mendeteksi tidak ada CLI agent di PATH, Tele-vs-Code otomatis melakukan fallback ke `Agent IDE`.
        3. Tele-vs-Code secara otomatis menyalin prompt resmi tugas ke clipboard dan membuka jendela Chat IDE (`workbench.action.chat.open`). Pengguna cukup menempelkan prompt (`Ctrl+V`) ke Chat IDE.
        4. Agent IDE yang menerima prompt tugas langsung mengeksekusi tugas aktif yang diberikan hingga tuntas 100%, lalu kembali ke mode standby tanpa membuat background loop.
+   - **PANDUAN KHUSUS CLINE (`saoudrizwan.claude-dev`):**
+     - Ekstensi Cline membaca file aturan `.clinerules` di root workspace pada setiap pesan/turn.
+     - Setiap kali Cline menerima giliran bicara atau kata kunci pemicu (`proses antrian`, `kerjakan queue`), Cline wajib memeriksa `TASK_QUEUE.md` dan mengeksekusi tugas milik Cline (`- **Agent:** Cline Agent` atau `Agent IDE`).
+     - Jalankan `node .vscode/tele-vs-code/tele-task.js start "<TASK-ID>"` saat mulai, dan `node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan>"` saat tuntas.
    - Jika field `- **Agent:**` menunjuk ke Agent lain (misal `Copilot Agent` atau `Claude Agent` sementara Anda adalah `Antigravity`):
      ⛔ **DILARANG KERAS mengambil atau mengeksekusi tugas tersebut secara otomatis!**
      - Biarkan agent tersebut mengeksekusinya di sesinya masing-masing (ekstensi VS Code otomatis memfokuskan ke panel agent yang bersangkutan).

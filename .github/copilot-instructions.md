@@ -32,7 +32,7 @@ Setiap kali Anda menerima giliran bicara, prompt, atau instruksi apapun dari USE
         - Jika TIDAK ADA tugas yang sedang `[IN_PROGRESS]` dan terdapat tugas `[PENDING]`:
           - Periksa field `- **Agent:**` pada tugas `[PENDING]` pertama:
             👉 **HANYA ambil dan kerjakan jika tugas tersebut DITUJUKAN UNTUK COPILOT** (misal `- **Agent:** Copilot Agent`, `GitHub Copilot Agent`, `Agent IDE`, atau tidak ditentukan).
-            👉 **JIKA TUGAS DITUJUKAN UNTUK AGENT LAIN (misal `- **Agent:** Antigravity AI Agent`, `Claude Agent`, `Gemini Agent`, `Cursor Agent`, dll.):**
+            👉 **JIKA TUGAS DITUJUKAN UNTUK AGENT LAIN (misal `- **Agent:** Antigravity AI Agent`, `Cline Agent`, `Claude Agent`, `Gemini Agent`, `Cursor Agent`, dll.):**
                ⛔ **DILARANG KERAS MENGUBAH STATUSNYA MENJADI `[IN_PROGRESS]` ATAU MENGEKSEKUSINYA!**
                ⛔ **DILARANG MENGAMBIL ALIH TUGAS MILIK AGENT LAIN KECUALI USER EKSPLISIT MEMERINTAHKAN REBUT DI CHAT INI!**
                👉 Biarkan tugas tersebut tetap berstatus `[PENDING]` agar dieksekusi oleh Agent yang bersangkutan.

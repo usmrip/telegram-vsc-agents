@@ -630,7 +630,7 @@ function getSupportedAiAgents() {
             'tag' => '@cline',
             'badge' => '🤖',
             'desc' => 'Autonomous Coding & Tool Execution',
-            'aliases' => []
+            'aliases' => ['claude-dev', 'cline-agent']
         ],
         'roo' => [
             'name' => 'Roo Agent',

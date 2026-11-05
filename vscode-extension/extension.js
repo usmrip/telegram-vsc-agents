@@ -601,6 +601,8 @@ Setiap kali Anda menerima giliran bicara, prompt, atau instruksi apapun dari USE
     'CLAUDE.md',
     'GEMINI.md',
     '.cursorrules',
+    '.clinerules',
+    '.roomodes',
     path.join('.github', 'copilot-instructions.md'),
     path.join('.vscode', 'copilot-instructions.md')
   ];
@@ -1257,7 +1259,7 @@ function activate(context) {
     const hasAgyExt = vscode.extensions.all.some(e => /antigravity/i.test(e.id));
     const hasCopilotExt = vscode.extensions.all.some(e => /copilot/i.test(e.id));
     const hasGeminiExt = vscode.extensions.all.some(e => /gemini/i.test(e.id));
-    const hasClineExt = vscode.extensions.all.some(e => e.id === 'saoudrizwan.claude-dev' || /cline/i.test(e.id));
+    const hasClineExt = vscode.extensions.all.some(e => /(saoudrizwan\.)?claude-dev|cline/i.test(e.id));
     const hasRooExt = vscode.extensions.all.some(e => /roo-cline|roo/i.test(e.id));
     const hasClaudeExt = vscode.extensions.all.some(e => /claude/i.test(e.id) && !/claude-dev/i.test(e.id));
 
@@ -1789,13 +1791,36 @@ function activate(context) {
           }
         }
 
-        // 2. Cline / Roo IDE Extension
+        // 2. Cline / Roo IDE Extension (saoudrizwan.claude-dev & roo-cline)
         if (!handledBy && (activeHandler === 'ide-cline' || activeHandler === 'ide-roo')) {
           try {
-            const extCmd = activeHandler === 'ide-cline' ? 'claude-dev.SidebarProvider.focus' : 'roo-cline.SidebarProvider.focus';
-            await vscode.commands.executeCommand(extCmd);
-            handledBy = activeHandler === 'ide-cline' ? 'Cline IDE Agent' : 'Roo Code IDE Agent';
-          } catch (e) {}
+            const isCline = activeHandler === 'ide-cline';
+            // Salin prompt resmi ke clipboard
+            await vscode.env.clipboard.writeText(prompt);
+
+            const focusCommands = isCline
+              ? ['claude-dev.focus', 'claude-dev.SidebarProvider.focus', 'workbench.view.extension.claude-dev-ActivityBar', 'claude-dev-ActivityBar.focus']
+              : ['roo-cline.focus', 'roo-cline.SidebarProvider.focus', 'workbench.view.extension.roo-cline-ActivityBar', 'roo-cline-ActivityBar.focus'];
+
+            for (const cmd of focusCommands) {
+              try {
+                await vscode.commands.executeCommand(cmd);
+                break;
+              } catch (fErr) {}
+            }
+
+            // Buka task baru di Cline / Roo
+            const newBtnCmd = isCline ? 'claude-dev.plusButtonClicked' : 'roo-cline.plusButtonClicked';
+            try {
+              await vscode.commands.executeCommand(newBtnCmd);
+            } catch (pErr) {}
+
+            handledBy = isCline ? 'Cline IDE Agent' : 'Roo Code IDE Agent';
+
+            showTimedNotification(`🤖 Tugas ${taskId || ''} disalin ke clipboard! Buka panel ${handledBy} dan tekan Ctrl+V untuk mengeksekusi TASK_QUEUE.md.`, 8);
+          } catch (e) {
+            log('warn', `Gagal dispatch ke Cline/Roo: ${e.message}`);
+          }
         }
 
         // 3. GitHub Copilot Chat & VS Code Chat Standar
