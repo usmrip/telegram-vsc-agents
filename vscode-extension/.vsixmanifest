@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-	<PackageManifest Version="1.0.28" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+	<PackageManifest Version="1.0.29" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
 		<Metadata>
-			<Identity Language="en-US" Id="tele-vs-code" Version="1.0.22" Publisher="BiruIndonesiaCreative" />
+			<Identity Language="en-US" Id="tele-vs-code" Version="1.0.29" Publisher="BiruIndonesiaCreative" />
 			<DisplayName>Tele-vs-Code</DisplayName>
 			<Description xml:space="preserve">Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram</Description>
 			<Tags>telegram,vscode,agent,ai-agent,antigravity,task-queue,automation,remote-control,dev-notifier</Tags>

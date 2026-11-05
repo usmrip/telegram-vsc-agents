@@ -6610,10 +6610,10 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                             </div>
                             <div class="project-card-actions-box">
                                 <?php if (!empty($prj['bot_token'])): ?>
-                                    <a href="?action=test_bot&id=<?= $prj['id'] ?>" class="btn btn-secondary btn-sm" title="Uji Bot">
+                                    <button type="button" onclick="openTestBotModal(<?= $prj['id'] ?>, '<?= htmlspecialchars(addslashes($prj['name']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['bot_token']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['chat_id']), ENT_QUOTES) ?>')" class="btn btn-secondary btn-sm" title="Uji Bot">
                                         <?= renderSvg('bot', 13) ?>
                                         <span>Tes Bot</span>
-                                    </a>
+                                    </button>
                                     <a href="?action=set_telegram_webhook&id=<?= $prj['id'] ?>" class="btn btn-outline btn-sm" title="Pasang Webhook">
                                         <?= renderSvg('link', 13) ?>
                                         <span>Pasang Webhook</span>
@@ -6688,7 +6688,7 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                                 <div style="display: flex; gap: 8px; align-items: center;">
                                     <button type="submit" class="btn btn-primary btn-sm">Simpan Pengaturan</button>
                                     <?php if (!empty($prj['bot_token'])): ?>
-                                        <a href="?action=test_bot&id=<?= $prj['id'] ?>" class="btn btn-outline btn-sm">Tes Koneksi</a>
+                                        <button type="button" onclick="openTestBotModal(<?= $prj['id'] ?>, '<?= htmlspecialchars(addslashes($prj['name']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['bot_token']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['chat_id']), ENT_QUOTES) ?>')" class="btn btn-outline btn-sm">Tes Koneksi</button>
                                     <?php endif; ?>
                                 </div>
                                 <a href="?action=delete_project&id=<?= $prj['id'] ?>&csrf=<?= getCsrfToken() ?>" onclick="return confirm('<?= count($projects) > 1 ? ('Yakin ingin menghapus proyek ' . htmlspecialchars($prj['name']) . '?') : ('⚠️ Perhatian: Ini adalah satu-satunya proyek Anda. Yakin ingin menghapus proyek ' . htmlspecialchars($prj['name']) . '?') ?>')" class="btn btn-danger btn-sm" title="Hapus Proyek" style="display: inline-flex; align-items: center; gap: 6px;">
@@ -7393,6 +7393,83 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
 <!-- ======================================================================== -->
 
 <!-- 1. Modal Detail & Edit Result Tugas -->
+
+<!-- ==================================================================== -->
+<!-- Modal Konfirmasi Sapa Bot Sebelum Uji Koneksi (Studio Ink Theme)     -->
+<!-- ==================================================================== -->
+<div id="modalConfirmTestBot" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closeTestBotModal()">
+    <div class="modal-dialog" style="max-width: 540px; padding: 26px 24px; text-align: left; background: var(--bg-surface, #14130f); border: 1px solid var(--border-medium, rgba(236,228,214,0.14)); border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,0.65);">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 42px; height: 42px; border-radius: 10px; background: rgba(255, 90, 31, 0.12); border: 1px solid rgba(255, 90, 31, 0.35); display: inline-flex; align-items: center; justify-content: center; color: var(--signal, #ff5a1f);">
+                    <?= renderSvg('bot', 22) ?>
+                </div>
+                <div>
+                    <h3 style="font-family: var(--font-display, 'Instrument Serif', Georgia, serif); font-size: 20px; font-weight: normal; color: var(--text-primary, #ece4d6); margin: 0 0 2px 0; letter-spacing: -0.01em;">Konfirmasi Uji Koneksi Bot</h3>
+                    <p style="font-size: 12px; color: var(--text-muted, #777064); margin: 0;">Target: <b id="testBotProjectName" style="color: var(--text-primary, #ece4d6);"></b></p>
+                </div>
+            </div>
+            <button type="button" class="btn btn-secondary btn-xs" onclick="closeTestBotModal()" style="border-radius: 50%; width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--text-muted);" title="Tutup">&times;</button>
+        </div>
+
+        <!-- Box Pertanyaan Utama -->
+        <div id="testBotQuestionBox" style="background: rgba(236, 228, 214, 0.03); border: 1px solid var(--border-subtle, rgba(236,228,214,0.08)); border-radius: 10px; padding: 16px; margin-bottom: 18px;">
+            <div style="font-size: 13.5px; font-weight: 600; color: var(--text-primary, #ece4d6); display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <span style="font-size: 16px;">💬</span>
+                <span>Apakah Anda (atau anggota grup) sudah pernah menyapa bot Anda di Telegram?</span>
+            </div>
+            <p style="font-size: 12.5px; color: var(--text-secondary, #a8a091); line-height: 1.6; margin: 0;">
+                Telegram menerapkan aturan privasi ketat: <b>Bot TIDAK BISA mengirim pesan perdana</b> ke akun pribadi atau grup sebelum ada interaksi pembuka dari user (menekan tombol <b>Start</b> / <code>/start</code> atau mengirim sapaan). Untuk grup, bot wajib ditambahkan ke grup terlebih dahulu.
+            </p>
+        </div>
+
+        <!-- Pilihan Aksi: Sudah vs Belum -->
+        <div id="testBotActionButtons" style="display: flex; flex-direction: column; gap: 10px;">
+            <button type="button" class="btn btn-primary" id="btnTestBotProceed" onclick="proceedTestBot()" style="width: 100%; justify-content: center; padding: 12px 18px; font-size: 13px; font-weight: 600; background: var(--text-primary, #ece4d6); color: #0d0c0a; border: none; border-radius: 999px;">
+                <?= renderSvg('check', 15) ?>
+                <span>Ya, Sudah Menyapa Bot — Jalankan Uji Tes Sekarang</span>
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="showBotGuideStep()" style="width: 100%; justify-content: center; padding: 11px 18px; font-size: 13px; border-radius: 999px;">
+                <?= renderSvg('info', 15) ?>
+                <span>Belum / Ragu — Beritahu Saya Langkahnya</span>
+            </button>
+        </div>
+
+        <!-- Box Panduan Interaktif (Tampil jika memilih "Belum") -->
+        <div id="testBotGuideBox" style="display: none; margin-top: 14px; background: var(--bg-surface-inset, #0a0907); border: 1px dashed var(--border-medium, rgba(236,228,214,0.14)); border-radius: 10px; padding: 16px;">
+            <h4 style="font-size: 13px; font-weight: 600; color: var(--signal, #ff5a1f); margin: 0 0 10px 0; display: flex; align-items: center; gap: 6px;">
+                <?= renderSvg('link', 14) ?>
+                <span>Langkah Agar Bot Dapat Berinteraksi dengan Anda</span>
+            </h4>
+            <ol style="margin: 0; padding-left: 20px; font-size: 12px; color: var(--text-secondary, #a8a091); line-height: 1.65;">
+                <li style="margin-bottom: 8px;">
+                    <b style="color: var(--text-primary, #ece4d6);">Buka Bot di Telegram:</b> Cari bot Anda di aplikasi Telegram (bisa menggunakan nama pengguna/username bot Anda).
+                </li>
+                <li style="margin-bottom: 8px;">
+                    <b style="color: var(--text-primary, #ece4d6);">Klik Tombol START / Mulai:</b> Di ruang obrolan bot, tekan tombol <b>START</b> (atau ketik pesan pembuka apa saja seperti <code>/start</code> atau <code>Halo</code>).
+                </li>
+                <li style="margin-bottom: 8px;">
+                    <b style="color: var(--text-primary, #ece4d6);">Jika Notifikasi Ditujukan ke Grup:</b> Masukkan bot ke dalam grup Telegram Anda, dan pastikan izin mengirim pesan aktif (atau jadikan bot sebagai Admin grup).
+                </li>
+                <li>
+                    <b style="color: var(--text-primary, #ece4d6);">Pastikan Chat ID Sesuai:</b> Masukkan Chat ID pribadi Anda atau Chat ID grup (diawali tanda minus <code>-</code>) pada pengaturan proyek.
+                </li>
+            </ol>
+
+            <div style="margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap;">
+                <a href="https://t.me/" id="linkOpenTelegramBot" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" style="flex: 1; min-width: 150px; justify-content: center; border-radius: 999px;">
+                    <?= renderSvg('globe', 13) ?>
+                    <span>Buka Telegram</span>
+                </a>
+                <button type="button" class="btn btn-primary btn-sm" onclick="proceedTestBot()" style="flex: 1.3; min-width: 200px; justify-content: center; background: var(--text-primary, #ece4d6); color: #0d0c0a; border: none; border-radius: 999px; font-weight: 600;">
+                    <?= renderSvg('play', 13) ?>
+                    <span>Saya Sudah Sapa, Uji Sekarang!</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div id="modalTaskDetail" class="modal-overlay">
     <div class="modal-dialog">
         <div class="modal-header">
@@ -7948,6 +8025,45 @@ window.onTurnstileExpiredRegister = function() {
 };
 
 // Modal Profil & Password
+
+// Modal Konfirmasi Sapa Bot Sebelum Uji Tes Koneksi
+let currentTestBotProjectId = null;
+function openTestBotModal(projectId, projectName, botToken, chatId) {
+    currentTestBotProjectId = projectId;
+    const m = document.getElementById('modalConfirmTestBot');
+    if (!m) {
+        window.location.href = '?action=test_bot&id=' + projectId;
+        return;
+    }
+    const nameEl = document.getElementById('testBotProjectName');
+    if (nameEl) nameEl.textContent = projectName || 'Proyek #' + projectId;
+
+    const qBox = document.getElementById('testBotQuestionBox');
+    const aBox = document.getElementById('testBotActionButtons');
+    const gBox = document.getElementById('testBotGuideBox');
+    if (qBox) qBox.style.display = 'block';
+    if (aBox) aBox.style.display = 'flex';
+    if (gBox) gBox.style.display = 'none';
+
+    m.style.display = 'flex';
+}
+function closeTestBotModal() {
+    const m = document.getElementById('modalConfirmTestBot');
+    if (m) m.style.display = 'none';
+}
+function showBotGuideStep() {
+    const guide = document.getElementById('testBotGuideBox');
+    if (guide) {
+        guide.style.display = 'block';
+        guide.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+}
+function proceedTestBot() {
+    if (currentTestBotProjectId) {
+        window.location.href = '?action=test_bot&id=' + currentTestBotProjectId;
+    }
+}
+
 function openProfileModal() {
     const m = document.getElementById('modalProfile');
     if (m) m.style.display = 'flex';
