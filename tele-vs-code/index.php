@@ -1201,6 +1201,22 @@ function sendSmtpEmail($to, $subject, $htmlBody, &$debugLog = null) {
 $action = $_GET['action'] ?? ($_POST['action'] ?? '');
 $db = getDb();
 
+// Inisialisasi Sesi Pengguna Lebih Awal (agar selalu terdefinisi untuk semua endpoint & polling)
+$currentUser = null;
+if (!empty($_SESSION['tvsc_uid'])) {
+    $stmtU = $db->prepare("SELECT * FROM users WHERE id = ?");
+    $stmtU->execute([$_SESSION['tvsc_uid']]);
+    $uData = $stmtU->fetch(PDO::FETCH_ASSOC);
+    if ($uData) {
+        if (!empty($uData['is_blocked'])) {
+            unset($_SESSION['tvsc_uid']);
+        } else {
+            $currentUser = $uData;
+        }
+    }
+}
+$isSuperAdmin = !empty($currentUser) && (strtolower($currentUser['email']) === strtolower(SUPERADMIN_EMAIL) || !empty($currentUser['is_admin']));
+
 // Cek Keunikan Kode TAG via AJAX (On-Blur / Live Check Unik Global)
 if ($action === 'check_code_unique') {
     header('Content-Type: application/json');
@@ -4032,6 +4048,10 @@ if (!empty($_SESSION['tvsc_uid'])) {
     }
 }
 
+if (!$currentUser && in_array($action, ['test_bot', 'test_notification', 'set_telegram_webhook', 'sync_telegram_menu'])) {
+    $errorMsg = 'Silakan masuk (login) terlebih dahulu untuk menguji bot atau mengelola proyek.';
+}
+
 if (!$currentUser && $action === 'add_manual_task' && !empty($_POST['project_id'])) {
     $stmtPrjUser = $db->prepare("SELECT u.* FROM users u JOIN projects p ON p.user_id = u.id WHERE p.id = ?");
     $stmtPrjUser->execute([(int)$_POST['project_id']]);
@@ -4387,8 +4407,13 @@ if ($currentUser) {
     // Pasang Webhook Otomatis ke Telegram Bot Proyek
     if ($action === 'set_telegram_webhook') {
         $pid = (int)($_GET['id'] ?? 0);
-        $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
-        $stmtP->execute([$pid, $currentUser['id']]);
+        if ($isSuperAdmin) {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ?");
+            $stmtP->execute([$pid]);
+        } else {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
+            $stmtP->execute([$pid, $currentUser['id']]);
+        }
         $prj = $stmtP->fetch(PDO::FETCH_ASSOC);
 
         if (!$prj || empty($prj['bot_token'])) {
@@ -4408,8 +4433,13 @@ if ($currentUser) {
     // Sinkron Menu Telegram (setMyCommands)
     if ($action === 'sync_telegram_menu') {
         $pid = (int)($_GET['id'] ?? 0);
-        $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
-        $stmtP->execute([$pid, $currentUser['id']]);
+        if ($isSuperAdmin) {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ?");
+            $stmtP->execute([$pid]);
+        } else {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
+            $stmtP->execute([$pid, $currentUser['id']]);
+        }
         $prj = $stmtP->fetch(PDO::FETCH_ASSOC);
 
         if (!$prj || empty($prj['bot_token'])) {
@@ -4430,8 +4460,13 @@ if ($currentUser) {
     // Tes Lengkap Bot Telegram (Diagnostik Token, Webhook, Chat, Kirim Pesan)
     if ($action === 'test_bot' || $action === 'test_notification') {
         $pid = (int)($_GET['id'] ?? 0);
-        $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
-        $stmtP->execute([$pid, $currentUser['id']]);
+        if ($isSuperAdmin) {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ?");
+            $stmtP->execute([$pid]);
+        } else {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
+            $stmtP->execute([$pid, $currentUser['id']]);
+        }
         $prj = $stmtP->fetch(PDO::FETCH_ASSOC);
 
         if (!$prj) {
@@ -4513,7 +4548,8 @@ if ($currentUser) {
             if ($diag['token_ok'] && $diag['msg_ok']) {
                 $successMsg = "✅ <b>Uji Coba Bot Berhasil!</b> Pesan tes telah terkirim ke Telegram proyek <b>" . htmlspecialchars($prj['name']) . "</b>.";
             } else {
-                $errorMsg = "⚠️ <b>Hasil Tes Bot:</b> " . ($diag['error_detail'] ?: ($diag['msg_error'] ?: 'Periksa Chat ID atau Webhook'));
+                $actualError = $diag['error_detail'] ?: ($diag['msg_error'] ?: ($diag['chat_error'] ?? 'Periksa Chat ID atau Webhook'));
+                $errorMsg = "⚠️ <b>Hasil Tes Bot:</b> " . $actualError;
             }
         }
         $currentTab = 'projects';
@@ -4672,6 +4708,23 @@ if ($currentUser) {
     $stmtP = $db->prepare("SELECT * FROM projects WHERE user_id = ? ORDER BY id ASC");
     $stmtP->execute([$currentUser['id']]);
     $projects = $stmtP->fetchAll(PDO::FETCH_ASSOC);
+
+    // Jika Superadmin sedang mengakses atau menguji proyek spesifik yang bukan miliknya
+    if ($isSuperAdmin && !empty($_GET['id'])) {
+        $extraPid = (int)$_GET['id'];
+        $existsInList = false;
+        foreach ($projects as $p) {
+            if ($p['id'] == $extraPid) { $existsInList = true; break; }
+        }
+        if (!$existsInList) {
+            $stmtExtra = $db->prepare("SELECT * FROM projects WHERE id = ?");
+            $stmtExtra->execute([$extraPid]);
+            $extraP = $stmtExtra->fetch(PDO::FETCH_ASSOC);
+            if ($extraP) {
+                $projects[] = $extraP;
+            }
+        }
+    }
 
     // Cek kelayakan tombol donasi:
     // Khusus untuk yang login, memiliki proyek, dan proyek sudah dilayani oleh dan sukses notifikasi
