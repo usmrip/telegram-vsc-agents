@@ -681,13 +681,49 @@ function getDefaultCommands() {
 function getProjectCommands($project) {
     $defaults = getDefaultCommands();
     $list = [];
-    foreach ($defaults as $d) {
-        $list[] = [
-            'command' => $d['command'],
-            'description' => $d['description']
-        ];
+    $seen = [];
+
+    // 1. Perintah /start di urutan pertama
+    $list[] = [
+        'command' => 'start',
+        'description' => 'Mulai bot & periksa koneksi dengan server'
+    ];
+    $seen['start'] = true;
+
+    // 2. Shortcut kode proyek jika valid
+    if (!empty($project['code'])) {
+        $pCode = strtolower(trim(preg_replace('/[^a-zA-Z0-9_]/', '', $project['code'])));
+        if (!empty($pCode) && strlen($pCode) <= 32 && !isset($seen[$pCode])) {
+            $list[] = [
+                'command' => $pCode,
+                'description' => 'Kirim tugas ke proyek ' . mb_substr($project['name'] ?? '', 0, 30)
+            ];
+            $seen[$pCode] = true;
+        }
     }
-    // Hanya gunakan perintah resmi standar bot (hindari shortcut tag seperti /jogja yang mengotori daftar)
+
+    // 3. Masukkan perintah standar dengan validasi karakter regex Telegram [a-z0-9_]{1,32}
+    foreach ($defaults as $d) {
+        $cmd = strtolower(trim($d['command']));
+        $cmd = preg_replace('/^[^a-z0-9_]+/', '', $cmd); // buang simbol @ atau / di awal
+        $cmd = preg_replace('/[^a-z0-9_]/', '', $cmd);
+        if (empty($cmd) || strlen($cmd) > 32 || isset($seen[$cmd])) continue;
+
+        $desc = trim($d['description']);
+        if (mb_strlen($desc) > 200) {
+            $desc = mb_substr($desc, 0, 197) . '...';
+        }
+        if (mb_strlen($desc) < 3) {
+            $desc = 'Perintah ' . $cmd;
+        }
+
+        $list[] = [
+            'command' => $cmd,
+            'description' => $desc
+        ];
+        $seen[$cmd] = true;
+        if (count($list) >= 90) break; // batas Telegram API 100 commands
+    }
     return $list;
 }
 
@@ -4048,7 +4084,7 @@ if (!empty($_SESSION['tvsc_uid'])) {
     }
 }
 
-if (!$currentUser && in_array($action, ['test_bot', 'test_notification', 'set_telegram_webhook', 'sync_telegram_menu'])) {
+if (!$currentUser && in_array($action, ['test_bot', 'test_notification', 'set_telegram_webhook', 'sync_telegram_menu', 'connect_bot_commands'])) {
     $errorMsg = 'Silakan masuk (login) terlebih dahulu untuk menguji bot atau mengelola proyek.';
 }
 
@@ -4400,6 +4436,52 @@ if ($currentUser) {
             $del = $db->prepare("DELETE FROM projects WHERE id = ? AND user_id = ?");
             $del->execute([$pid, $currentUser['id']]);
             $successMsg = "✅ Proyek berhasil dihapus!";
+        }
+        $currentTab = 'projects';
+    }
+
+    // Hubungkan Perintah ke Bot (Webhook + setMyCommands + setChatMenuButton)
+    if ($action === 'connect_bot_commands') {
+        $pid = (int)($_GET['id'] ?? 0);
+        if ($isSuperAdmin) {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ?");
+            $stmtP->execute([$pid]);
+        } else {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
+            $stmtP->execute([$pid, $currentUser['id']]);
+        }
+        $prj = $stmtP->fetch(PDO::FETCH_ASSOC);
+
+        if (!$prj || empty($prj['bot_token'])) {
+            $errorMsg = 'Bot Token belum diisi pada proyek ini! Harap masukkan dan simpan Telegram Bot Token terlebih dahulu.';
+        } else {
+            // 1. Pasang Webhook
+            $webhookTarget = "https://biru.co.id/tele-vs-code/webhook?pkey=" . urlencode($prj['project_key']);
+            $resWebhook = callTelegram($prj['bot_token'], 'setWebhook', ['url' => $webhookTarget]);
+
+            // 2. Daftarkan Menu Perintah (setMyCommands)
+            $commands = getProjectCommands($prj);
+            $resCmd = callTelegram($prj['bot_token'], 'setMyCommands', ['commands' => $commands]);
+
+            // 3. Atur Tombol Menu Default Chat (setChatMenuButton)
+            callTelegram($prj['bot_token'], 'setChatMenuButton', ['menu_button' => ['type' => 'commands']]);
+
+            // 4. Ambil profil bot (getMe)
+            $botMe = callTelegram($prj['bot_token'], 'getMe');
+            $botUser = !empty($botMe['result']['username']) ? ('@' . $botMe['result']['username']) : 'Bot Telegram';
+
+            if (!empty($resWebhook['ok']) && !empty($resCmd['ok'])) {
+                $countCmd = count($commands);
+                $successMsg = "⚡ <b>Perintah & Webhook Berhasil Dihubungkan ke Bot!</b><br>" .
+                              "• Bot: <b>" . htmlspecialchars($botUser) . "</b><br>" .
+                              "• Webhook: <b>Aktif</b> (Bot kini dapat menerima perintah & pesan langsung dari Telegram)<br>" .
+                              "• Menu Perintah: <b>Aktif</b> ($countCmd perintah didaftarkan ke tombol <code>[/]</code> Telegram)<br>" .
+                              "• Tombol Menu: <b>Aktif</b> (Commands Menu).";
+            } elseif (!empty($resWebhook['ok'])) {
+                $successMsg = "✅ Webhook berhasil dipasang (Bot siap menerima pesan), namun pendaftaran menu perintah mengalami kendala: " . htmlspecialchars($resCmd['description'] ?? 'Error API');
+            } else {
+                $errorMsg = "Gagal menghubungkan bot ke server: " . htmlspecialchars($resWebhook['description'] ?? 'Periksa kembali Bot Token Anda');
+            }
         }
         $currentTab = 'projects';
     }
@@ -6614,9 +6696,9 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                                         <?= renderSvg('bot', 13) ?>
                                         <span>Tes Bot</span>
                                     </button>
-                                    <a href="?action=set_telegram_webhook&id=<?= $prj['id'] ?>" class="btn btn-outline btn-sm" title="Pasang Webhook">
-                                        <?= renderSvg('link', 13) ?>
-                                        <span>Pasang Webhook</span>
+                                    <a href="?action=connect_bot_commands&id=<?= $prj['id'] ?>" class="btn btn-outline btn-sm" title="Hubungkan Perintah & Webhook ke Bot Telegram agar bot bisa menerima instruksi">
+                                        <?= renderSvg('terminal', 13) ?>
+                                        <span>Hubungkan Perintah</span>
                                     </a>
                                 <?php endif; ?>
                                 <!-- Tombol Minimize / Collapse Card (Default Tertutup) -->
@@ -6689,6 +6771,10 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                                     <button type="submit" class="btn btn-primary btn-sm">Simpan Pengaturan</button>
                                     <?php if (!empty($prj['bot_token'])): ?>
                                         <button type="button" onclick="openTestBotModal(<?= $prj['id'] ?>, '<?= htmlspecialchars(addslashes($prj['name']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['bot_token']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['chat_id']), ENT_QUOTES) ?>')" class="btn btn-outline btn-sm">Tes Koneksi</button>
+                                        <a href="?action=connect_bot_commands&id=<?= $prj['id'] ?>" class="btn btn-secondary btn-sm" title="Hubungkan Perintah & Webhook agar bot dapat menerima perintah di Telegram">
+                                            <?= renderSvg('terminal', 13) ?>
+                                            <span>Hubungkan Perintah</span>
+                                        </a>
                                     <?php endif; ?>
                                 </div>
                                 <a href="?action=delete_project&id=<?= $prj['id'] ?>&csrf=<?= getCsrfToken() ?>" onclick="return confirm('<?= count($projects) > 1 ? ('Yakin ingin menghapus proyek ' . htmlspecialchars($prj['name']) . '?') : ('⚠️ Perhatian: Ini adalah satu-satunya proyek Anda. Yakin ingin menghapus proyek ' . htmlspecialchars($prj['name']) . '?') ?>')" class="btn btn-danger btn-sm" title="Hapus Proyek" style="display: inline-flex; align-items: center; gap: 6px;">
@@ -6841,7 +6927,31 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                                 Semua perintah dan tag di bawah ini aktif otomatis di bot Telegram Anda.
                             </p>
                         </div>
-                        <span class="badge badge-done"><?= count(getDefaultCommands()) ?> Perintah Tersedia</span>
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <span class="badge badge-done"><?= count(getDefaultCommands()) ?> Perintah Tersedia</span>
+                            <?php if (!empty($projects)): ?>
+                                <?php if (count($projects) === 1): ?>
+                                    <a href="?action=connect_bot_commands&id=<?= $projects[0]['id'] ?>" class="btn btn-primary btn-sm" style="background: var(--text-primary, #ece4d6); color: #0d0c0a; font-weight: 600; border-radius: 999px;" title="Hubungkan perintah ke Bot Telegram">
+                                        <?= renderSvg('terminal', 13) ?>
+                                        <span>Hubungkan Perintah ke Bot</span>
+                                    </a>
+                                <?php else: ?>
+                                    <div style="position: relative; display: inline-block;">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="const d = document.getElementById('dropdownSyncCmds'); d.style.display = d.style.display === 'none' ? 'block' : 'none';" style="background: var(--text-primary, #ece4d6); color: #0d0c0a; font-weight: 600; border-radius: 999px;">
+                                            <?= renderSvg('terminal', 13) ?>
+                                            <span>Hubungkan Perintah ke Bot ▾</span>
+                                        </button>
+                                        <div id="dropdownSyncCmds" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 6px; background: var(--bg-surface-elevated, #1a1814); border: 1px solid var(--border-medium, rgba(236,228,214,0.14)); border-radius: 10px; padding: 6px; z-index: 100; min-width: 220px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                                            <?php foreach ($projects as $pj): ?>
+                                                <a href="?action=connect_bot_commands&id=<?= $pj['id'] ?>" style="display: block; padding: 8px 12px; font-size: 12px; color: var(--text-primary, #ece4d6); text-decoration: none; border-radius: 6px;" onmouseover="this.style.background='rgba(236,228,214,0.08)'" onmouseout="this.style.background='transparent'">
+                                                    📁 <?= htmlspecialchars($pj['name']) ?> (<code>#<?= htmlspecialchars($pj['code']) ?></code>)
+                                                </a>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                        </div>
                     </div>
 
                     <div class="table-responsive" style="margin-bottom: 16px;">
