@@ -1529,7 +1529,7 @@ function activate(context) {
         log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${finalCmd}`);
       }
       term.sendText(finalCmd);
-      vscode.window.showInformationMessage(`🚀 Menjalankan Custom Command Agent untuk tugas ${taskId || ''}...`);
+      log('info', `🚀 [custom] Menjalankan Custom Command Agent untuk tugas ${taskId || ''}`);
       return { executed: true, handler: 'custom', command: finalCmd };
     }
 
@@ -1544,7 +1544,7 @@ function activate(context) {
         log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
       }
       term.sendText(execLine);
-      vscode.window.showInformationMessage(`🤖 Antigravity CLI (agy) sedang mengeksekusi tugas ${taskId || ''}...`);
+      log('info', `🤖 [agy] Antigravity CLI sedang mengeksekusi tugas ${taskId || ''}`);
       return { executed: true, handler: 'agy' };
     }
 
@@ -1557,7 +1557,7 @@ function activate(context) {
         log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
       }
       term.sendText(execLine);
-      vscode.window.showInformationMessage(`🧠 Claude Code sedang mengeksekusi tugas ${taskId || ''}...`);
+      log('info', `🧠 [claude] Claude Code sedang mengeksekusi tugas ${taskId || ''}`);
       return { executed: true, handler: 'claude' };
     }
 
@@ -1571,7 +1571,7 @@ function activate(context) {
         log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
       }
       term.sendText(execLine);
-      vscode.window.showInformationMessage(`🖱️ Cursor Agent sedang mengeksekusi tugas ${taskId || ''}...`);
+      log('info', `🖱️ [cursor] Cursor Agent sedang mengeksekusi tugas ${taskId || ''}`);
       return { executed: true, handler: 'cursor' };
     }
     if (activeHandler === 'cline') {
@@ -1582,7 +1582,7 @@ function activate(context) {
         log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
       }
       term.sendText(execLine);
-      vscode.window.showInformationMessage(`⚡ Cline sedang mengeksekusi tugas ${taskId || ''}...`);
+      log('info', `⚡ [cline] Cline sedang mengeksekusi tugas ${taskId || ''}`);
       return { executed: true, handler: 'cline' };
     }
 
@@ -1594,7 +1594,7 @@ function activate(context) {
         log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
       }
       term.sendText(execLine);
-      vscode.window.showInformationMessage(`🦘 Roo Code sedang mengeksekusi tugas ${taskId || ''}...`);
+      log('info', `🦘 [roo] Roo Code sedang mengeksekusi tugas ${taskId || ''}`);
       return { executed: true, handler: 'roo' };
     }
 
@@ -1606,7 +1606,7 @@ function activate(context) {
         log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
       }
       term.sendText(execLine);
-      vscode.window.showInformationMessage(`♊ Gemini CLI sedang mengeksekusi tugas ${taskId || ''}...`);
+      log('info', `♊ [gemini] Gemini CLI sedang mengeksekusi tugas ${taskId || ''}`);
       return { executed: true, handler: 'gemini' };
     }
 
@@ -1618,7 +1618,7 @@ function activate(context) {
         log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
       }
       term.sendText(execLine);
-      vscode.window.showInformationMessage(`🐙 GitHub Copilot dipanggil untuk tugas ${taskId || ''}...`);
+      log('info', `🐙 [copilot] GitHub Copilot dipanggil untuk tugas ${taskId || ''}`);
       return { executed: true, handler: 'copilot' };
     }
 
@@ -2322,14 +2322,14 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
               // Tugas dari IDE (dengan kode khusus -IDE-): JANGAN tampilkan pop-up dialog delegasi
               // Tampilkan pop-up status tugas dikerjakan / selesai
               if (taskItem.status === 'DONE') {
-                showTimedNotification(`✅ [${taskItem.id}] Tugas IDE Selesai: "${instBrief}"`, 10);
+                log('info', `✅ [IDE] Tugas ${taskItem.id} Selesai: "${instBrief}"`);
               } else {
-                showTimedNotification(`⚡ [${taskItem.id}] Tugas IDE Sedang Dikerjakan: "${instBrief}"`, 10);
+                log('info', `⚡ [IDE] Tugas ${taskItem.id} Sedang Dikerjakan: "${instBrief}"`);
               }
             } else {
               // Tugas dari Telegram: tampilkan notifikasi toast informatif langsung (tanpa dialog tombol yang menuntut klik manual)
               if (taskItem.status === 'DONE') {
-                showTimedNotification(i18n('newTaskDoneToast', { id: taskItem.id, brief: instBrief }), 10);
+                log('info', `✅ [Telegram] Tugas ${taskItem.id} Selesai: "${instBrief}"`);
               } else {
                 // Salin prompt ke clipboard sebagai kemudahan
                 const prompt = buildAgentPrompt(taskItem.id, taskItem.instruction);

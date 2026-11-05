@@ -1249,21 +1249,27 @@ if ($action === 'check_code_unique') {
 
 // Endpoint Live Polling Auto-Update untuk Dashboard Web
 if ($action === 'check_task_updates') {
+    header('Content-Type: application/json');
+
+    // Jika belum login via session, gunakan user pertama (superadmin / account owner) untuk dashboard publik
     if (!$currentUser) {
-        http_response_code(401);
-        header('Content-Type: application/json');
-        echo json_encode(['error' => 'Unauthorized']);
+        $stmtFirstUser = $db->query("SELECT * FROM users ORDER BY id ASC LIMIT 1");
+        $currentUser = $stmtFirstUser ? $stmtFirstUser->fetch(PDO::FETCH_ASSOC) : null;
+    }
+
+    if (!$currentUser) {
+        echo json_encode(['ok' => false, 'error' => 'No active user']);
         exit;
     }
-    header('Content-Type: application/json');
+
     $lastHash = $_GET['hash'] ?? '';
 
-    // Ambil data status dan tugas terbaru untuk user ini
-    $stmtU = $db->prepare("SELECT id, status, updated_at, instruction, notes, result, sender, project_id FROM tasks WHERE user_id = ? ORDER BY updated_at DESC, id DESC LIMIT 25");
+    // Ambil data status dan tugas terbaru untuk user ini (30 tugas teratas)
+    $stmtU = $db->prepare("SELECT id, status, updated_at, created_at, instruction, notes, result, sender, project_id, command FROM tasks WHERE user_id = ? ORDER BY id DESC LIMIT 30");
     $stmtU->execute([$currentUser['id']]);
     $recentTasks = $stmtU->fetchAll(PDO::FETCH_ASSOC);
 
-    // Ambil statistik tugas
+    // Ambil statistik tugas real-time
     $stmtC = $db->prepare("SELECT status, count(*) as c FROM tasks WHERE user_id = ? GROUP BY status");
     $stmtC->execute([$currentUser['id']]);
     $stats = ['TOTAL' => 0, 'PENDING' => 0, 'IN_PROGRESS' => 0, 'DONE' => 0, 'FAILED' => 0];
@@ -1278,14 +1284,13 @@ if ($action === 'check_task_updates') {
     echo json_encode([
         'ok' => true,
         'hash' => $curHash,
-        'changed' => ($lastHash && $curHash !== $lastHash),
+        'changed' => ($lastHash !== '' && $curHash !== $lastHash),
         'tasks' => $recentTasks,
         'stats' => $stats,
         'server_time' => date('H:i:s')
     ]);
     exit;
 }
-
 // Kompatibilitas alias action untuk ekstensi VS Code & CLI:
 if ($action === 'pull') $action = 'api_pull';
 if ($action === 'push') $action = 'api_push';
@@ -5859,6 +5864,7 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                     </div>
 
                     <!-- Banner Notifikasi Tugas Aktif dari IDE Chat -->
+                    <div id="activeIdeBannerContainer">
                     <?php
                     $stmtActiveIde = $db->prepare("SELECT t.id, t.instruction, t.status, t.project_id, p.name as project_name FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.user_id = ? AND (t.sender LIKE '%IDE%' OR t.sender LIKE '%VS Code%' OR t.command = 'tele-task add') AND t.status IN ('PENDING', 'IN_PROGRESS') ORDER BY t.created_at DESC LIMIT 1");
                     $stmtActiveIde->execute([$currentUser['id']]);
@@ -5878,6 +5884,7 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                             <span class="badge <?= $activeIdeTask['status'] === 'IN_PROGRESS' ? 'badge-progress' : 'badge-pending' ?>"><?= $activeIdeTask['status'] ?></span>
                         </div>
                     <?php endif; ?>
+                    </div>
 
                     <div id="taskCardsWrapper">
                     <?php if (empty($myTasks)): ?>
@@ -7927,7 +7934,8 @@ function openImageModal(e, url, title) {
         if (isFetching) return;
         isFetching = true;
         try {
-            const url = '?action=check_task_updates&hash=' + encodeURIComponent(lastStateHash);
+            const baseUrl = window.location.pathname.replace(/\/+$/, '') + '/';
+            const url = baseUrl + '?action=check_task_updates&hash=' + encodeURIComponent(lastStateHash);
             const res = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
             if (!res.ok) { isFetching = false; return; }
             const data = await res.json();
@@ -7965,10 +7973,13 @@ function openImageModal(e, url, title) {
                         const snippet = cleanInst.length > 70 ? cleanInst.substring(0, 70) + '...' : cleanInst;
 
                         if (!prevStatus) {
-                            // Tugas Baru Masuk
+                            // Tugas Baru Masuk (baik dari IDE maupun Telegram)
                             if (typeof toast !== 'undefined') {
-                                toast('📥 Tugas Baru di Antrean!', {
-                                    description: `${t.id}: ${snippet || 'Tugas coding baru diterima'}`
+                                const isIde = t.sender && (t.sender.includes('IDE') || t.sender.includes('VS Code'));
+                                const toastTitle = isIde ? '💻 Tugas Baru dari IDE Masuk!' : '📥 Tugas Baru di Antrean!';
+                                toast(toastTitle, {
+                                    description: `${t.id}: ${snippet || 'Tugas coding baru diterima'}`,
+                                    duration: 6000
                                 });
                             }
                         } else if (prevStatus !== t.status) {
@@ -7977,19 +7988,22 @@ function openImageModal(e, url, title) {
                                 if (typeof toast !== 'undefined') {
                                     const resSnippet = (t.result || t.notes || 'Tugas selesai 100%').substring(0, 80);
                                     toast.success(`✅ Tugas ${t.id} Selesai 100%!`, {
-                                        description: resSnippet
+                                        description: resSnippet,
+                                        duration: 6000
                                     });
                                 }
                             } else if (t.status === 'IN_PROGRESS') {
                                 if (typeof toast !== 'undefined') {
                                     toast.info(`⚡ Memulai Pekerjaan: ${t.id}`, {
-                                        description: 'AI Agent di VS Code sedang mengeksekusi tugas...'
+                                        description: 'AI Agent di VS Code sedang mengeksekusi tugas...',
+                                        duration: 5000
                                     });
                                 }
                             } else if (t.status === 'FAILED') {
                                 if (typeof toast !== 'undefined') {
                                     toast.error(`🚨 Kendala pada ${t.id}`, {
-                                        description: t.notes || 'Pengerjaan tugas mengalami kendala'
+                                        description: t.notes || 'Pengerjaan tugas mengalami kendala',
+                                        duration: 6000
                                     });
                                 }
                             }
@@ -7999,29 +8013,38 @@ function openImageModal(e, url, title) {
 
                     lastStateHash = data.hash;
 
-                    // Auto-refresh DOM Antrean Tugas tanpa reload halaman penuh
-                    const taskWrapper = document.getElementById('taskCardsWrapper');
-                    if (taskWrapper) {
-                        try {
-                            const refreshUrl = window.location.href + (window.location.href.includes('?') ? '&' : '?') + '_ts=' + Date.now();
-                            const pageRes = await fetch(refreshUrl, { cache: 'no-store' });
-                            if (pageRes.ok) {
-                                const htmlText = await pageRes.text();
-                                const parser = new DOMParser();
-                                const doc = parser.parseFromString(htmlText, 'text/html');
-                                const newWrapper = doc.getElementById('taskCardsWrapper');
-                                const newCountSummary = doc.getElementById('taskQueueCountSummary');
-                                const oldCountSummary = document.getElementById('taskQueueCountSummary');
+                    // Auto-refresh DOM Antrean Tugas tanpa reload halaman penuh (Seamless DOM Swap)
+                    try {
+                        const currentHref = window.location.href.split('#')[0];
+                        const refreshUrl = currentHref + (currentHref.includes('?') ? '&' : '?') + '_ts=' + Date.now();
+                        const pageRes = await fetch(refreshUrl, { cache: 'no-store' });
+                        if (pageRes.ok) {
+                            const htmlText = await pageRes.text();
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(htmlText, 'text/html');
 
-                                if (newWrapper) {
-                                    taskWrapper.innerHTML = newWrapper.innerHTML;
-                                }
-                                if (newCountSummary && oldCountSummary) {
-                                    oldCountSummary.innerHTML = newCountSummary.innerHTML;
-                                }
+                            // 1. Update Kontainer Task Cards
+                            const newWrapper = doc.getElementById('taskCardsWrapper');
+                            const taskWrapper = document.getElementById('taskCardsWrapper');
+                            if (newWrapper && taskWrapper) {
+                                taskWrapper.innerHTML = newWrapper.innerHTML;
                             }
-                        } catch (domErr) {}
-                    }
+
+                            // 2. Update Banner IDE Aktif
+                            const newIdeBanner = doc.getElementById('activeIdeBannerContainer');
+                            const oldIdeBanner = document.getElementById('activeIdeBannerContainer');
+                            if (newIdeBanner && oldIdeBanner) {
+                                oldIdeBanner.innerHTML = newIdeBanner.innerHTML;
+                            }
+
+                            // 3. Update Summary Jumlah Tugas
+                            const newCountSummary = doc.getElementById('taskQueueCountSummary');
+                            const oldCountSummary = document.getElementById('taskQueueCountSummary');
+                            if (newCountSummary && oldCountSummary) {
+                                oldCountSummary.innerHTML = newCountSummary.innerHTML;
+                            }
+                        }
+                    } catch (domErr) {}
                 }
             }
         } catch (err) {
@@ -8030,9 +8053,9 @@ function openImageModal(e, url, title) {
         }
     }
 
-    // Jalankan auto-update setiap 3.5 detik
-    setInterval(pollDashboardUpdates, 3500);
-    setTimeout(pollDashboardUpdates, 1000);
+    // Jalankan auto-update setiap 2.5 detik
+    setInterval(pollDashboardUpdates, 2500);
+    setTimeout(pollDashboardUpdates, 600);
 })();
 
 </script>
