@@ -8714,8 +8714,6 @@ function triggerSmoothConfetti() {
     requestAnimationFrame(renderConfetti);
 }
 
-}
-
 function openProfileModal() {
     const m = document.getElementById('modalProfile');
     if (m) m.style.display = 'flex';
