@@ -539,12 +539,23 @@ async function executeTask(task) {
     // 3. TUGAS PENGEMBANGAN / CODING / AGENT TASK:
     recordActiveTask(task);
 
+    // Di Server Headless / Remote SSH: Deteksi apakah ada CLI Agent terpasang
+    const agentCandidate = (process.env.TELE_AGENT_HANDLER || cfgVscode.TELE_AGENT_HANDLER || cfgLocal.TELE_AGENT_HANDLER || 'auto').toLowerCase().trim();
     // Di Server Headless / Remote SSH: Deteksi apakah ada CLI Agent terpasang yang cocok dengan tugas
     const taskTargetAgent = (task.assigned_agent || task.agent || '').toLowerCase().trim();
     const configHandler = (process.env.TELE_AGENT_HANDLER || cfgVscode.TELE_AGENT_HANDLER || cfgLocal.TELE_AGENT_HANDLER || 'auto').toLowerCase().trim();
     let detectedBin = null;
     let detectedType = null;
 
+    if (agentCandidate === 'agy' || (agentCandidate === 'auto' && findCli('agy'))) {
+      detectedBin = findCli('agy') || 'agy';
+      detectedType = 'agy';
+    } else if (agentCandidate === 'claude' || (agentCandidate === 'auto' && findCli('claude'))) {
+      detectedBin = findCli('claude') || 'claude';
+      detectedType = 'claude';
+    } else if (agentCandidate === 'gemini' || (agentCandidate === 'auto' && findCli('gemini'))) {
+      detectedBin = findCli('gemini') || 'gemini';
+      detectedType = 'gemini';
     if (taskTargetAgent.includes('claude')) {
       if (findCli('claude')) { detectedBin = findCli('claude'); detectedType = 'claude'; }
     } else if (taskTargetAgent.includes('gemini')) {

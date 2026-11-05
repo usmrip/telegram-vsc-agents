@@ -45,6 +45,8 @@ function isRestrictedDangerousCommand(instruction) {
   return false;
 }
 
+let lastPulledUserEmail = '';
+
 function isAuthorizedSecurityUser(email) {
   if (!email) return false;
   const clean = String(email).trim().toLowerCase();
@@ -495,7 +497,9 @@ function getEffectiveConfig() {
   const autoDispatchAgent = vsConfig.get('autoDispatchAgent') !== false;
   const debugMode = vsConfig.get('debugMode') === true || process.env.TELE_DEBUG_MODE === '1';
 
-  return { folder, botToken, chatId, webhookUrl, secretKey, timezone, language, project, wsFolder, autoPull, askOnStartup, pullInterval, showToastOnNewTask, autoExecuteSimpleTasks, agentHandler, customAgentCommand, autoDispatchAgent, debugMode, vscodeConf };
+    const userEmail = cfgVscode.TELE_USER_EMAIL || cfgLocal.TELE_USER_EMAIL || cfgEnv.TELE_USER_EMAIL || vsConfig.get('userEmail') || cfgGlobal.TELE_USER_EMAIL || lastPulledUserEmail || '';
+
+  return { folder, botToken, chatId, webhookUrl, secretKey, timezone, language, project, wsFolder, autoPull, askOnStartup, pullInterval, showToastOnNewTask, autoExecuteSimpleTasks, agentHandler, customAgentCommand, autoDispatchAgent, debugMode, vscodeConf, userEmail };
 }
 
 // ------------------------------------------------------------------------------
@@ -2411,10 +2415,13 @@ function tryExecuteDirectTask(instruction, targetDir, cur) {
   }
 
   // 4. Eksekusi Perintah Terminal / Shell
-  const mShell = inst.match(/^(?:cmd|exec|run|sh|terminal|bash)[:\s]+([\s\S]+)$/i) ||
-                 inst.match(/^(git|npm|node|python|composer|dir|ls|echo|type|cat)\s+([\s\S]+)$/i);
+  // 4. Eksekusi Perintah Terminal / Shell
+  // Mendukung prefix: cmd:, run:, sh:, bash:, terminal:, exec:, powershell:, pwsh:
+  // Atau perintah CLI umum: git, npm, pnpm, yarn, bun, node, python, py, composer, php, cargo, go, dotnet, docker, dir, ls, echo, type, cat, whoami, hostname, ipconfig, ifconfig, curl, wget, find, grep, ping, netstat
+  const mShell = inst.match(/^(?:cmd|exec|run|sh|terminal|bash|powershell|pwsh)[:\s]+([\s\S]+)$/i) ||
+                 inst.match(/^(git|npm|pnpm|yarn|bun|node|python|py|composer|php|cargo|go|dotnet|docker|dir|ls|echo|type|cat|whoami|hostname|ipconfig|ifconfig|curl|wget|find|grep|ping|netstat)\b([\s\S]*)$/i);
   if (mShell) {
-    const cmdStr = mShell[2] !== undefined ? `${mShell[1]} ${mShell[2]}` : mShell[1];
+    const cmdStr = mShell[2] !== undefined ? `${mShell[1]} ${mShell[2]}`.trim() : mShell[1].trim();
     try {
       const output = execSync(cmdStr, {
         cwd: targetDir,
@@ -2701,6 +2708,9 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     try {
       const res = await safeFetch(url, { timeout: 15000 }, 2);
       const data = await res.json();
+      if (data && data.user_email) {
+        lastPulledUserEmail = data.user_email;
+      }
       if (data.ok && Array.isArray(data.tasks) && data.tasks.length > 0) {
         const queueFile = path.join(cur.folder, 'TASK_QUEUE.md');
         let content = fs.existsSync(queueFile)
@@ -2877,6 +2887,11 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
               }
             }
           }
+        }
+
+        // Autonomous Mode: Pastikan processActiveLocalTasks selalu dijalankan untuk mengeksekusi antrean di background (unattended)
+        if (cur.autoDispatchAgent && (cur.agentHandler || 'auto') !== 'none') {
+          await processActiveLocalTasks(cur);
         }
 
         taskProvider.refresh();
@@ -3311,44 +3326,647 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     }
   }));
 
-  // 2. Command /whoami di VS Code: Menampilkan Identitas Workspace & Routing (Paling Bawah di Menu)
-  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.whoami', async () => {
+  // =========================================================================
+  // 2. Interactive WhoAmI Wizard Panel (/whoami) & Dukungan Donasi Pengembang
+  // Didesain visual Studio Ink menyamai Setup Wizard, lengkap dengan tombol Donasi
+  // =========================================================================
+  let whoamiPanel = null;
+
+  function getWhoamiHtml(data) {
+    const isEn = data.lang === 'en';
+    const workerStatusBadge = data.isWorkerActive
+      ? `<span class="badge badge-success"><span class="status-dot dot-active"></span> ${isEn ? 'AUTOMATION WORKER: ACTIVE' : 'WORKER: MENYALA OTOMATIS'} (${data.pullInterval}s)</span>`
+      : `<span class="badge badge-muted"><span class="status-dot dot-paused"></span> ${isEn ? 'WORKER: PAUSED / INACTIVE' : 'WORKER: DIJEDA / NONAKTIF'}</span>`;
+
+    const autonomousBadge = `<span class="badge badge-signal">⚡ ${isEn ? 'UNATTENDED AUTONOMOUS MODE' : 'MODE OTONOM (100% OTOMATIS)'}</span>`;
+
+    return `<!DOCTYPE html>
+<html lang="${data.lang || 'id'}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tele-vs-Code WhoAmI</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap');
+
+    :root {
+      --bg-base: #0d0c0a;
+      --bg-surface: #14130f;
+      --bg-surface-elevated: #1a1814;
+      --bg-surface-inset: #0a0907;
+      --text-primary: #ece4d6;
+      --text-secondary: #a8a091;
+      --text-muted: #777064;
+      --border-subtle: rgba(236, 228, 214, 0.08);
+      --border-medium: rgba(236, 228, 214, 0.14);
+      --border-strong: rgba(236, 228, 214, 0.28);
+      --signal: #ff5a1f;
+      --accent-success: #9cc48a;
+      --accent-info: #9dbbd0;
+      --accent-rose: #f43f5e;
+      --accent-gold: #e0ac4a;
+      --font-display: 'Instrument Serif', Georgia, serif;
+      --font-base: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      font-family: var(--font-base);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      margin: 0;
+      padding: 24px 28px 60px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+    }
+    .hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(135deg, rgba(236,228,214,0.06), rgba(255,90,31,0.04));
+      border: 1px solid var(--border-medium);
+      border-radius: 14px;
+      padding: 20px 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    .hero-title {
+      font-family: var(--font-display);
+      font-size: 26px;
+      margin: 0 0 4px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-primary);
+    }
+    .hero-desc {
+      margin: 0;
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+    .hero-badges {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: flex-end;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+    }
+    .badge-success {
+      background: rgba(156, 196, 138, 0.12);
+      color: #b4d8a5;
+      border: 1px solid rgba(156, 196, 138, 0.3);
+    }
+    .badge-muted {
+      background: rgba(236, 228, 214, 0.06);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-subtle);
+    }
+    .badge-signal {
+      background: rgba(255, 90, 31, 0.12);
+      color: #ff8555;
+      border: 1px solid rgba(255, 90, 31, 0.35);
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+    .dot-active {
+      background: #4ade80;
+      box-shadow: 0 0 8px #4ade80;
+    }
+    .dot-paused {
+      background: #71717a;
+    }
+
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 20px 22px;
+      margin-bottom: 18px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-subtitle {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin: 0 0 14px;
+      line-height: 1.45;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .info-tile {
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      position: relative;
+    }
+    .info-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .info-val {
+      font-size: 13.5px;
+      font-weight: 500;
+      color: var(--text-primary);
+      word-break: break-all;
+    }
+    .info-val.mono {
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .info-action-btn {
+      align-self: flex-start;
+      margin-top: 6px;
+      background: rgba(236,228,214,0.06);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+    .info-action-btn:hover {
+      background: rgba(236,228,214,0.12);
+      color: var(--text-primary);
+      border-color: var(--border-medium);
+    }
+
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 14px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.18s ease;
+      text-decoration: none;
+    }
+    .btn-primary {
+      background: var(--signal);
+      color: #fff;
+      box-shadow: 0 3px 12px rgba(255,90,31,0.3);
+    }
+    .btn-primary:hover {
+      background: #e04e17;
+    }
+    .btn-secondary {
+      background: rgba(236,228,214,0.08);
+      border-color: var(--border-subtle);
+      color: var(--text-primary);
+    }
+    .btn-secondary:hover {
+      background: rgba(236,228,214,0.14);
+      border-color: var(--border-medium);
+    }
+    .btn-outline {
+      background: transparent;
+      border-color: var(--border-medium);
+      color: var(--text-primary);
+    }
+    .btn-outline:hover {
+      background: rgba(236,228,214,0.06);
+    }
+
+    /* CARD DONASI SPESIFIK */
+    .card-donation {
+      background: linear-gradient(135deg, rgba(244, 63, 94, 0.08), rgba(255, 90, 31, 0.04));
+      border: 1px solid rgba(244, 63, 94, 0.28);
+      box-shadow: 0 6px 24px rgba(244, 63, 94, 0.12);
+    }
+    .card-donation .card-title {
+      color: #fda4af;
+    }
+    .quote-box {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(244, 63, 94, 0.2);
+      border-left: 3px solid #f43f5e;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin: 10px 0 14px;
+      color: #fecdd3;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .quote-title {
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #fda4af;
+      margin-bottom: 2px;
+      font-weight: 600;
+    }
+    .btn-donate {
+      background: #e11d48;
+      color: #fff;
+      font-weight: 600;
+      font-size: 13.5px;
+      padding: 9px 18px;
+      border-radius: 8px;
+      border: 1px solid #be123c;
+      box-shadow: 0 4px 16px rgba(225, 29, 72, 0.45);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      text-decoration: none;
+      transition: all 0.2s ease;
+    }
+    .btn-donate:hover {
+      background: #f43f5e;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(225, 29, 72, 0.6);
+    }
+    .btn-gold {
+      background: rgba(224, 172, 74, 0.12);
+      border: 1px solid rgba(224, 172, 74, 0.35);
+      color: #f6d899;
+      font-size: 12.5px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.18s ease;
+    }
+    .btn-gold:hover {
+      background: rgba(224, 172, 74, 0.2);
+      color: #fff;
+    }
+
+    @media (max-width: 640px) {
+      .grid-2 { grid-template-columns: 1fr; }
+      .hero { flex-direction: column; align-items: flex-start; gap: 10px; }
+      .hero-badges { align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Hero Header -->
+    <div class="hero">
+      <div>
+        <h1 class="hero-title">
+          <span>Tele-vs-Code</span>
+          <span style="font-family: var(--font-base); font-size: 13px; font-weight: normal; color: var(--text-muted);">v${data.version || '1.0.29'}</span>
+        </h1>
+        <p class="hero-desc">${isEn ? 'Workspace & Connection Identity, AI Routing & Autonomous Mode (/whoami)' : 'Identitas Workspace, Status Koneksi, Routing Agen & Mode Otonom (/whoami)'}</p>
+      </div>
+      <div class="hero-badges">
+        ${workerStatusBadge}
+        ${autonomousBadge}
+      </div>
+    </div>
+
+    <!-- Section 1: Mode Otonom & Kontrol Worker -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">
+          <span>⚙️</span>
+          <span>${isEn ? 'Automation Worker & Unattended Autonomous Mode' : 'Worker Otomasi & Mode Eksekusi Otonom (Unattended)'}</span>
+        </h2>
+        <span class="badge ${data.isWorkerActive ? 'badge-success' : 'badge-muted'}">${data.isWorkerActive ? 'AKTIF' : 'NONAKTIF'}</span>
+      </div>
+      <p class="card-subtitle">
+        ${isEn
+          ? 'Tele-vs-Code operates in fully unattended mode: all commands from Telegram/Dashboard (shell commands, scripts, or AI Agent coding tasks) are automatically accepted and executed without requiring user presence at the computer.'
+          : 'Tele-vs-Code beroperasi dalam mode otonom mandiri (unattended): semua perintah dari Telegram/Dashboard (perintah shell/terminal langsung maupun tugas coding AI Agent) otomatis diizinkan dan dieksekusi tanpa perlu kehadiran pengguna di depan PC.'}
+      </p>
+      <div class="btn-row">
+        <button class="btn ${data.isWorkerActive ? 'btn-secondary' : 'btn-primary'}" onclick="sendAction('toggleWorker')">
+          <span>${data.isWorkerActive ? '⏸️' : '▶️'}</span>
+          <span>${data.isWorkerActive ? (isEn ? 'Pause Automation Worker' : 'Jeda Worker Otomatis') : (isEn ? 'Activate Automation Worker' : 'Aktifkan Worker Otomatis')}</span>
+        </button>
+        <button class="btn btn-secondary" onclick="sendAction('pullNow')">
+          <span>⚡</span>
+          <span>${isEn ? 'Pull Task Queue Now' : 'Tarik Antrean Sekarang'}</span>
+        </button>
+        <button class="btn btn-secondary" onclick="sendAction('setPullInterval')">
+          <span>⏱️</span>
+          <span>${isEn ? `Polling: ${data.pullInterval}s` : `Interval: ${data.pullInterval} detik`}</span>
+        </button>
+        <button class="btn btn-outline" onclick="sendAction('openQueue')">
+          <span>📋</span>
+          <span>${isEn ? 'Open TASK_QUEUE.md' : 'Buka TASK_QUEUE.md'}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Section 2: Identitas Proyek & Workspace (Grid) -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">
+          <span>📁</span>
+          <span>${isEn ? 'Project & Workspace Routing Identity' : 'Identitas Proyek & Routing Workspace'}</span>
+        </h2>
+        <button class="btn btn-secondary" style="font-size: 11px; padding: 3px 10px;" onclick="sendAction('refresh')">
+          <span>🔄</span>
+          <span>${isEn ? 'Refresh' : 'Muat Ulang Data'}</span>
+        </button>
+      </div>
+      <div class="grid-2">
+        <div class="info-tile">
+          <div class="info-label">
+            <span>${isEn ? 'Active Project' : 'Proyek Aktif'}</span>
+            <span style="color: var(--accent-info);">#${data.projectCode || data.projectKey || '-'}</span>
+          </div>
+          <div class="info-val">${data.projectName || '(Belum Dipilih)'}</div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">ID: ${data.projectId || '-'} | Key: ${data.projectKey || '-'}</div>
+        </div>
+
+        <div class="info-tile">
+          <div class="info-label">
+            <span>${isEn ? 'Working Directory' : 'Folder Workspace (Working Dir)'}</span>
+            <span style="color: var(--accent-success);">LOKAL</span>
+          </div>
+          <div class="info-val mono" style="font-size: 11.5px;">${data.folder || '-'}</div>
+          <button class="info-action-btn" onclick="sendAction('setFolder')">
+            <span>📂</span>
+            <span>${isEn ? 'Change Working Directory' : 'Ubah Folder Workspace'}</span>
+          </button>
+        </div>
+
+        <div class="info-tile">
+          <div class="info-label">
+            <span>${isEn ? 'AI Agent Handler' : 'AI Agent Handler Terpilih'}</span>
+            <span style="color: var(--signal);">${data.agentHandler || 'auto'}</span>
+          </div>
+          <div class="info-val">${data.agentDisplayName || 'Agent IDE / Auto'}</div>
+          <button class="info-action-btn" onclick="sendAction('selectAgent')">
+            <span>🤖</span>
+            <span>${isEn ? 'Change AI Agent Handler' : 'Ganti AI Agent'}</span>
+          </button>
+        </div>
+
+        <div class="info-tile">
+          <div class="info-label">
+            <span>${isEn ? 'Operator & Host' : 'Operator Host Mesin'}</span>
+            <span>${data.platform || 'Host'}</span>
+          </div>
+          <div class="info-val mono">${data.operator || '-'}</div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">VS Code v${data.vscodeVersion || '-'}</div>
+        </div>
+
+        <div class="info-tile">
+          <div class="info-label">
+            <span>${isEn ? 'Webhook Server' : 'Server Webhook Biru'}</span>
+            <span style="color: var(--accent-success);">CONNECTED</span>
+          </div>
+          <div class="info-val mono" style="font-size: 11px;">${data.webhookUrl || '-'}</div>
+          <button class="info-action-btn" onclick="sendAction('openDashboard')">
+            <span>🌐</span>
+            <span>${isEn ? 'Open Web Dashboard' : 'Buka Dashboard Web'}</span>
+          </button>
+        </div>
+
+        <div class="info-tile">
+          <div class="info-label">
+            <span>${isEn ? 'API Secret Key' : 'API Key Secret'}</span>
+            <span>${data.secretKey ? 'SET' : 'EMPTY'}</span>
+          </div>
+          <div class="info-val mono">${data.apiKeyMasked || '(Belum Diatur)'}</div>
+          <button class="info-action-btn" onclick="copySecret('${data.secretKey || ''}')">
+            <span>📋</span>
+            <span>${isEn ? 'Copy Secret Key' : 'Salin API Key'}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: Dukungan & Donasi Pengembang (❤️ AYO DONASI) -->
+    <div class="card card-donation">
+      <div class="card-header">
+        <h2 class="card-title">
+          <span>❤️</span>
+          <span>${isEn ? 'Support Tele-vs-Code: Donations & Reviews' : 'Dukung Pengembangan Tele-vs-Code: Donasi & Ulasan'}</span>
+        </h2>
+        <span class="badge" style="background: rgba(244,63,94,0.15); color: #fda4af; border: 1px solid rgba(244,63,94,0.3);">✨ OFFICIAL SUPPORT</span>
+      </div>
+
+      <div class="quote-box">
+        <div class="quote-title">${isEn ? 'Donation Mission & Purpose' : 'Tujuan Donasi'}</div>
+        <b>"bertahan hidup dengan teknologi dan #berkembangBaik"</b>
+      </div>
+
+      <p style="font-size: 13px; color: var(--text-secondary); margin: 0 0 14px; line-height: 1.55;">
+        ${isEn
+          ? 'Tele-vs-Code is built to free developers from the desk by enabling seamless remote autonomous task delegation. Your donations and 5-star Marketplace reviews directly sustain server costs, API maintenance, and active feature development.'
+          : 'Tele-vs-Code dikembangkan untuk membebaskan developer dari keharusan selalu berada di depan komputer melalui delegasi tugas otonom jarak jauh. Donasi dan ulasan bintang 5 Anda sangat berarti untuk menopang biaya operasional server, kuota AI, serta riset fitur otomasi multi-agent selanjutnya.'}
+      </p>
+
+      <div class="btn-row" style="align-items: center;">
+        <a href="https://ayo.ke/donasi" class="btn-donate" onclick="openExternalLink('https://ayo.ke/donasi', event)">
+          <span>❤️</span>
+          <span>${isEn ? 'Donate Now (ayo.ke/donasi)' : 'Ayo Donasi Sekarang'}</span>
+        </a>
+        <a href="https://marketplace.visualstudio.com/items?itemName=biruindonesiacreative.tele-vs-code&ssr=false#review-details" class="btn-gold" onclick="openExternalLink('https://marketplace.visualstudio.com/items?itemName=biruindonesiacreative.tele-vs-code&ssr=false#review-details', event)">
+          <span>⭐</span>
+          <span>${isEn ? 'Give 5-Star Review' : 'Beri Ulasan Bintang 5'}</span>
+        </a>
+        <a href="https://biru.co.id/tele-vs-code/" class="btn btn-outline" onclick="openExternalLink('https://biru.co.id/tele-vs-code/', event)">
+          <span>🌐</span>
+          <span>${isEn ? 'Web Dashboard' : 'Dashboard Web'}</span>
+        </a>
+      </div>
+    </div>
+
+    <!-- Section 4: Wizard & Navigasi -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
+      <div style="font-size: 12px; color: var(--text-muted);">
+        Tele-vs-Code &bull; Biru Indonesia Creative &bull; ${new Date().getFullYear()}
+      </div>
+      <div class="btn-row" style="margin-top: 0;">
+        <button class="btn btn-secondary" onclick="sendAction('openWizard')">
+          <span>🪄</span>
+          <span>${isEn ? 'Open Setup Wizard' : 'Buka Setup Wizard'}</span>
+        </button>
+        <button class="btn btn-secondary" onclick="sendAction('openLog')">
+          <span>📄</span>
+          <span>${isEn ? 'Show Extension Log' : 'Buka Log Ekstensi'}</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+
+    function sendAction(type, payload = {}) {
+      vscode.postMessage({ type, ...payload });
+    }
+
+    function openExternalLink(url, ev) {
+      if (ev) ev.preventDefault();
+      vscode.postMessage({ type: 'openUrl', url });
+    }
+
+    function copySecret(secret) {
+      if (!secret) return;
+      vscode.postMessage({ type: 'copyText', text: secret, label: 'API Key Secret' });
+    }
+  </script>
+</body>
+</html>`;
+  }
+
+  async function openWhoamiWebviewPanel() {
     const cur = getEffectiveConfig();
     const resolved = await getResolvedProject();
     const operator = `${os.userInfo().username}@${os.hostname()}`;
+    const platform = `${process.platform} (${os.release()}, ${os.arch()})`;
+    const vscodeVersion = vscode.version;
 
-    const workerStatusText = isWorkerActive
-      ? `🟢 MENYALA OTOMATIS (Refresh setiap ${cur.pullInterval} detik)`
-      : `⚪ TIDAK MENYALA (Dijeda / Nonaktif)`;
-
-    const items = [
-      { label: `📁 Proyek: ${resolved.name || "(Belum Dipilih)"}${resolved.code ? ` (#${resolved.code})` : ""}`, description: `ID Proyek: ${resolved.id ? resolved.id : "(Belum Disetel)"}` },
-      { label: `📂 Folder Workspace (Working Directory):`, description: cur.folder },
-      { label: `📡 Status Worker Otomatis:`, description: workerStatusText },
-      { label: `⏱️ Durasi Refresh Polling:`, description: isWorkerActive ? `${cur.pullInterval} detik (Menyala Aktif)` : `${cur.pullInterval} detik (Tidak Menyala)` },
-      { label: `💻 Operator Host:`, description: operator },
-      { label: `🌐 Server Webhook:`, description: cur.webhookUrl },
-      { label: `🔑 API Key Secret:`, description: cur.secretKey ? (cur.secretKey.substring(0, 8) + '••••••••') : '(Belum diatur)' },
-      { label: `🤖 Bot Telegram:`, description: resolved.botToken ? `Chat ID: ${resolved.chatId}` : '(Mengikuti server Biru)' }
-    ];
-
-    const pick = await vscode.window.showQuickPick(items, {
-      title: '👤 Identifikasi Workspace Tele-vs-Code',
-      placeHolder: `Status Worker: ${isWorkerActive ? `🟢 MENYALA (${cur.pullInterval}s)` : '⚪ TIDAK MENYALA'} | Klik item untuk menyalin`
-    });
-
-    if (pick && pick.description) {
-      if (pick.label.includes('Folder Workspace')) {
-        vscode.commands.executeCommand('telegramNotifier.setFolder');
-        return;
-      }
-      if (pick.label.includes('Status Worker') || pick.label.includes('Durasi Refresh')) {
-        vscode.commands.executeCommand('telegramNotifier.setPullInterval');
-        return;
-      }
-      await vscode.env.clipboard.writeText(pick.description);
-      vscode.window.showInformationMessage(`📋 Disalin: ${pick.description}`);
+    if (whoamiPanel) {
+      whoamiPanel.reveal(vscode.ViewColumn.One);
+    } else {
+      whoamiPanel = vscode.window.createWebviewPanel(
+        'teleVsCodeWhoami',
+        '👤 Identitas Workspace & Routing (/whoami)',
+        vscode.ViewColumn.One,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true
+        }
+      );
+      whoamiPanel.onDidDispose(() => {
+        whoamiPanel = null;
+      });
     }
+
+    const extPkgPath = path.join(__dirname, 'package.json');
+    const extVersion = fs.existsSync(extPkgPath) ? (JSON.parse(fs.readFileSync(extPkgPath, 'utf-8')).version || '1.0.29') : '1.0.29';
+
+    const renderWhoami = async () => {
+      if (!whoamiPanel) return;
+      const curNow = getEffectiveConfig();
+      const resNow = await getResolvedProject();
+      const agentsNow = detectAvailableAgents().filter(a => a.installed);
+      const agtNow = curNow.agentHandler || 'auto';
+      const agtObj = agentsNow.find(a => a.id === agtNow) || { name: agtNow === 'ide' ? 'Agent IDE (Chat AI)' : agtNow.toUpperCase() };
+      const masked = curNow.secretKey
+        ? (curNow.secretKey.length > 12 ? `${curNow.secretKey.substring(0, 8)}••••••••${curNow.secretKey.substring(curNow.secretKey.length - 4)}` : `${curNow.secretKey.substring(0, 4)}••••`)
+        : '';
+
+      whoamiPanel.webview.html = getWhoamiHtml({
+        lang: curNow.language || 'id',
+        version: extVersion,
+        isWorkerActive,
+        pullInterval: curNow.pullInterval,
+        projectName: resNow.name,
+        projectCode: resNow.code,
+        projectKey: resNow.projectKey || curNow.project,
+        projectId: resNow.id,
+        folder: curNow.folder,
+        agentHandler: agtNow,
+        agentDisplayName: agtObj.name,
+        operator,
+        platform,
+        vscodeVersion,
+        webhookUrl: curNow.webhookUrl,
+        secretKey: curNow.secretKey,
+        apiKeyMasked: masked,
+        botToken: resNow.botToken,
+        chatId: resNow.chatId
+      });
+    };
+
+    await renderWhoami();
+
+    whoamiPanel.webview.onDidReceiveMessage(async (msg) => {
+      if (msg.type === 'toggleWorker') {
+        isWorkerActive = !isWorkerActive;
+        updateStatusBar();
+        await renderWhoami();
+        vscode.window.showInformationMessage(isWorkerActive ? '🟢 Worker Otomatis diaktifkan' : '⚪ Worker Otomatis dijeda');
+      } else if (msg.type === 'pullNow') {
+        await pullTaskQueue(false);
+        await renderWhoami();
+      } else if (msg.type === 'setPullInterval') {
+        vscode.commands.executeCommand('telegramNotifier.setPullInterval');
+      } else if (msg.type === 'setFolder') {
+        vscode.commands.executeCommand('telegramNotifier.setFolder');
+      } else if (msg.type === 'selectAgent') {
+        vscode.commands.executeCommand('telegramNotifier.selectAgentHandler');
+      } else if (msg.type === 'openQueue') {
+        vscode.commands.executeCommand('telegramNotifier.openQueue');
+      } else if (msg.type === 'openWizard') {
+        vscode.commands.executeCommand('telegramNotifier.openSetupWizard');
+      } else if (msg.type === 'openDashboard') {
+        vscode.commands.executeCommand('telegramNotifier.openDashboard');
+      } else if (msg.type === 'openLog') {
+        outputChannel.show();
+      } else if (msg.type === 'refresh') {
+        await renderWhoami();
+        vscode.window.showInformationMessage('🔄 Data WhoAmI berhasil diperbarui');
+      } else if (msg.type === 'openUrl' && msg.url) {
+        vscode.env.openExternal(vscode.Uri.parse(msg.url));
+      } else if (msg.type === 'copyText' && msg.text) {
+        await vscode.env.clipboard.writeText(msg.text);
+        vscode.window.showInformationMessage(`📋 ${msg.label || 'Teks'} berhasil disalin ke clipboard!`);
+      }
+    });
+  }
+
+  // 2. Command /whoami di VS Code: Menampilkan Identitas Workspace & Routing Webview Panel
+  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.whoami', async () => {
+    await openWhoamiWebviewPanel();
   }));
 
   // 2b. Atur Durasi Refresh Polling Worker

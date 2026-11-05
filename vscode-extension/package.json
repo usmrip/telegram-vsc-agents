@@ -2,7 +2,7 @@
   "name": "tele-vs-code",
   "displayName": "Tele-vs-Code",
   "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
-  "version": "1.0.29-d-beta",
+  "version": "1.0.29-e-beta",
   "publisher": "BiruIndonesiaCreative",
   "author": {
     "name": "Biru Indonesia Creative",
@@ -280,7 +280,7 @@
       },
       {
         "command": "telegramNotifier.whoami",
-        "title": "👤 Info Koneksi & Workspace (/whoami) / Workspace Info",
+        "title": "👤 Identitas Workspace & Routing (/whoami) / WhoAmI Wizard",
         "category": "Tele-vs-Code"
       },
       {
