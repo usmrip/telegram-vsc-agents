@@ -539,20 +539,28 @@ async function executeTask(task) {
     // 3. TUGAS PENGEMBANGAN / CODING / AGENT TASK:
     recordActiveTask(task);
 
-    // Di Server Headless / Remote SSH: Deteksi apakah ada CLI Agent terpasang
-    const agentCandidate = (process.env.TELE_AGENT_HANDLER || cfgVscode.TELE_AGENT_HANDLER || cfgLocal.TELE_AGENT_HANDLER || 'auto').toLowerCase().trim();
+    // Di Server Headless / Remote SSH: Deteksi apakah ada CLI Agent terpasang yang cocok dengan tugas
+    const taskTargetAgent = (task.assigned_agent || task.agent || '').toLowerCase().trim();
+    const configHandler = (process.env.TELE_AGENT_HANDLER || cfgVscode.TELE_AGENT_HANDLER || cfgLocal.TELE_AGENT_HANDLER || 'auto').toLowerCase().trim();
     let detectedBin = null;
     let detectedType = null;
 
-    if (agentCandidate === 'agy' || (agentCandidate === 'auto' && findCli('agy'))) {
-      detectedBin = findCli('agy') || 'agy';
-      detectedType = 'agy';
-    } else if (agentCandidate === 'claude' || (agentCandidate === 'auto' && findCli('claude'))) {
-      detectedBin = findCli('claude') || 'claude';
-      detectedType = 'claude';
-    } else if (agentCandidate === 'gemini' || (agentCandidate === 'auto' && findCli('gemini'))) {
-      detectedBin = findCli('gemini') || 'gemini';
-      detectedType = 'gemini';
+    if (taskTargetAgent.includes('claude')) {
+      if (findCli('claude')) { detectedBin = findCli('claude'); detectedType = 'claude'; }
+    } else if (taskTargetAgent.includes('gemini')) {
+      if (findCli('gemini')) { detectedBin = findCli('gemini'); detectedType = 'gemini'; }
+    } else if (taskTargetAgent.includes('copilot')) {
+      if (findCli('copilot')) { detectedBin = findCli('copilot'); detectedType = 'copilot'; }
+    } else if (taskTargetAgent.includes('antigrav') || taskTargetAgent.includes('agy')) {
+      if (findCli('agy')) { detectedBin = findCli('agy'); detectedType = 'agy'; }
+    } else if (configHandler !== 'auto') {
+      detectedBin = findCli(configHandler);
+      detectedType = configHandler;
+    } else {
+      // Default auto fallback jika tugas tidak menentukan agent spesifik
+      if (findCli('agy')) { detectedBin = findCli('agy'); detectedType = 'agy'; }
+      else if (findCli('claude')) { detectedBin = findCli('claude'); detectedType = 'claude'; }
+      else if (findCli('gemini')) { detectedBin = findCli('gemini'); detectedType = 'gemini'; }
     }
 
     if (detectedBin) {

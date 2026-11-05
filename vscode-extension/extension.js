@@ -1649,12 +1649,30 @@ function activate(context) {
     const isForced = (typeof agentOverride === 'object' && agentOverride && agentOverride.force);
     const explicitAgentStr = (typeof agentOverride === 'string' ? agentOverride : (agentOverride && agentOverride.agent ? agentOverride.agent : '')).trim();
 
-    let targetHandler = explicitAgentStr;
+    let targetHandler = '';
+    if (explicitAgentStr) {
+      targetHandler = resolveAgentHandlerFromText(explicitAgentStr);
+    }
     if (!targetHandler && instruction) {
       const mAgt = instruction.match(/@([a-zA-Z0-9_-]+)/i) || instruction.match(/(?:--agent|\[agent:\s*)([\w\s-]+)\]?/i);
       if (mAgt) {
         targetHandler = resolveAgentHandlerFromText(mAgt[1]);
       }
+    }
+    // Jika masih belum ada, coba baca langsung dari TASK_QUEUE.md untuk taskId ini
+    if (!targetHandler && taskId && fs.existsSync(queueFile)) {
+      try {
+        const qText = fs.readFileSync(queueFile, 'utf-8');
+        const cleanId = taskId.replace(/^#/, '');
+        const taskRegex = new RegExp(`###\\s+\\[(?:PENDING|IN_PROGRESS)\\]\\s+#?${cleanId}[\\r\\n]+([\\s\\S]*?)(?=(?:###\\s+\\[|##|$))`, 'i');
+        const mTask = qText.match(taskRegex);
+        if (mTask) {
+          const mAgtInFile = mTask[1].match(/-\\s+\\*\\*Agent:\\*\\*\\s*([^\\r\\n]+)/i);
+          if (mAgtInFile) {
+            targetHandler = resolveAgentHandlerFromText(mAgtInFile[1]);
+          }
+        }
+      } catch (eFile) {}
     }
     if (!targetHandler) {
       targetHandler = userConfiguredHandler;
@@ -1753,8 +1771,9 @@ function activate(context) {
         const hasAntigravity = vscode.extensions.all.some(e => /antigravity/i.test(e.id));
         let handledBy = '';
 
-        // 1. Antigravity IDE Chat
-        if ((activeHandler === 'ide' || activeHandler === 'ide-antigravity') && hasAntigravity) {
+        // 1. Antigravity IDE Chat - HANYA jika handler secara spesifik meminta antigravity atau 'ide' generic (dan BUKAN copilot/claude/gemini/cline/roo)
+        const isSpecificallyOtherIde = (activeHandler === 'ide-copilot' || activeHandler === 'ide-claude' || activeHandler === 'ide-gemini' || activeHandler === 'ide-cline' || activeHandler === 'ide-roo');
+        if (!isSpecificallyOtherIde && (activeHandler === 'ide' || activeHandler === 'ide-antigravity') && hasAntigravity) {
           try {
             await vscode.commands.executeCommand('antigravity.panel.focus');
             await vscode.commands.executeCommand('antigravity.addContext', prompt);
@@ -2527,12 +2546,14 @@ async function processActiveLocalTasks(cur) {
       const mInst = block.match(/-\s+\*\*Instruksi:\*\*\s*([^\r\n]+)/i);
       const mSender = block.match(/-\s+\*\*Pengirim:\*\*\s*([^\r\n]+)/i);
       const mTime = block.match(/-\s+\*\*Waktu:\*\*\s*([^\r\n]+)/i);
+      const mAgt = block.match(/-\s+\*\*Agent:\*\*\s*([^\r\n]+)/i);
       if (mInst) {
         tasks.push({
           id: taskId,
           status: taskStat,
           instruction: mInst[1].trim(),
           sender: mSender ? mSender[1].trim() : 'Telegram',
+          agent: mAgt ? mAgt[1].trim() : '',
           created_at: mTime ? mTime[1].trim() : new Date().toISOString()
         });
       }
@@ -2577,7 +2598,7 @@ async function processActiveLocalTasks(cur) {
         const taskKey = normId ? (`id::${normId}`) : (`inst::${(currentInProgress.instruction || '').toLowerCase().trim()}`);
         if (!recentlyDispatchedTasks.has(taskKey)) {
           log('info', `[Auto-Dispatch] Memicu tugas IN_PROGRESS ${currentInProgress.id} (1x) ke AI Agent Handler (${cur.agentHandler || 'auto'})...`);
-          await executeTaskWithAgent(currentInProgress.id, currentInProgress.instruction);
+          await executeTaskWithAgent(currentInProgress.id, currentInProgress.instruction, { agent: currentInProgress.agent });
         }
       }
       return; // Sesuai aturan sekuensial murni: tugas PENDING harus menunggu IN_PROGRESS selesai
@@ -2616,8 +2637,8 @@ async function processActiveLocalTasks(cur) {
 
     // Tugas coding/AI Agent: dispatch otomatis ke Agent Handler terpilih
     if (cur.autoDispatchAgent && (cur.agentHandler || 'auto') !== 'none') {
-      log('info', `[Auto-Dispatch] Mengalihkan tugas pending ${firstPending.id} ke AI Agent Handler (${cur.agentHandler || 'auto'})...`);
-      await executeTaskWithAgent(firstPending.id, firstPending.instruction);
+      log('info', `[Auto-Dispatch] Mengalihkan tugas pending ${firstPending.id} ke AI Agent Handler (${firstPending.agent || cur.agentHandler || 'auto'})...`);
+      await executeTaskWithAgent(firstPending.id, firstPending.instruction, { agent: firstPending.agent });
     }
   } catch (e) {
     log('error', `Gagal processActiveLocalTasks: ${e.message}`);
@@ -2846,7 +2867,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                       if (!currentHandler) {
                         vscode.commands.executeCommand('telegramNotifier.selectAgentHandler');
                       } else {
-                        executeTaskWithAgent(taskItem.id, taskItem.instruction);
+                        executeTaskWithAgent(taskItem.id, taskItem.instruction, { agent: taskItem.assigned_agent || taskItem.agent });
                       }
                     } else if (act === 'Buka TASK_QUEUE') {
                       vscode.commands.executeCommand('telegramNotifier.openQueue');
@@ -5282,7 +5303,7 @@ TELE_AGENT_HANDLER="${selectedAgentHandler}"
     } else if (pick.action === 'open_file') {
       vscode.commands.executeCommand('telegramNotifier.openQueue');
     } else if (pick.action === 'run_ai') {
-      await executeTaskWithAgent(task.id, task.instruksi, { force: true });
+      await executeTaskWithAgent(task.id, task.instruksi, { force: true, agent: task.agent });
     } else if (pick.action === 'restart_ai') {
       await restartTargetTask(task.id, null, false, false);
     }

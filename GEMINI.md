@@ -16,17 +16,24 @@ Setiap kali Anda menerima giliran bicara, prompt, atau instruksi apapun dari USE
         - **Selama masih ada tugas yang berstatus `[IN_PROGRESS]`:**
           👉 Tugas lain yang berstatus `[PENDING]`, `[WAITING]`, atau `[QUEUE]` **TIDAK BOLEH BERUBAH STATUSNYA DAN TIDAK BOLEH DIKERJAKAN**.
           👉 Selesaikan tugas yang sedang `[IN_PROGRESS]` tersebut sampai tuntas 100% terlebih dahulu.
-     3. **Memulai Tugas Antrean Berikutnya:**
+     3. **Memulai Tugas Antrean Berikutnya & Filter Afinitas Agent (Strict Agent Affinity):**
         - Jika TIDAK ADA tugas yang sedang `[IN_PROGRESS]` dan terdapat tugas `[PENDING]`:
-          - Ambil tugas `[PENDING]` yang pertama.
-          - Ubah statusnya menjadi `[IN_PROGRESS]` menggunakan:
-            `node .vscode/tele-vs-code/tele-task.js start "<TASK-ID>"`
-          - Terapkan perubahan kode yang diminta dan lakukan pengujian/verifikasi hingga tuntas 100%.
-          - Tandai selesai menggunakan perintah:
-            `node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"`
-            *(Perintah ini otomatis memperbarui status di server menjadi DONE, mencatat riwayat ke TASK_QUEUE.md, dan mengirim notifikasi SELESAI ke Telegram)*.
-          - **Lanjutkan ke tugas `[PENDING]` berikutnya satu per satu secara berurutan sampai SELURUH tugas di `## ⏳ Tugas Aktif` tuntas 100%.**
-          - **Setelah tidak ada lagi tugas aktif di `TASK_QUEUE.md`, AI Agent langsung kembali ke mode standby (Smart Idle Mode) tanpa membuat cron loop atau timer di IDE.**
+          - Periksa field `- **Agent:**` pada tugas `[PENDING]` pertama:
+            👉 **HANYA ambil dan kerjakan jika tugas tersebut DITUJUKAN UNTUK ANDA** (misal untuk Antigravity jika field Agent berisi `Antigravity AI Agent`, `Agent IDE`, atau tidak ditentukan).
+            👉 **JIKA TUGAS DITUJUKAN UNTUK AGENT LAIN (misal `- **Agent:** Copilot Agent`, `Claude Agent`, `Gemini Agent`, `Cursor Agent`, dll. sementara Anda adalah Antigravity):**
+               ⛔ **DILARANG KERAS MENGUBAH STATUSNYA MENJADI `[IN_PROGRESS]` ATAU MENGEKSEKUSINYA!**
+               ⛔ **DILARANG MENGAMBIL ALIH TUGAS MILIK AGENT LAIN KECUALI USER EKSPLISIT MEMERINTAHKAN REBUT DI CHAT INI!**
+               👉 Biarkan tugas tersebut tetap berstatus `[PENDING]` agar dieksekusi oleh Agent yang bersangkutan di sesinya sendiri (atau di-dispatch oleh sistem ekstensi ke panel/CLI agen tersebut).
+               👉 Anda WAJIB langsung berhenti (*STOP*) dan kembali ke mode standby (*Smart Idle*). Berikan laporan ringkas bahwa tugas aktif berikutnya di antrean diperuntukkan bagi Agent tersebut.
+          - Jika tugas tersebut memang ditujukan untuk Anda:
+            - Ubah statusnya menjadi `[IN_PROGRESS]` menggunakan:
+              `node .vscode/tele-vs-code/tele-task.js start "<TASK-ID>"`
+            - Terapkan perubahan kode yang diminta dan lakukan pengujian/verifikasi hingga tuntas 100%.
+            - Tandai selesai menggunakan perintah:
+              `node .vscode/tele-vs-code/tele-task.js done "<TASK-ID>" "<Ringkasan hasil 100% selesai>"`
+              *(Perintah ini otomatis memperbarui status di server menjadi DONE, mencatat riwayat ke TASK_QUEUE.md, dan mengirim notifikasi SELESAI ke Telegram)*.
+            - Lanjutkan ke tugas `[PENDING]` berikutnya HANYA jika tugas berikutnya juga ditujukan untuk Anda, sampai seluruh tugas milik Anda selesai atau antrean berikutnya milik agen lain.
+            - Setelah tidak ada lagi tugas aktif milik Anda di `TASK_QUEUE.md`, AI Agent langsung kembali ke mode standby (Smart Idle Mode) tanpa membuat cron loop atau timer di IDE.
 
 2. **LANGKAH 2 (PENCATATAN PERINTAH BARU DARI USER):**
    - Jika tugas antrean sudah selesai atau tidak ada antrean aktif, dan user memberikan instruksi baru di chat ini:
@@ -87,9 +94,10 @@ Dalam lingkungan kerja dengan beberapa AI Agent sekaligus (misal: Antigravity, C
        2. Jika handler disetel ke `auto` dan sistem mendeteksi tidak ada CLI agent di PATH, Tele-vs-Code otomatis melakukan fallback ke `Agent IDE`.
        3. Tele-vs-Code secara otomatis menyalin prompt resmi tugas ke clipboard dan membuka jendela Chat IDE (`workbench.action.chat.open`). Pengguna cukup menempelkan prompt (`Ctrl+V`) ke Chat IDE.
        4. Agent IDE yang menerima prompt tugas langsung mengeksekusi tugas aktif yang diberikan hingga tuntas 100%, lalu kembali ke mode standby tanpa membuat background loop.
-   - Jika field `- **Agent:**` menunjuk ke Agent lain (misal `Claude Agent` sementara Anda adalah `Antigravity`):
-     - Biarkan agent tersebut mengeksekusinya jika sesi kerjanya sedang aktif di terminal/workspace.
-     - Jika pengguna secara eksplisit meminta Anda di chat ini untuk menangani antrean ("handle task queue", "proses antrian"), Anda dapat mengambil alih (fallback executor) dan menuntaskannya hingga 100% selesai.
+   - Jika field `- **Agent:**` menunjuk ke Agent lain (misal `Copilot Agent` atau `Claude Agent` sementara Anda adalah `Antigravity`):
+     ⛔ **DILARANG KERAS mengambil atau mengeksekusi tugas tersebut secara otomatis!**
+     - Biarkan agent tersebut mengeksekusinya di sesinya masing-masing (ekstensi VS Code otomatis memfokuskan ke panel agent yang bersangkutan).
+     - HANYA ambil alih jika pengguna di chat ini secara eksplisit meminta Anda mengambil alih tugas spesifik tersebut (misal: "ambil alih tugas #TASK-xxx" atau "kerjakan tugas #TASK-xxx sekarang").
 
 ---
 
