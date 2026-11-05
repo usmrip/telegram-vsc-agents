@@ -53,7 +53,7 @@ jobs:
 
       - name: 🔨 Build VSIX Package
         run: |
-          node vscode-extension/build-vsix.js
+          node vscode-extension/build-vsix.js --prod
 
       - name: 📤 Upload VSIX Artifact
         uses: actions/upload-artifact@v4
@@ -69,6 +69,8 @@ jobs:
           MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
         run: |
           cd vscode-extension
+          # Pastikan package.json memiliki versi semver murni tanpa suffix dev/beta
+          node -e "const p = require('./package.json'); p.version = p.version.replace(/-.*$/, ''); require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');"
           VSIX_FILE=$(node -p "const p = require('./package.json'); p.name + '-' + p.version + '.vsix'")
           echo "📦 Menyiapkan publikasi berkas: $VSIX_FILE"
           VSIX_PATH="../publish/$VSIX_FILE"

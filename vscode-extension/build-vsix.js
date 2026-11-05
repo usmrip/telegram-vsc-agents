@@ -19,7 +19,8 @@ const pkg = JSON.parse(rawPkg);
 
 // Parsing Argumen CLI
 const args = process.argv.slice(2);
-const isProd = args.includes('--prod') || args.includes('--publish') || args.includes('-p');
+const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+const isProd = args.includes('--prod') || args.includes('--publish') || args.includes('-p') || isCI;
 const customLetterArg = args.find(a => a.startsWith('--letter='));
 const customLetter = customLetterArg ? customLetterArg.split('=')[1].toLowerCase().trim() : null;
 
