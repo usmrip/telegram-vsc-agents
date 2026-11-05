@@ -202,8 +202,8 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
     }
     let content = fs.readFileSync(queueFile, 'utf-8');
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    const escapedId = (taskId || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\const escapedId = (taskId || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');');
-    const rawShort = (taskId || '').replace(/^#?(?:TASK-)?/i, '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\const escapedId = (taskId || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');');
+    const escapedId = (taskId || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const rawShort = (taskId || '').replace(/^#?(?:TASK-)?/i, '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
     const idPattern = `(?:#?TASK-)?${rawShort}`;
 
     if (status === 'DONE' || status === 'FAILED') {
@@ -480,6 +480,8 @@ async function run() {
       if (fs.existsSync(queueFile)) {
         const qText = fs.readFileSync(queueFile, 'utf-8');
         const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const rawShort = (taskId || '').replace(/^#?(?:TASK-)?/i, '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const idPattern = `(?:#?TASK-)?${rawShort}`;
         const mActive = new RegExp(`### \\[.*?\\]\\s+${idPattern}[\\s\\S]*?-\\s+\\*\\*Waktu:\\*\\*\\s*([^\\r\\n]+)`, 'i').exec(qText);
         if (mActive) {
           localStartTime = mActive[1].trim();

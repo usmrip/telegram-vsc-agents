@@ -1265,7 +1265,7 @@ if ($action === 'check_task_updates') {
     $lastHash = $_GET['hash'] ?? '';
 
     // Ambil data status dan tugas terbaru untuk user ini (30 tugas teratas)
-    $stmtU = $db->prepare("SELECT id, status, updated_at, created_at, instruction, notes, result, sender, project_id, command FROM tasks WHERE user_id = ? ORDER BY id DESC LIMIT 30");
+    $stmtU = $db->prepare("SELECT id, status, updated_at, created_at, instruction, notes, result, sender, project_id, command FROM tasks WHERE user_id = ? ORDER BY created_at DESC, updated_at DESC, rowid DESC LIMIT 40");
     $stmtU->execute([$currentUser['id']]);
     $recentTasks = $stmtU->fetchAll(PDO::FETCH_ASSOC);
 
