@@ -2942,23 +2942,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
       startAutoWorker();
     }
 
-    // Popup Panduan Manual: Muncul setiap kali VSIX diaktifkan (Startup)
-    setTimeout(() => {
-      showTimedNotification(
-        "🤖 Tele-vs-Code Siap! Prioritas Pekerja: Antigravity AI Agent. Ketik 'proses antrian' di Chat AI untuk menyelesaikan TASK_QUEUE.md.",
-        10,
-        "📋 Salin Prompt AI",
-        "📖 Buka TASK_QUEUE.md"
-      ).then(act => {
-        if (act === "📋 Salin Prompt AI") {
-          const prompt = buildAgentPrompt('', '');
-          vscode.env.clipboard.writeText(prompt);
-          showTimedNotification("📋 Prompt 'proses antrian' berhasil disalin ke clipboard! Tempelkan di Chat AI Agent Anda.", 5);
-        } else if (act === "📖 Buka TASK_QUEUE.md") {
-          vscode.commands.executeCommand("telegramNotifier.openQueue");
-        }
-      });
-    }, 2500);
+
   }, 1200);
 
   // 1. Menu Utama via Status Bar (Rapi, Tanpa Menu Ganda, Bilingual ID/EN)
