@@ -4135,7 +4135,7 @@ if (!empty($_SESSION['tvsc_uid'])) {
     }
 }
 
-if (!$currentUser && in_array($action, ['check_bot_active', 'check_bot_verification'])) {
+if (!$currentUser && (in_array($action, ['check_bot_active', 'check_bot_verification']) || ($action === 'connect_bot_commands' && (!empty($_GET['ajax']) || !empty($_POST['ajax']))))) {
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['ok' => false, 'description' => 'Sesi berakhir. Silakan muat ulang halaman dan masuk kembali.']);
     exit;
@@ -4603,8 +4603,15 @@ if ($currentUser) {
         }
         $prj = $stmtP->fetch(PDO::FETCH_ASSOC);
 
+        $isAjax = (!empty($_GET['ajax']) || !empty($_POST['ajax']));
+
         if (!$prj || empty($prj['bot_token'])) {
             $errorMsg = 'Bot Token belum diisi pada proyek ini! Harap masukkan dan simpan Telegram Bot Token terlebih dahulu.';
+            if ($isAjax) {
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['ok' => false, 'description' => $errorMsg]);
+                exit;
+            }
         } else {
             // 1. Pasang Webhook
             $webhookTarget = "https://biru.co.id/tele-vs-code/webhook?pkey=" . urlencode($prj['project_key']);
@@ -4621,6 +4628,13 @@ if ($currentUser) {
             $botMe = callTelegram($prj['bot_token'], 'getMe');
             $botUser = !empty($botMe['result']['username']) ? ('@' . $botMe['result']['username']) : 'Bot Telegram';
 
+            // Simpan bot_username ke database
+            if (!empty($botMe['result']['username'])) {
+                try {
+                    $db->prepare("UPDATE projects SET bot_username = ? WHERE id = ?")->execute([$botMe['result']['username'], $prj['id']]);
+                } catch (Exception $e) {}
+            }
+
             if (!empty($resWebhook['ok']) && !empty($resCmd['ok'])) {
                 $countCmd = count($commands);
                 $successMsg = "⚡ <b>Perintah & Webhook Berhasil Dihubungkan ke Bot!</b><br>" .
@@ -4632,6 +4646,31 @@ if ($currentUser) {
                 $successMsg = "✅ Webhook berhasil dipasang (Bot siap menerima pesan), namun pendaftaran menu perintah mengalami kendala: " . htmlspecialchars($resCmd['description'] ?? 'Error API');
             } else {
                 $errorMsg = "Gagal menghubungkan bot ke server: " . htmlspecialchars($resWebhook['description'] ?? 'Periksa kembali Bot Token Anda');
+            }
+
+            // Respons JSON untuk Wizard Step 2 (AJAX)
+            if ($isAjax) {
+                header('Content-Type: application/json; charset=utf-8');
+                if (!empty($resWebhook['ok']) && !empty($resCmd['ok'])) {
+                    echo json_encode([
+                        'ok' => true,
+                        'message' => 'Perintah & Webhook berhasil dipasang!',
+                        'bot_username' => $botUser,
+                        'commands_count' => count($commands)
+                    ]);
+                } elseif (!empty($resWebhook['ok'])) {
+                    echo json_encode([
+                        'ok' => true,
+                        'message' => 'Webhook aktif, menu perintah: ' . ($resCmd['description'] ?? 'OK'),
+                        'bot_username' => $botUser
+                    ]);
+                } else {
+                    echo json_encode([
+                        'ok' => false,
+                        'description' => $resWebhook['description'] ?? 'Gagal pasang webhook Telegram. Periksa kembali Bot Token.'
+                    ]);
+                }
+                exit;
             }
         }
         $currentTab = 'projects';
@@ -8572,7 +8611,14 @@ async function executeWizInstallCommands() {
 
     try {
         const res = await fetch('?action=connect_bot_commands&id=' + wizProjectId + '&ajax=1');
-        const data = await res.json();
+        const rawText = await res.text();
+        let data;
+        try {
+            data = JSON.parse(rawText);
+        } catch (jsonErr) {
+            const cleanSnippet = rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 120);
+            data = { ok: false, description: cleanSnippet || 'Terjadi kesalahan internal pada server saat menghubungkan webhook.' };
+        }
 
         if (btn) {
             btn.disabled = false;
