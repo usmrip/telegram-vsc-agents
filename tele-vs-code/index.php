@@ -165,7 +165,7 @@ function getDb($forceNew = false) {
         $stmtVer = $pdo->query("PRAGMA user_version");
         $ver = (int)$stmtVer->fetchColumn();
         $stmtVer->closeCursor();
-        $targetVer = 3;
+        $targetVer = 5;
         if ($ver < $targetVer) {
             runDatabaseMigrations($pdo);
             $pdo->exec("PRAGMA user_version = $targetVer;");
@@ -1691,25 +1691,34 @@ if ($action === 'webhook') {
     $activeProjId = 0;
     $chatDefaultAgent = '';
     if ($incomingChatId) {
-        if (!empty($senderUserId)) {
-            $stmtSes = $db->prepare("SELECT active_project_id, default_agent FROM chat_sessions WHERE chat_id = ?");
-            $stmtSes->execute([$incomingChatId . ':' . $senderUserId]);
-            $rowSes = $stmtSes->fetch(PDO::FETCH_ASSOC);
-            if ($rowSes) {
-                $activeProjId = (int)($rowSes['active_project_id'] ?? 0);
-                $chatDefaultAgent = trim($rowSes['default_agent'] ?? '');
+        try {
+            if (!empty($senderUserId)) {
+                $stmtSes = $db->prepare("SELECT active_project_id, default_agent FROM chat_sessions WHERE chat_id = ?");
+                $stmtSes->execute([$incomingChatId . ':' . $senderUserId]);
+                $rowSes = $stmtSes->fetch(PDO::FETCH_ASSOC);
+                if ($rowSes) {
+                    $activeProjId = (int)($rowSes['active_project_id'] ?? 0);
+                    $chatDefaultAgent = trim($rowSes['default_agent'] ?? '');
+                }
+                $stmtSes->closeCursor();
             }
-            $stmtSes->closeCursor();
-        }
-        if ($activeProjId <= 0) {
-            $stmtSes = $db->prepare("SELECT active_project_id, default_agent FROM chat_sessions WHERE chat_id = ?");
-            $stmtSes->execute([$incomingChatId]);
-            $rowSes = $stmtSes->fetch(PDO::FETCH_ASSOC);
-            if ($rowSes) {
-                if ($activeProjId <= 0) $activeProjId = (int)($rowSes['active_project_id'] ?? 0);
-                if (!$chatDefaultAgent) $chatDefaultAgent = trim($rowSes['default_agent'] ?? '');
+            if ($activeProjId <= 0) {
+                $stmtSes = $db->prepare("SELECT active_project_id, default_agent FROM chat_sessions WHERE chat_id = ?");
+                $stmtSes->execute([$incomingChatId]);
+                $rowSes = $stmtSes->fetch(PDO::FETCH_ASSOC);
+                if ($rowSes) {
+                    if ($activeProjId <= 0) $activeProjId = (int)($rowSes['active_project_id'] ?? 0);
+                    if (!$chatDefaultAgent) $chatDefaultAgent = trim($rowSes['default_agent'] ?? '');
+                }
+                $stmtSes->closeCursor();
             }
-            $stmtSes->closeCursor();
+        } catch (Exception $e) {
+            try {
+                $stmtSes = $db->prepare("SELECT active_project_id FROM chat_sessions WHERE chat_id = ?");
+                $stmtSes->execute([$incomingChatId . (!empty($senderUserId) ? ':' . $senderUserId : '')]);
+                $activeProjId = (int)$stmtSes->fetchColumn();
+                $stmtSes->closeCursor();
+            } catch (Exception $e2) {}
         }
     }
 
