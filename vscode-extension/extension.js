@@ -899,7 +899,8 @@ class TaskCategoryItem extends vscode.TreeItem {
 class TaskItem extends vscode.TreeItem {
   constructor(task, collapsibleState = vscode.TreeItemCollapsibleState.Collapsed) {
     const statusPrefix = `[${task.status}]`;
-    super(`${statusPrefix} ${task.id}`, collapsibleState);
+    const shortId = shortTaskId(task.id);
+    super(`${statusPrefix} ${shortId}`, collapsibleState);
     this.task = task;
     this.contextValue = 'taskItem';
 
@@ -920,7 +921,7 @@ class TaskItem extends vscode.TreeItem {
     }
 
     const tt = new vscode.MarkdownString();
-    tt.appendMarkdown(`### ${task.status === 'DONE' ? '✅' : '⚡'} Tugas [${task.id}]\n\n`);
+    tt.appendMarkdown(`### ${task.status === 'DONE' ? '✅' : '⚡'} Tugas [${shortId}] (${task.id})\n\n`);
     tt.appendMarkdown(`- **Status:** \`${task.status}\`\n`);
     if (task.waktu) tt.appendMarkdown(`- **Waktu:** ${task.waktu}\n`);
     if (task.pengirim) tt.appendMarkdown(`- **Pengirim:** ${task.pengirim}\n`);
@@ -1276,6 +1277,28 @@ function activate(context) {
   // Quota Guard: Cache pemicuan tugas terakhir untuk mencegah eksekusi berulang (hemat kuota)
   const recentlyDispatchedTasks = new Map();
 
+  // Helper: Persingkat Nama Task (Ambil 4 Karakter Terakhir)
+  function shortTaskId(taskId) {
+    if (!taskId) return '';
+    const s = String(taskId).trim();
+    const m = s.match(/([a-zA-Z0-9]{4})$/);
+    if (m) {
+      return `#${m[1].toLowerCase()}`;
+    }
+    return s;
+  }
+
+  // Helper: Pencocokan Task ID fleksibel (cocok persis atau 4 karakter terakhir)
+  function isSameTaskId(a, b) {
+    if (!a || !b) return false;
+    const ca = String(a).toLowerCase().replace(/^#/, '').trim();
+    const cb = String(b).toLowerCase().replace(/^#/, '').trim();
+    if (ca === cb) return true;
+    if (ca.length === 4 && cb.endsWith(ca)) return true;
+    if (cb.length === 4 && ca.endsWith(cb)) return true;
+    return false;
+  }
+
   function resolveAgentHandlerFromText(agentStr) {
     if (!agentStr) return null;
     const s = agentStr.toLowerCase().trim();
@@ -1365,7 +1388,7 @@ function activate(context) {
         const cleanCurrent = taskId.toLowerCase().replace(/^#/, '');
         while ((mProg = regexProg.exec(activeSection)) !== null) {
           const foundId = mProg[1];
-          if (foundId.toLowerCase().replace(/^#/, '') !== cleanCurrent) {
+          if (!isSameTaskId(foundId, taskId)) {
             const warnMsg = `⚠️ [Tele-vs-Code] Tugas ${foundId} masih berstatus [IN_PROGRESS]. Berdasarkan aturan, tugas harus dikerjakan satu per satu secara sekuensial.`;
             log('warn', warnMsg);
             vscode.window.showWarningMessage(warnMsg);
@@ -2281,7 +2304,7 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                   const qContentNow = fs.existsSync(queueFile) ? fs.readFileSync(queueFile, 'utf-8') : '';
                   const activeSec = qContentNow.split('## ✅ Riwayat Tugas Selesai')[0];
                   const mActive = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i.exec(activeSec);
-                  if (!mActive || mActive[1].toLowerCase() === taskItem.id.toLowerCase()) {
+                  if (!mActive || isSameTaskId(mActive[1], taskItem.id)) {
                     const taskAgentOverride = resolveAgentHandlerFromText(taskItem.assigned_agent);
                     executeTaskWithAgent(taskItem.id, taskItem.instruction, taskAgentOverride);
                   } else {

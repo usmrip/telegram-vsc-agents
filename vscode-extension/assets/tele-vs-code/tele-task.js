@@ -99,6 +99,28 @@ function getNotifyScript() {
   return candidates.find(p => fs.existsSync(p)) || null;
 }
 
+// Helper: Persingkat Nama Task (Ambil 4 Karakter Terakhir)
+function shortTaskId(taskId) {
+  if (!taskId) return '';
+  const s = String(taskId).trim();
+  const m = s.match(/([a-zA-Z0-9]{4})$/);
+  if (m) {
+    return `#${m[1].toLowerCase()}`;
+  }
+  return s;
+}
+
+// Helper: Pencocokan Task ID fleksibel (cocok persis atau 4 karakter terakhir)
+function isSameTaskId(a, b) {
+  if (!a || !b) return false;
+  const ca = String(a).toLowerCase().replace(/^#/, '').trim();
+  const cb = String(b).toLowerCase().replace(/^#/, '').trim();
+  if (ca === cb) return true;
+  if (ca.length === 4 && cb.endsWith(ca)) return true;
+  if (cb.length === 4 && ca.endsWith(cb)) return true;
+  return false;
+}
+
 // Cek apakah ada tugas lain yang sedang [IN_PROGRESS] di antrean aktif
 function getOtherActiveInProgressTask(currentTaskId = '') {
   if (!fs.existsSync(queueFile)) return null;
@@ -111,7 +133,7 @@ function getOtherActiveInProgressTask(currentTaskId = '') {
     while ((match = regex.exec(activeSection)) !== null) {
       const foundId = match[1];
       const cleanFound = foundId.toLowerCase().replace(/^#/, '');
-      if (cleanFound !== cleanCurrent) {
+      if (!isSameTaskId(foundId, currentTaskId)) {
         return foundId.startsWith('#') ? foundId : '#' + foundId;
       }
     }
@@ -275,7 +297,7 @@ async function run() {
       const data = await res.json();
 
       if (data.ok) {
-        console.log(`✅ [${data.id}] Berhasil dicatat ke Dashboard Status Server (${status}).`);
+        console.log(`✅ [${shortTaskId(data.id)}] (${data.id}) Berhasil dicatat ke Dashboard Status Server (${status}).`);
         updateLocalQueueFile(data.id, instruction, sender, status, notes);
 
         // Kirim notifikasi ke Telegram bahwa tugas dari IDE Chat sedang diproses
@@ -366,7 +388,7 @@ async function run() {
       });
       const data = await res.json();
       if (data.ok) {
-        console.log(`⚡ [${taskId}] Status di server berhasil diperbarui ke: IN_PROGRESS`);
+        console.log(`⚡ [${shortTaskId(taskId)}] Status di server berhasil diperbarui ke: IN_PROGRESS`);
 
         // Perbarui status di TASK_QUEUE.md lokal menjadi [IN_PROGRESS]
         updateLocalQueueFile(taskId, '', '', 'IN_PROGRESS', note);

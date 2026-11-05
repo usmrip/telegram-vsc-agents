@@ -422,6 +422,44 @@ function getTimezoneAbbr($tzName) {
     }
 }
 
+// Helper: Persingkat Nama Task (Ambil 4 Karakter Terakhir)
+function shortTaskId($taskId) {
+    if (empty($taskId)) return '';
+    $clean = trim($taskId);
+    if (preg_match('/([a-zA-Z0-9]{4})$/', $clean, $m)) {
+        return '#' . strtolower($m[1]);
+    }
+    return $clean;
+}
+
+// Helper: Resolusi Task ID dari Short ID (4 Karakter Terakhir) atau Full ID
+function resolveTaskId($db, $taskId) {
+    if (empty($taskId)) return $taskId;
+    $clean = trim($taskId);
+    $stmt = $db->prepare("SELECT id FROM tasks WHERE id = ? LIMIT 1");
+    $stmt->execute([$clean]);
+    $found = $stmt->fetchColumn();
+    if ($found) return $found;
+
+    $withHash = str_starts_with($clean, '#') ? $clean : '#' . $clean;
+    $withoutHash = ltrim($clean, '#');
+    $stmt = $db->prepare("SELECT id FROM tasks WHERE id = ? OR id = ? LIMIT 1");
+    $stmt->execute([$withHash, $withoutHash]);
+    $found = $stmt->fetchColumn();
+    if ($found) return $found;
+
+    // Ambil 4 karakter terakhir untuk mencocokkan task
+    if (preg_match('/([a-zA-Z0-9]{4})$/', $clean, $m)) {
+        $last4 = strtolower($m[1]);
+        $stmt = $db->prepare("SELECT id FROM tasks WHERE LOWER(id) LIKE ? OR LOWER(id) LIKE ? ORDER BY id DESC LIMIT 1");
+        $stmt->execute(['%' . $last4, '%-' . $last4]);
+        $found = $stmt->fetchColumn();
+        if ($found) return $found;
+    }
+
+    return $clean;
+}
+
 // Helper: Apply Default Timezone
 function applyTimezone($tz) {
     $tz = trim($tz ?: 'Asia/Jakarta');
@@ -2480,7 +2518,7 @@ if ($action === 'webhook') {
             }
         }
 
-        $taskId = '#TASK-' . date('Ymd-His') . '-' . substr(bin2hex(random_bytes(2)), 0, 4);
+        $taskId = '#TASK-' . substr(bin2hex(random_bytes(2)), 0, 4);
         $now = date('Y-m-d H:i:s');
         $taskSender = $sender;
         if ($isPrivateChat) {
@@ -2887,7 +2925,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 
         $prjId = $targetProject ? (int)$targetProject['id'] : 0;
         $prjKey = $targetProject ? $targetProject['project_key'] : 'prj_general';
-        $taskId = trim($_POST['task_id'] ?? ($_GET['task_id'] ?? ($_POST['id'] ?? ($_GET['id'] ?? ''))));
+        $taskId = resolveTaskId($db, trim($_POST['task_id'] ?? ($_GET['task_id'] ?? ($_POST['id'] ?? ($_GET['id'] ?? '')))));
         $caption = trim($_POST['caption'] ?? ($_GET['caption'] ?? ($_POST['description'] ?? ($_GET['description'] ?? ''))));
         $uploadedBy = trim($_POST['uploaded_by'] ?? ($_GET['uploaded_by'] ?? 'IDE'));
 
@@ -3253,7 +3291,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 
         $isIde = !empty($_POST['is_ide']) || !empty($_GET['is_ide']) || stripos($sender, 'IDE') !== false || stripos($sender, 'VS Code') !== false;
         $idPrefix = $isIde ? '#TASK-IDE-' : '#TASK-';
-        $taskId = $idPrefix . date('Ymd-His') . '-' . substr(bin2hex(random_bytes(2)), 0, 4);
+        $taskId = '#TASK-' . substr(bin2hex(random_bytes(2)), 0, 4);
         $assignedAgent = trim($_POST['agent'] ?? ($_GET['agent'] ?? ($_POST['assigned_agent'] ?? ($_GET['assigned_agent'] ?? ''))));
         if (!$assignedAgent) {
             if (preg_match('/(?:^|\s)@(\w+)/i', $instruction, $mAgt)) {
@@ -3301,7 +3339,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 
         // Update Status Tugas Menjadi IN_PROGRESS (Requirement: notifikasi telegram jika memulai pekerjaan detail termasuk perintah)
         if ($action === 'api_in_progress') {
-        $taskId = $_GET['id'] ?? ($_POST['id'] ?? '');
+        $taskId = resolveTaskId($db, $_GET['id'] ?? ($_POST['id'] ?? ''));
         $notes = trim($_POST['notes'] ?? ($_GET['notes'] ?? 'Sedang dikerjakan oleh AI Agent'));
         $now = date('Y-m-d H:i:s');
 
@@ -3406,7 +3444,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 
     // Ambil Data Spesifik Satu Tugas (Selain cari di lokal, cari juga di remote)
     if ($action === 'api_get_task') {
-        $taskId = trim($_GET['id'] ?? ($_POST['id'] ?? ''));
+        $taskId = resolveTaskId($db, trim($_GET['id'] ?? ($_POST['id'] ?? '')));
         if (!$taskId) {
             echo json_encode(['ok' => false, 'error' => 'Parameter id tugas wajib diisi']);
             exit;
@@ -3442,7 +3480,7 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
 
     // Tandai Tugas Selesai / Gagal
     if ($action === 'api_done' || $action === 'api_failed') {
-        $taskId = $_GET['id'] ?? ($_POST['id'] ?? '');
+        $taskId = resolveTaskId($db, $_GET['id'] ?? ($_POST['id'] ?? ''));
         $result = trim($_POST['result'] ?? ($_GET['result'] ?? ''));
         $notes = trim($_POST['notes'] ?? ($_GET['notes'] ?? ''));
         $cmdParam = trim($_POST['command'] ?? ($_GET['command'] ?? ''));
@@ -4450,7 +4488,7 @@ if ($currentUser) {
         if (!$instruction) {
             $errorMsg = 'Instruksi tugas tidak boleh kosong!';
         } else {
-            $taskId = '#TASK-' . date('Ymd-His') . '-' . substr(bin2hex(random_bytes(2)), 0, 4);
+            $taskId = '#TASK-' . substr(bin2hex(random_bytes(2)), 0, 4);
             $now = date('Y-m-d H:i:s');
             $ins = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, command) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)");
             $ins->execute([$taskId, $currentUser['id'], $prjId, $instruction, $sender, $now, $now, $command]);
