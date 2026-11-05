@@ -85,35 +85,34 @@ Dalam lingkungan kerja dengan beberapa AI Agent sekaligus (misal: Antigravity, C
        1. Sistem Tele-vs-Code menyediakan handler resmi `Agent IDE` (`telegramNotifier.agentHandler: "ide"`).
        2. Jika handler disetel ke `auto` dan sistem mendeteksi tidak ada CLI agent di PATH, Tele-vs-Code otomatis melakukan fallback ke `Agent IDE`.
        3. Tele-vs-Code secara otomatis menyalin prompt resmi tugas ke clipboard dan membuka jendela Chat IDE (`workbench.action.chat.open`). Pengguna cukup menempelkan prompt (`Ctrl+V`) ke Chat IDE.
-       4. Agent IDE yang membaca prompt pemicu (`baca TASK_QUEUE.md secara berkala...`) wajib mendaftarkan task scheduler berkala (cron daemon) sehingga seluruh antrean berikutnya dikerjakan secara otonom tanpa memerlukan binary CLI eksternal.
+       4. Agent IDE yang menerima prompt tugas langsung mengeksekusi tugas aktif yang diberikan hingga tuntas 100%, lalu kembali ke mode standby tanpa membuat background loop.
    - Jika field `- **Agent:**` menunjuk ke Agent lain (misal `Claude Agent` sementara Anda adalah `Antigravity`):
      - Biarkan agent tersebut mengeksekusinya jika sesi kerjanya sedang aktif di terminal/workspace.
      - Jika pengguna secara eksplisit meminta Anda di chat ini untuk menangani antrean ("handle task queue", "proses antrian"), Anda dapat mengambil alih (fallback executor) dan menuntaskannya hingga 100% selesai.
 
 ---
 
-## ⏰ 5. CRON & AUTO-SCHEDULE SYSTEM PADA AI AGENT
-Ketika sebuah tugas ditujukan ke Agent (misal `Antigravity AI Agent` atau `@agent`):
+## ⏰ 5. ARSITEKTUR ZERO-TOKEN POLLING & PERINGATAN CRON BERKALA
+Dalam ekosistem Tele-vs-Code, pemantauan antrean tugas dirancang hemat kuota (Zero-Token Architecture):
 
-1. **Pemicu Cron Otomatis pada Agent:**
-   - Setiap kali Agent aktif di sesi workspace, Agent WAJIB mengaktifkan pemantauan berkala (*autonomous background schedule / cron daemon*) menggunakan fasilitas scheduler yang tersedia (misal: tool `schedule` dengan `CronExpression: "*/3 * * * *"` atau timer loop).
-   - Melalui mekanisme cron ini, Agent secara otomatis terbangun secara berkala untuk membaca `TASK_QUEUE.md` dan langsung mengeksekusi antrean tugas yang masuk secara berurutan hingga tuntas 100%, **tanpa menunggu prompt manual dari pengguna di IDE Chat**.
-   - Ekstensi VS Code Tele-vs-Code menyediakan konfigurasi interval waktu berkala yang dapat disesuaikan (default: 3 menit, rentang 1-60m) melalui setting `telegramNotifier.agentCronInterval` atau perintah `telegramNotifier.setAgentCronInterval`, serta tersimpan di `config.env` (`TELE_AGENT_CRON_INTERVAL`).
-   - Hal ini menjamin pengguna yang berada di luar ruangan (hanya menggunakan Telegram di HP) tetap mendapatkan eksekusi coding yang cepat dan laporan penyelesaian tugas yang akurat.
+1. **Larangan AI Agent Polling Loop (Pencegahan Pemborosan Kuota):**
+   - AI Agent (LLM) **DILARANG KERAS** mendaftarkan background cron/timer berkala (misal loop setiap 1-5 menit) hanya untuk memeriksa apakah ada tugas baru di `TASK_QUEUE.md`.
+   - Menjalankan cron loop pada LLM akan memproses ulang seluruh System Prompt, riwayat chat, dan tools definition di setiap siklus, yang dapat **menguras puluhan juta token per hari meskipun tidak ada tugas aktif**.
+   - Model kerja AI Agent adalah murni **Event-Driven / On-Demand**: Agent hanya dieksekusi saat ada instruksi atau tugas nyata yang dipicu.
 
-2. **Dukungan Perintah Jadwal dari Telegram:**
-   - Pengguna dapat membuat tugas berkala dari Telegram menggunakan format:
-     - `/cron <instruksi>` atau `/schedule <instruksi>`
-     - Contoh: `/cron @antigravity cek error log setiap 5 menit` atau `/schedule @antigravity backup database`
-   - Agent yang menerima tugas tersebut wajib mendaftarkan task scheduler dan melaporkan statusnya ke Telegram.
+2. **Pendelegasian Polling ke Worker Lokal (Gratis 0 Token):**
+   - Pemantauan berkala terhadap server remote dan `TASK_QUEUE.md` sepenuhnya dijalankan oleh **Ekstensi VS Code** atau **Node.js Worker (`tele-worker.js`)** menggunakan proses background lokal.
+   - Polling lokal ini berjalan di CPU pengguna dan koneksi HTTP biasa dengan biaya **0 token / Rp 0 (100% Gratis)**.
+   - Ketika worker lokal mendeteksi adanya tugas baru berstatus `[PENDING]`, barulah worker/ekstensi mendelegasikan tugas tersebut ke AI Agent secara terarah.
 
-3. **Format Prompt Pemicu Tugas Berkala:**
-   - Prompt resmi dari ekstensi untuk mengaktifkan pemantauan berkala pada AI Agent adalah:
-     👉 `"baca TASK_QUEUE.md secara berkala, buat task berkala untuk membaca dan kerjakan yang berstatus waiting satu persatu"`
-   - Saat AI Agent menerima prompt ini (baik melalui terminal runner, clipboard paste, atau chat IDE), Agent WAJIB langsung:
-     1. Mendaftarkan background schedule/timer (misal tool `schedule` dengan `CronExpression: "*/3 * * * *"` atau timer loop berulang).
-     2. Membaca `TASK_QUEUE.md` secara berkala.
-     3. Mengambil dan mengeksekusi tugas berstatus `[PENDING]` / `[WAITING]` satu per satu secara sekuensial hingga 100% selesai.
+3. **Peringatan Wajib untuk Tugas Berkala (`/cron` / `/schedule`):**
+   - Jika pengguna meminta penjadwalan berkala (`/cron` atau `/schedule`), sistem dan AI Agent WAJIB memberikan peringatan:
+     > ⚠️ **PERINGATAN KUOTA TOKEN:** Menjalankan tugas AI Agent secara berkala (cron loop) akan menguras kuota kredit token secara masif karena setiap iterasi memproses ulang seluruh konteks chat. Disarankan untuk memperbesar interval (misal harian atau per jam) atau menggunakan task script lokal otomatis.
+
+4. **Format Prompt Resmi Tanpa Looping:**
+   - Prompt resmi dari ekstensi untuk AI Agent adalah:
+     👉 `"Periksa file TASK_QUEUE.md dan selesaikan tugas <TASK-ID> sampai tuntas 100% sesuai panduan AGENTS.md."`
+   - Prompt TIDAK LAGI menyertakan instruksi pembuatan cron/task berkala sehingga kuota pengguna terlindungi 100%.
 
 ---
 

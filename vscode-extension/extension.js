@@ -1218,13 +1218,12 @@ function activate(context) {
     return agents;
   }
 
-  // Format Prompt Resmi AI Agent (dengan instruksi pemantauan berkala & eksekusi sekuensial)
+  // Format Prompt Resmi AI Agent (Event-Driven / On-Demand, Bebas Looping Penguras Token)
   function buildAgentPrompt(taskId = '', instruction = '') {
-    const periodicDirective = 'Baca TASK_QUEUE.md secara berkala, buat task berkala untuk membaca dan kerjakan yang berstatus waiting satu persatu.';
     if (taskId) {
-      return `Periksa file TASK_QUEUE.md dan selesaikan tugas ${taskId} ("${instruction || ''}") sampai tuntas 100% sesuai AGENTS.md. ${periodicDirective}`;
+      return `Periksa file TASK_QUEUE.md dan selesaikan tugas ${taskId} ("${instruction || ''}") sampai tuntas 100% sesuai panduan AGENTS.md.`;
     }
-    return `Periksa file TASK_QUEUE.md dan selesaikan seluruh tugas aktif sampai tuntas 100% sesuai AGENTS.md. ${periodicDirective}`;
+    return `Periksa file TASK_QUEUE.md dan selesaikan tugas aktif yang ada sampai tuntas 100% sesuai panduan AGENTS.md.`;
   }
 
   // Quota Guard: Cache pemicuan tugas terakhir untuk mencegah eksekusi berulang (hemat kuota)
@@ -2503,6 +2502,36 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
     }
 
     vscode.window.showInformationMessage(`⏱️ Durasi refresh polling worker berhasil diubah menjadi ${newInterval} detik.`);
+  }));
+
+  // Atur Interval Cron Agent (dengan Warning Penghematan Kuota Token)
+  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.setAgentCronInterval', async () => {
+    const cur = getEffectiveConfig();
+    const warnChoice = await vscode.window.showWarningMessage(
+      '⚠️ Peringatan Kuota Token: Menjalankan polling berkala dengan AI Agent menguras jutaan token per hari karena memproses ulang seluruh prompt. Sangat disarankan mengandalkan Worker Ekstensi bawaan (0 token gratis). Lanjutkan?',
+      'Lanjutkan Atur Interval',
+      'Batal (Gunakan Worker 0 Token)'
+    );
+    if (warnChoice !== 'Lanjutkan Atur Interval') return;
+
+    const input = await vscode.window.showInputBox({
+      title: t('setCronIntervalTitle'),
+      prompt: t('setCronIntervalPrompt'),
+      value: String(cur.agentCronInterval || 3),
+      validateInput: val => {
+        const num = parseInt(val, 10);
+        if (isNaN(num) || num < 1 || num > 60) {
+          return t('setCronIntervalValidate');
+        }
+        return null;
+      }
+    });
+
+    if (!input) return;
+    const newInterval = parseInt(input, 10);
+    const vsConfig = vscode.workspace.getConfiguration('telegramNotifier');
+    await vsConfig.update('agentCronInterval', newInterval, vscode.ConfigurationTarget.Global);
+    vscode.window.showInformationMessage(t('setCronIntervalToast').replace('{interval}', newInterval));
   }));
 
   // 2b. Atur Working Directory / Folder Workspace (AGENTS.md, CLAUDE.md, TASK_QUEUE.md)

@@ -2669,6 +2669,13 @@ if ($action === 'webhook') {
                 $tipMulti = "\n\n💡 <i>Tip: Masuk ke <b>" . htmlspecialchars($targetProject['name']) . "</b>. Gunakan tag <code>#a</code> / <code>#b</code> atau <code>/use &lt;kode&gt;</code> untuk memilih proyek lain.</i>";
             }
 
+            $cronWarningNotice = "";
+            $isCronInstruction = ($taskCommand === '/cron' || $taskCommand === '/schedule' || preg_match('/(?:setiap\s+\d+\s*(?:menit|detik|jam)|secara\s+berkala|cron|schedule)/i', $instruction));
+            if ($isCronInstruction) {
+                $cronWarningNotice = "\n\n⚠️ <b>PERINGATAN KUOTA TOKEN (CRON):</b>\n"
+                                   . "<i>Menjalankan tugas AI Agent secara berkala (cron loop) menguras kuota kredit token secara masif (setiap iterasi memproses ulang seluruh prompt). Disarankan menggunakan polling worker lokal (0 token).</i>";
+            }
+
             $reply = "📥 <b>TUGAS DITERIMA DI ANTREAN!" . ($isPrivateChat ? " (Private Chat)" : "") . "</b>\n\n"
                    . "🆔 <b>ID:</b> <code>$taskId</code>\n"
                    . "📁 <b>Proyek:</b> <code>" . htmlspecialchars($targetProject['name']) . "</code> (Kode: <code>#" . ($targetProject['code'] ?: $targetProject['id']) . "</code>)\n"
@@ -2679,6 +2686,7 @@ if ($action === 'webhook') {
                    . "📝 <b>Instruksi:</b>\n<code>" . htmlspecialchars($instruction) . "</code>\n\n"
                    . "⏳ <b>Status:</b> <code>[PENDING]</code>\n"
                    . "<i>Tugas siap ditarik oleh VS Code: " . htmlspecialchars($targetProject['name']) . "</i>"
+                   . $cronWarningNotice
                    . $tipMulti;
 
             sendTelegramWithMedia($targetProject['bot_token'], $incomingChatId, $reply, $attachmentType, $attachmentUrl, $attachmentFileId, $messageId);
