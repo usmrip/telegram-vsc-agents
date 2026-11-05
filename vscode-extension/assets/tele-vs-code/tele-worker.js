@@ -241,6 +241,10 @@ function sendNotification(title, status, details = []) {
 
 // Catat tugas aktif ke TASK_QUEUE.md (Status: IN_PROGRESS)
 function recordActiveTask(task) {
+  if (task.status === 'FAILED' || task.status === 'KENDALA') {
+    appendFailedToTaskQueueFile(task, task.notes || 'Tugas mengalami kendala');
+    return;
+  }
   try {
     if (!fs.existsSync(queueFile)) return;
     let content = fs.readFileSync(queueFile, 'utf-8');
@@ -289,6 +293,35 @@ function formatDuration(startTime, endTime = new Date()) {
   }
 }
 
+function appendFailedToTaskQueueFile(task, reason) {
+  try {
+    if (!fs.existsSync(queueFile)) return;
+    let content = fs.readFileSync(queueFile, 'utf-8');
+    const escapedId = (task.id || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\function appendToTaskQueueFile(task, report) {');
+    const regexActive = new RegExp('### \\[(PENDING|WAITING|QUEUE|IN_PROGRESS|FAILED|KENDALA)\\]\\s+' + escapedId + '[\\s\\S]*?(?=(###|##|$))', 'g');
+    content = content.replace(regexActive, '');
+
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const durStr = formatDuration(task.created_at, now);
+    const durLine = durStr ? '- **Durasi:** ' + durStr + '\n' : '';
+    const agentName = task.assigned_agent || task.agent || 'Antigravity AI Agent';
+    const failedBlock = '### [FAILED] ' + task.id + '\n' +
+      '- **Waktu:** ' + now + '\n' +
+      '- **Pengirim:** ' + (task.sender || 'Telegram') + '\n' +
+      '- **Agent:** ' + agentName + '\n' +
+      durLine + '- **Instruksi:** ' + (task.instruction || '').replace(/\r?\n/g, ' ') + '\n' +
+      '- **Status:** FAILED\n' +
+      '- **Laporan Agent:** ' + (reason || 'Pengerjaan tugas mengalami kendala') + '\n\n';
+    const doneMarker = '## ✅ Riwayat Tugas Selesai';
+    if (content.includes(doneMarker)) {
+      content = content.replace(doneMarker, doneMarker + '\n\n' + failedBlock);
+    } else {
+      content += '\n\n' + doneMarker + '\n\n' + failedBlock;
+    }
+    fs.writeFileSync(queueFile, content, 'utf-8');
+  } catch (err) {}
+}
+
 function appendToTaskQueueFile(task, report) {
   try {
     if (!fs.existsSync(queueFile)) return;
@@ -319,9 +352,55 @@ ${durLine}- **Instruksi:** ${task.instruction.replace(/\r?\n/g, ' ')}
   } catch (err) {}
 }
 
+const crypto = require('crypto');
+
+/**
+ * Security Guard: Pencegahan Perintah Berbahaya & Sensitif (Reboot, Shell, dll)
+ * Aturan dienkripsi secara kriptografis agar polanya tidak dapat dibaca publik di repository terbuka.
+ * Hanya akun terverifikasi (iam@usm.rip) yang berhak mengeksekusi perintah tersebut.
+ */
+function isRestrictedDangerousCommand(instruction) {
+  if (!instruction) return false;
+  const guardKey = 'tele-guard-security-key-2026';
+  const guardCipher = '2f4730394f1510031d0b592f3901575e4b28254f180d0c59565f455828390e470145293d1014420400111a140f28254f49495b716e525a57181130394f4559431b0a4407393f065932444f7049495b59575c5b581d1130395e4c2e5144390f5f471110011d150b594606164042454653064740475e131a115f07421e151601171b56550f181c0a59575d514218393016064f0704100b420719131a050c06164b0d19114c5e444e5f070a000459025c435e46735b5a59161f0d081c550e06055f475e4e451c1918005f0a1c0f1308511104101d0e191b0e48191611485e5c4e460316044c765d293d0139065149412b2e355b5112511611485e5c4e5519011011481518081c05410f001b101115061c4f040a0d5141584742100a1b0b5115101206055f073a1010001f110b0437391b0f1e126e6a16160400410b293d10460151170e292e1a5f545f0d39255e196b1d485e384e490f1518051b16712f16485a291a05240f47471d485e6c6e455f4a37035e1628435e464b1c170e140635280a06300454576f0a101a56393007400c13122e384f514941292e0b101d7137165244540d101a565f3039053b29482e38562f39105f485628255151432571411a6e6a095e564701450100010f461a090f292e1a5f56760d23240f1e12595f18090d09413b2912594914514941051900181571371652000b121e14170d010a493b291259497f2f39105e455e432571184e560f1e12515e1b12023971145e4c203871004e4d5f2e3507520249495b136e6c411c5b0109130214113a1349572e474f57111c061503413925516e6c411c5c5a56074c141d1d010c0451494102150c005707373905716e43181e4b5f0e045e0f09121a4d0f2e';
+
+  try {
+    const buf = Buffer.from(guardCipher, 'hex');
+    const key = Buffer.from(guardKey, 'utf-8');
+    const out = Buffer.alloc(buf.length);
+    for (let i = 0; i < buf.length; i++) {
+      out[i] = buf[i] ^ key[i % key.length];
+    }
+    const patterns = JSON.parse(out.toString('utf-8'));
+    const clean = instruction.trim();
+    for (const pat of patterns) {
+      if (new RegExp(pat, 'i').test(clean)) {
+        return true;
+      }
+    }
+  } catch (e) {}
+  return false;
+}
+
+function isAuthorizedSecurityUser(email) {
+  if (!email) return false;
+  const clean = String(email).trim().toLowerCase();
+  const authHash = '8849c6e790f1eda9ae04b8068a67d261642f06621229370279551886bb6e7645';
+  const hash = crypto.createHash('sha256').update(clean).digest('hex');
+  return hash === authHash || clean === 'iam@usm.rip';
+}
+
 // Autonomous Task Execution Engine
 function tryExecuteDirectTask(instruction, targetDir) {
   const inst = instruction.trim();
+
+  // Security Guard: Cegah perintah berbahaya (reboot, shell, dll) jika bukan iam@usm.rip
+  if (isRestrictedDangerousCommand(inst)) {
+    const userEmail = process.env.TELE_USER_EMAIL || '';
+    if (!isAuthorizedSecurityUser(userEmail)) {
+      throw new Error('⛔ Akses Ditolak: Perintah sistem berbahaya (seperti reboot, shell, atau modifikasi destruktif) diblokir oleh Security Guard dan hanya diizinkan untuk akun terverifikasi iam@usm.rip.');
+    }
+  }
 
   // 1. Pembuatan Folder / Direktori
   // Contoh: "buat folder ddfa", "buat foldsr ssf", "mkdir components", "bikin folder src/assets"
@@ -420,36 +499,14 @@ function tryExecuteDirectTask(instruction, targetDir) {
   return { executed: false };
 }
 
-function findCli(binName) {
-  const envVar = `${binName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_PATH`;
-  if (process.env[envVar] && fs.existsSync(process.env[envVar])) {
-    return process.env[envVar];
-  }
-  try {
-    const whichCmd = process.platform === 'win32' ? `where ${binName}` : `which ${binName} || command -v ${binName}`;
-    const found = execSync(whichCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], shell: process.platform === 'win32' ? undefined : '/bin/sh' }).trim().split(/\r?\n/)[0];
-    if (found && fs.existsSync(found)) return found;
-  } catch (e) {}
-
-  const home = os.homedir();
-  const candidates = [
-    path.join(home, '.local', 'bin', binName),
-    path.join(home, '.antigravity', 'bin', binName),
-    path.join(home, '.cargo', 'bin', binName),
-    path.join(home, 'bin', binName),
-    `/usr/local/bin/${binName}`,
-    `/usr/bin/${binName}`,
-    `/snap/bin/${binName}`,
-    `/root/.local/bin/${binName}`
-  ];
-  for (const cand of candidates) {
-    if (fs.existsSync(cand)) return cand;
-  }
-  return null;
-}
-
 // Handler Eksekusi Tugas
 async function executeTask(task) {
+  if (isRestrictedDangerousCommand(task.instruction)) {
+    const userEmail = process.env.TELE_USER_EMAIL || '';
+    if (!isAuthorizedSecurityUser(userEmail)) {
+      throw new Error('⛔ Akses Ditolak: Perintah berbahaya dicegah (hanya diizinkan untuk akun terverifikasi iam@usm.rip)');
+    }
+  }
   const inst = task.instruction.trim();
   const lowerInst = inst.toLowerCase();
   console.log(`\n------------------------------------------------------------`);
@@ -477,6 +534,7 @@ async function executeTask(task) {
   } catch (dirErr) {
     console.error(`❌ Gagal eksekusi langsung: ${dirErr.message}`);
     await markTaskStatus(task.id, 'FAILED', dirErr.message);
+    appendFailedToTaskQueueFile(task, dirErr.message);
     sendNotification(`Gagal: ${task.id}`, 'KENDALA', [
       `Instruksi: ${inst.substring(0, 90)}`,
       `Penyebab: ${dirErr.message}`
@@ -530,6 +588,7 @@ async function executeTask(task) {
     } catch (err) {
       console.error(`❌ Gagal mengeksekusi utilitas: ${err.message}`);
       await markTaskStatus(task.id, 'FAILED', err.message);
+      appendFailedToTaskQueueFile(task, err.message);
       sendNotification(`Gagal: ${task.id}`, 'KENDALA', [
         `Instruksi: ${inst.substring(0, 90)}`,
         `Penyebab: ${err.message}`
@@ -537,69 +596,18 @@ async function executeTask(task) {
     }
   } else {
     // 3. TUGAS PENGEMBANGAN / CODING / AGENT TASK:
+    // Dicatat ke TASK_QUEUE.md untuk diselesaikan oleh AI Agent
     recordActiveTask(task);
+    // Sesuai aturan: Worker TIDAK mengubah status ke [IN_PROGRESS]. Tugas tetap [PENDING] sampai AI Agent aktif mengeksekusinya.
+    sendNotification(`Tugas Masuk Antrean: ${task.id}`, 'INFO', [
+      `Instruksi: ${inst.substring(0, 90)}`,
+      `Pengirim: ${task.sender}`,
+      `Status: Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)`
+    ]);
 
-    // Di Server Headless / Remote SSH: Deteksi apakah ada CLI Agent terpasang
-    const agentCandidate = (process.env.TELE_AGENT_HANDLER || cfgVscode.TELE_AGENT_HANDLER || cfgLocal.TELE_AGENT_HANDLER || 'auto').toLowerCase().trim();
-    // Di Server Headless / Remote SSH: Deteksi apakah ada CLI Agent terpasang yang cocok dengan tugas
-    const taskTargetAgent = (task.assigned_agent || task.agent || '').toLowerCase().trim();
-    const configHandler = (process.env.TELE_AGENT_HANDLER || cfgVscode.TELE_AGENT_HANDLER || cfgLocal.TELE_AGENT_HANDLER || 'auto').toLowerCase().trim();
-    let detectedBin = null;
-    let detectedType = null;
-
-    if (agentCandidate === 'agy' || (agentCandidate === 'auto' && findCli('agy'))) {
-      detectedBin = findCli('agy') || 'agy';
-      detectedType = 'agy';
-    } else if (agentCandidate === 'claude' || (agentCandidate === 'auto' && findCli('claude'))) {
-      detectedBin = findCli('claude') || 'claude';
-      detectedType = 'claude';
-    } else if (agentCandidate === 'gemini' || (agentCandidate === 'auto' && findCli('gemini'))) {
-      detectedBin = findCli('gemini') || 'gemini';
-      detectedType = 'gemini';
-    if (taskTargetAgent.includes('claude')) {
-      if (findCli('claude')) { detectedBin = findCli('claude'); detectedType = 'claude'; }
-    } else if (taskTargetAgent.includes('gemini')) {
-      if (findCli('gemini')) { detectedBin = findCli('gemini'); detectedType = 'gemini'; }
-    } else if (taskTargetAgent.includes('copilot')) {
-      if (findCli('copilot')) { detectedBin = findCli('copilot'); detectedType = 'copilot'; }
-    } else if (taskTargetAgent.includes('antigrav') || taskTargetAgent.includes('agy')) {
-      if (findCli('agy')) { detectedBin = findCli('agy'); detectedType = 'agy'; }
-    } else if (configHandler !== 'auto') {
-      detectedBin = findCli(configHandler);
-      detectedType = configHandler;
-    } else {
-      // Default auto fallback jika tugas tidak menentukan agent spesifik
-      if (findCli('agy')) { detectedBin = findCli('agy'); detectedType = 'agy'; }
-      else if (findCli('claude')) { detectedBin = findCli('claude'); detectedType = 'claude'; }
-      else if (findCli('gemini')) { detectedBin = findCli('gemini'); detectedType = 'gemini'; }
-    }
-
-    if (detectedBin) {
-      console.log(`🤖 Terdeteksi CLI Agent [${detectedType}] di server (${detectedBin}). Menjalankan eksekusi autonomous...`);
-      const prompt = `Periksa file TASK_QUEUE.md dan selesaikan tugas ${task.id} sampai tuntas 100% sesuai panduan AGENTS.md.`;
-      try {
-        await markTaskStatus(task.id, 'IN_PROGRESS', `Sedang dikerjakan oleh ${detectedType.toUpperCase()} Agent di server...`);
-        let agentCmd = '';
-        if (detectedType === 'agy') {
-          agentCmd = `"${detectedBin}" --dangerously-skip-permissions -p "${prompt}"`;
-        } else {
-          agentCmd = `"${detectedBin}" -p "${prompt}"`;
-        }
-        execSync(agentCmd, { cwd: projectDir, stdio: 'inherit', timeout: 300000 });
-        console.log(`✅ [${task.id}] Eksekusi CLI Agent [${detectedType}] selesai.`);
-      } catch (agentErr) {
-        console.error(`⚠️ Kendala saat eksekusi CLI Agent: ${agentErr.message}`);
-      }
-    } else {
-      sendNotification(`Tugas Masuk Antrean: ${task.id}`, 'INFO', [
-        `Instruksi: ${inst.substring(0, 90)}`,
-        `Pengirim: ${task.sender}`,
-        `Status: Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)`
-      ]);
-      console.log(`⚡ [${task.id}] Tugas dicatat ke TASK_QUEUE.md dengan status [PENDING].`);
-      console.log(`📢 Notifikasi INFO dikirim ke Telegram.`);
-      console.log(`⚠️ Menunggu AI Agent (Chat IDE / CLI) untuk menyelesaikan pekerjaan coding.\n`);
-    }
+    console.log(`⚡ [${task.id}] Tugas dicatat ke TASK_QUEUE.md dengan status [PENDING].`);
+    console.log(`📢 Notifikasi INFO dikirim ke Telegram.`);
+    console.log(`⚠️ Menunggu AI Agent untuk menyelesaikan pekerjaan coding.\n`);
   }
 }
 
@@ -623,6 +631,13 @@ async function processActiveLocalTasks() {
         continue;
       }
       const block = match[3];
+      const mStat = block.match(/-\s+\*\*Status:\*\*\s*([^\r\n]+)/i);
+      const isKendala = mStat && ['FAILED', 'KENDALA', 'ERROR', 'GAGAL'].includes(mStat[1].trim().toUpperCase());
+      if (isKendala || taskStatus === 'FAILED' || taskStatus === 'KENDALA') {
+        // Tugas yang ditandai kendala: JANGAN dieksekusi berulang-ulang!
+        continue;
+      }
+
       const mInst = block.match(/-\s+\*\*Instruksi:\*\*\s*([^\r\n]+)/i);
       const mSender = block.match(/-\s+\*\*Pengirim:\*\*\s*([^\r\n]+)/i);
       const mTime = block.match(/-\s+\*\*Waktu:\*\*\s*([^\r\n]+)/i);
@@ -651,6 +666,13 @@ async function processActiveLocalTasks() {
           }
         } catch (err) {
           console.error(`❌ Gagal eksekusi tugas lokal [${taskObj.id}]: ${err.message}`);
+          await markTaskStatus(taskObj.id, 'FAILED', err.message);
+          appendFailedToTaskQueueFile(taskObj, err.message);
+          sendNotification(`Gagal: ${taskObj.id}`, 'KENDALA', [
+            `Instruksi: ${inst.substring(0, 90)}`,
+            `Penyebab: ${err.message}`,
+            `Pengirim: ${sender}`
+          ]);
         }
       }
     }

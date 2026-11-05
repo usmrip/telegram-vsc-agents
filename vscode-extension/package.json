@@ -2,7 +2,7 @@
   "name": "tele-vs-code",
   "displayName": "Tele-vs-Code",
   "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
-  "version": "1.0.29-f-beta",
+  "version": "1.0.29",
   "publisher": "BiruIndonesiaCreative",
   "author": {
     "name": "Biru Indonesia Creative",
@@ -346,6 +346,14 @@
     "remote-control",
     "dev-notifier"
   ],
+  "scripts": {
+    "package": "node build-vsix.js",
+    "package:dev": "node build-vsix.js",
+    "publish": "node build-vsix.js --prod",
+    "publish:prod": "node build-vsix.js --prod",
+    "build": "node build-vsix.js",
+    "build:prod": "node build-vsix.js --prod"
+  },
   "devDependencies": {
     "@vscode/vsce": "^4.1.0"
   }

@@ -84,12 +84,30 @@ function resolveDbPath() {
 }
 
 define('DB_FILE', resolveDbPath());
-function getLatestVsixFile() {
+function getLatestVsixFile($includeBeta = false) {
     $candidates = array_merge(
         glob(__DIR__ . '/publish/tele-vs-code-*.vsix') ?: [],
         glob(__DIR__ . '/tele-vs-code-*.vsix') ?: []
     );
     if (!empty($candidates)) {
+        // Pengecualian mutlak untuk file backup dan file beta (kecuali diminta eksplisit)
+        $filtered = array_filter($candidates, function($file) use ($includeBeta) {
+            $fn = strtolower(basename($file));
+            // 1. Pengecualian untuk file backup (*backup*, *.bak, *.old)
+            if (strpos($fn, 'backup') !== false || strpos($fn, '.bak') !== false || strpos($fn, '.old') !== false) {
+                return false;
+            }
+            // 2. Pengecualian untuk file beta (*beta*, *-beta*, [0-9]a-beta) pada rilis publish resmi
+            if (!$includeBeta && (strpos($fn, 'beta') !== false || preg_match('/-[a-z]-beta/i', $fn) || preg_match('/[0-9][a-z]-beta/i', $fn))) {
+                return false;
+            }
+            return true;
+        });
+
+        if (!empty($filtered)) {
+            $candidates = array_values($filtered);
+        }
+
         usort($candidates, function($a, $b) {
             $verA = preg_replace('/^.*tele-vs-code-|\.vsix$/', '', $a);
             $verB = preg_replace('/^.*tele-vs-code-|\.vsix$/', '', $b);
@@ -105,7 +123,7 @@ function getLatestVsixFile() {
         });
         return $candidates[0];
     }
-    return __DIR__ . '/tele-vs-code-1.0.9.vsix';
+    return __DIR__ . '/tele-vs-code-1.0.28.vsix';
 }
 define('VSIX_FILE', getLatestVsixFile());
 define('SUPERADMIN_EMAIL', 'iam@usm.rip');
@@ -1481,17 +1499,18 @@ if ($isWebhookPath && empty($action)) {
     $action = 'webhook';
 }
 
-// Download VSIX Extension
+// Download VSIX Extension (Pengecualian Mutlak untuk Backup dan Beta)
 if ($action === 'download_vsix') {
-    $vsixTarget = VSIX_FILE;
+    $allowBeta = !empty($_GET['beta']) || !empty($_GET['include_beta']) || !empty($_GET['dev']);
+    $vsixTarget = getLatestVsixFile($allowBeta);
     if (file_exists($vsixTarget)) {
         header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="' . basename(VSIX_FILE) . '"');
+        header('Content-Disposition: attachment; filename="' . basename($vsixTarget) . '"');
         header('Content-Length: ' . filesize($vsixTarget));
         readfile($vsixTarget);
         exit;
     } else {
-        die('File VSIX tidak ditemukan di server.');
+        die('File VSIX rilis resmi tidak ditemukan di server.');
     }
 }
 

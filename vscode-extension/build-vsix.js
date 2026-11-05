@@ -72,6 +72,8 @@ console.log(`===================================================================
 console.log(`🚀 Mode Pembangunan : ${modeName}`);
 console.log(`📌 Versi Target    : ${version} (Base: ${baseVersion})`);
 console.log(`📦 Nama File VSIX  : ${vsixFileName}`);
+console.log(`🛡️ Pengecualian Backup : AKTIF (File/folder *backup*, *.bak, *.old dikecualikan dari paket)`);
+console.log(`🛡️ Pengecualian Beta   : ${isProd ? 'AKTIF (Rilis Resmi Production, versi beta dikecualikan)' : 'TIDAK (Mode Dev Beta Aktif)'}`);
 console.log(`==============================================================================`);
 
 // Tulis versi target ke package.json sebelum dipaketkan
@@ -136,8 +138,23 @@ if (fs.existsSync(vsceBin)) {
       } catch (e) {}
     }
 
-    // Alias tanpa tanda hubung jika versi prerelease (misal 1.0.8-a -> tele-vs-code-1.0.8a.vsix)
-    if (version.includes('-')) {
+    if (isProd) {
+      // HANYA pada rilis PRODUCTION resmi: perbarui tele-vs-code-latest.vsix
+      // File beta dan backup dikecualikan mutlak dari tele-vs-code-latest.vsix!
+      if (fs.existsSync(teleVsCodeWebDir)) {
+        try {
+          fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, 'tele-vs-code-latest.vsix'));
+          console.log(`[LOCAL WEB] tele-vs-code-latest.vsix diperbarui ke versi rilis production: ${version}`);
+        } catch (e) {}
+      }
+      if (fs.existsSync(liveWebDir)) {
+        try {
+          fs.copyFileSync(outputVsix, path.join(liveWebDir, 'tele-vs-code-latest.vsix'));
+          console.log(`[LIVE DEPLOY] tele-vs-code-latest.vsix di server live diperbarui ke versi rilis production: ${version}`);
+        } catch (e) {}
+      }
+    } else if (version.includes('-')) {
+      // Alias tanpa tanda hubung untuk kemudahan instalasi prerelease beta
       const aliasName = `${name}-${version.replace('-', '')}.vsix`;
       const publishAlias = path.join(publishDir, aliasName);
       fs.copyFileSync(outputVsix, publishAlias);
@@ -247,7 +264,19 @@ try {
       console.log('[LIVE DEPLOY] Disalin ke server');
     } catch (e) {}
   }
-  if (version.includes('-')) {
+  if (isProd) {
+    if (fs.existsSync(teleVsCodeWebDir)) {
+      try {
+        fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, 'tele-vs-code-latest.vsix'));
+      } catch (e) {}
+    }
+    if (fs.existsSync(liveWebDir)) {
+      try {
+        fs.copyFileSync(outputVsix, path.join(liveWebDir, 'tele-vs-code-latest.vsix'));
+        console.log(`[LIVE DEPLOY] tele-vs-code-latest.vsix diperbarui ke versi rilis production: ${version}`);
+      } catch (e) {}
+    }
+  } else if (version.includes('-')) {
     const aliasName = `${name}-${version.replace('-', '')}.vsix`;
     const publishAlias = path.join(publishDir, aliasName);
     fs.copyFileSync(outputVsix, publishAlias);
