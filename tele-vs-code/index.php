@@ -3080,6 +3080,26 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $wsFolder = trim($_GET['workspace_folder'] ?? ($_POST['workspace_folder'] ?? ''));
         $operator = trim($_GET['operator'] ?? ($_POST['operator'] ?? ''));
 
+        // Auto-resolve project jika $prjFilter kosong tetapi $wsFolder ada (Remote SSH / server headless)
+        if (!$prjFilter && $wsFolder) {
+            $cleanWs = strtolower(rtrim(str_replace('\\', '/', $wsFolder), '/'));
+            $wsBase = strtolower(basename($cleanWs));
+            $stmtAllP = $db->prepare("SELECT * FROM projects WHERE user_id = ?");
+            $stmtAllP->execute([$user['id']]);
+            $candProjects = $stmtAllP->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($candProjects as $cp) {
+                $pFold = strtolower(rtrim(str_replace('\\', '/', $cp['last_workspace_folder'] ?? ''), '/'));
+                $pCode = strtolower(trim($cp['code'] ?? ''));
+                $pName = strtolower(trim($cp['name'] ?? ''));
+                if (($pFold && ($cleanWs === $pFold || substr($cleanWs, -strlen($pFold)) === $pFold || substr($pFold, -strlen($cleanWs)) === $cleanWs)) ||
+                    ($pCode && $wsBase === $pCode) ||
+                    ($pName && $wsBase === $pName)) {
+                    $prjFilter = $cp['project_key'] ?: (string)$cp['id'];
+                    break;
+                }
+            }
+        }
+
         // Update Heartbeat Workspace / VS Code Instance untuk Proyek ini
         if ($wsFolder || $operator) {
             $now = date('Y-m-d H:i:s');

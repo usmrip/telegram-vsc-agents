@@ -420,6 +420,34 @@ function tryExecuteDirectTask(instruction, targetDir) {
   return { executed: false };
 }
 
+function findCli(binName) {
+  const envVar = `${binName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_PATH`;
+  if (process.env[envVar] && fs.existsSync(process.env[envVar])) {
+    return process.env[envVar];
+  }
+  try {
+    const whichCmd = process.platform === 'win32' ? `where ${binName}` : `which ${binName} || command -v ${binName}`;
+    const found = execSync(whichCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], shell: process.platform === 'win32' ? undefined : '/bin/sh' }).trim().split(/\r?\n/)[0];
+    if (found && fs.existsSync(found)) return found;
+  } catch (e) {}
+
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, '.local', 'bin', binName),
+    path.join(home, '.antigravity', 'bin', binName),
+    path.join(home, '.cargo', 'bin', binName),
+    path.join(home, 'bin', binName),
+    `/usr/local/bin/${binName}`,
+    `/usr/bin/${binName}`,
+    `/snap/bin/${binName}`,
+    `/root/.local/bin/${binName}`
+  ];
+  for (const cand of candidates) {
+    if (fs.existsSync(cand)) return cand;
+  }
+  return null;
+}
+
 // Handler Eksekusi Tugas
 async function executeTask(task) {
   const inst = task.instruction.trim();
@@ -509,18 +537,50 @@ async function executeTask(task) {
     }
   } else {
     // 3. TUGAS PENGEMBANGAN / CODING / AGENT TASK:
-    // Dicatat ke TASK_QUEUE.md untuk diselesaikan oleh AI Agent
     recordActiveTask(task);
-    // Sesuai aturan: Worker TIDAK mengubah status ke [IN_PROGRESS]. Tugas tetap [PENDING] sampai AI Agent aktif mengeksekusinya.
-    sendNotification(`Tugas Masuk Antrean: ${task.id}`, 'INFO', [
-      `Instruksi: ${inst.substring(0, 90)}`,
-      `Pengirim: ${task.sender}`,
-      `Status: Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)`
-    ]);
 
-    console.log(`⚡ [${task.id}] Tugas dicatat ke TASK_QUEUE.md dengan status [PENDING].`);
-    console.log(`📢 Notifikasi INFO dikirim ke Telegram.`);
-    console.log(`⚠️ Menunggu AI Agent untuk menyelesaikan pekerjaan coding.\n`);
+    // Di Server Headless / Remote SSH: Deteksi apakah ada CLI Agent terpasang
+    const agentCandidate = (process.env.TELE_AGENT_HANDLER || cfgVscode.TELE_AGENT_HANDLER || cfgLocal.TELE_AGENT_HANDLER || 'auto').toLowerCase().trim();
+    let detectedBin = null;
+    let detectedType = null;
+
+    if (agentCandidate === 'agy' || (agentCandidate === 'auto' && findCli('agy'))) {
+      detectedBin = findCli('agy') || 'agy';
+      detectedType = 'agy';
+    } else if (agentCandidate === 'claude' || (agentCandidate === 'auto' && findCli('claude'))) {
+      detectedBin = findCli('claude') || 'claude';
+      detectedType = 'claude';
+    } else if (agentCandidate === 'gemini' || (agentCandidate === 'auto' && findCli('gemini'))) {
+      detectedBin = findCli('gemini') || 'gemini';
+      detectedType = 'gemini';
+    }
+
+    if (detectedBin) {
+      console.log(`🤖 Terdeteksi CLI Agent [${detectedType}] di server (${detectedBin}). Menjalankan eksekusi autonomous...`);
+      const prompt = `Periksa file TASK_QUEUE.md dan selesaikan tugas ${task.id} sampai tuntas 100% sesuai panduan AGENTS.md.`;
+      try {
+        await markTaskStatus(task.id, 'IN_PROGRESS', `Sedang dikerjakan oleh ${detectedType.toUpperCase()} Agent di server...`);
+        let agentCmd = '';
+        if (detectedType === 'agy') {
+          agentCmd = `"${detectedBin}" --dangerously-skip-permissions -p "${prompt}"`;
+        } else {
+          agentCmd = `"${detectedBin}" -p "${prompt}"`;
+        }
+        execSync(agentCmd, { cwd: projectDir, stdio: 'inherit', timeout: 300000 });
+        console.log(`✅ [${task.id}] Eksekusi CLI Agent [${detectedType}] selesai.`);
+      } catch (agentErr) {
+        console.error(`⚠️ Kendala saat eksekusi CLI Agent: ${agentErr.message}`);
+      }
+    } else {
+      sendNotification(`Tugas Masuk Antrean: ${task.id}`, 'INFO', [
+        `Instruksi: ${inst.substring(0, 90)}`,
+        `Pengirim: ${task.sender}`,
+        `Status: Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)`
+      ]);
+      console.log(`⚡ [${task.id}] Tugas dicatat ke TASK_QUEUE.md dengan status [PENDING].`);
+      console.log(`📢 Notifikasi INFO dikirim ke Telegram.`);
+      console.log(`⚠️ Menunggu AI Agent (Chat IDE / CLI) untuk menyelesaikan pekerjaan coding.\n`);
+    }
   }
 }
 

@@ -605,20 +605,48 @@ async function getResolvedProject() {
 
   // Jika cur.project belum disetel (instal pertama kali atau belum pilih proyek)
   if (!cur.project) {
-    if (projects && projects.length === 1) {
-      // Auto-resolve jika akun hanya memiliki 1 proyek (sangat membantu di remote SSH / headless)
-      const matched = projects[0];
-      return {
-        id: matched.id,
-        botToken: matched.bot_token || cur.botToken,
-        chatId: matched.chat_id || cur.chatId,
-        name: matched.name || path.basename(cur.folder),
-        code: matched.code || '',
-        projectKey: matched.project_key || '',
-        timezone: matched.timezone || cur.timezone,
-        lastFolder: matched.last_workspace_folder || '',
-        lastSeen: matched.last_seen || ''
-      };
+    if (projects && projects.length > 0) {
+      let matched = null;
+      if (projects.length === 1) {
+        matched = projects[0];
+      } else {
+        // Auto-match berdasarkan kesamaan folder workspace atau nama folder (sangat berguna di Remote SSH / Server)
+        const curNorm = path.normalize(cur.folder).toLowerCase().replace(/[\\/]+$/, '');
+        const curBase = path.basename(curNorm).toLowerCase();
+        matched = projects.find(p => {
+          if (p.last_workspace_folder) {
+            const pNorm = path.normalize(p.last_workspace_folder).toLowerCase().replace(/[\\/]+$/, '');
+            if (pNorm === curNorm || curNorm.endsWith(pNorm) || pNorm.endsWith(curNorm)) return true;
+          }
+          const pCode = (p.code || '').toLowerCase();
+          const pName = (p.name || '').toLowerCase();
+          return pCode === curBase || pName === curBase;
+        });
+      }
+      if (matched) {
+        try {
+          const vscConf = path.join(cur.folder, '.vscode', 'tele-vs-code', 'config.env');
+          if (fs.existsSync(path.dirname(vscConf))) {
+            let envContent = fs.existsSync(vscConf) ? fs.readFileSync(vscConf, 'utf-8') : '';
+            if (!/AGENTS_TELE_PROJECT\s*=/i.test(envContent)) {
+              envContent += `\nAGENTS_TELE_PROJECT="${matched.project_key || matched.code || matched.id}"\n`;
+              fs.writeFileSync(vscConf, envContent.trim() + '\n', 'utf-8');
+            }
+          }
+        } catch (e) {}
+
+        return {
+          id: matched.id,
+          botToken: matched.bot_token || cur.botToken,
+          chatId: matched.chat_id || cur.chatId,
+          name: matched.name || path.basename(cur.folder),
+          code: matched.code || '',
+          projectKey: matched.project_key || '',
+          timezone: matched.timezone || cur.timezone,
+          lastFolder: matched.last_workspace_folder || '',
+          lastSeen: matched.last_seen || ''
+        };
+      }
     }
     return {
       id: '',
@@ -1085,8 +1113,8 @@ function activate(context) {
       return process.env[envVar];
     }
     try {
-      const whichCmd = process.platform === 'win32' ? `where ${binName}` : `which ${binName}`;
-      const found = execSync(whichCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim().split(/\r?\n/)[0];
+      const whichCmd = process.platform === 'win32' ? `where ${binName}` : `which ${binName} || command -v ${binName}`;
+      const found = execSync(whichCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], shell: process.platform === 'win32' ? undefined : '/bin/sh' }).trim().split(/\r?\n/)[0];
       if (found && fs.existsSync(found)) return found;
     } catch (e) {}
 
@@ -1231,18 +1259,52 @@ function activate(context) {
   // Quota Guard: Cache pemicuan tugas terakhir untuk mencegah eksekusi berulang (hemat kuota)
   const recentlyDispatchedTasks = new Map();
 
+  function resolveAgentHandlerFromText(agentStr) {
+    if (!agentStr) return null;
+    const s = agentStr.toLowerCase().trim();
+    if (s.includes('claude')) return 'claude';
+    if (s.includes('gemini')) return 'gemini';
+    if (s.includes('copilot') || s.includes('github-copilot')) return 'copilot';
+    if (s.includes('cursor')) return 'cursor';
+    if (s.includes('roo')) return 'roo';
+    if (s.includes('cline')) return 'cline';
+    if (s.includes('ide') || s.includes('chat ide')) return 'ide';
+    if (s.includes('antigrav') || s.includes('agy')) return 'agy';
+    return null;
+  }
+
   // Eksekusi tugas melalui Agent Handler terpilih
   async function executeTaskWithAgent(taskId, instruction, agentOverride = null) {
     const cur = getEffectiveConfig();
-    const handler = (agentOverride || cur.agentHandler || '').trim();
-
-    // Sesuai aturan: Jika kosong, TIDAK AKAN EKSEKUSI APAPUN
-    if (!handler || handler === 'none') {
-      return { executed: false, reason: 'Agent Handler kosong / dinonaktifkan (hanya mencatat ke antrean)' };
-    }
-
     const targetFolder = cur.folder || process.cwd();
     const queueFile = path.join(targetFolder, 'TASK_QUEUE.md');
+
+    // Tentukan handler: utamakan agentOverride, lalu instruksi (@agent/--agent), lalu TASK_QUEUE.md, lalu setting user
+    let targetHandler = (agentOverride || '').trim();
+    if (!targetHandler && instruction) {
+      const mAgt = instruction.match(/@([a-zA-Z0-9_-]+)/i) || instruction.match(/(?:--agent|\[agent:\s*)([\w\s-]+)\]?/i);
+      if (mAgt) {
+        targetHandler = resolveAgentHandlerFromText(mAgt[1]);
+      }
+    }
+    if (!targetHandler && taskId && fs.existsSync(queueFile)) {
+      try {
+        const qText = fs.readFileSync(queueFile, 'utf-8');
+        const cleanId = taskId.replace(/^#/, '');
+        const mAgent = new RegExp('###\\s+\\[(?:PENDING|IN_PROGRESS)\\]\\s+#?' + cleanId + '[\\s\\S]*?-\\s+\\*\\*Agent:\\*\\*\\s+([^\\r\\n]+)', 'i').exec(qText);
+        if (mAgent) {
+          targetHandler = resolveAgentHandlerFromText(mAgent[1]);
+        }
+      } catch (e) {}
+    }
+    if (!targetHandler) {
+      targetHandler = (cur.agentHandler || 'auto').trim();
+    }
+
+    // Sesuai aturan: Jika kosong atau 'none', TIDAK AKAN EKSEKUSI APAPUN
+    if (!targetHandler || targetHandler === 'none') {
+      return { executed: false, reason: 'Agent Handler kosong / dinonaktifkan (hanya mencatat ke antrean)' };
+    }
     // Quota Guard: Cek apakah instruksi atau tugas serupa baru saja dipicu dalam 60 detik (cooldown)
     const taskKey = ((taskId || '').toLowerCase().trim()) + '::' + ((instruction || '').toLowerCase().trim());
     const nowTime = Date.now();
@@ -1305,7 +1367,7 @@ function activate(context) {
     }
     const prompt = buildAgentPrompt(taskId, instruction);
 
-    let activeHandler = handler;
+    let activeHandler = targetHandler;
     if (activeHandler === 'auto') {
       // Prioritas 1: Cari CLI agent yang benar-benar terpasang di PATH
       const detectedCli = detectAvailableAgents().find(a => a.installed && !a.isIde && a.cliPath);
@@ -1345,21 +1407,8 @@ function activate(context) {
         ? `📋 [Agent IDE] Task${taskDisplay} prompt copied to clipboard and Chat opened! Paste (Ctrl+V) and send to Agent IDE.`
         : `📋 [Agent IDE] Prompt tugas${taskDisplay} disalin ke clipboard dan Chat dibuka! Tempel (Ctrl+V) dan kirim ke Agent IDE.`);
 
-      showTimedNotification(msg, 15, 'Buka Chat', 'Buka TASK_QUEUE.md').then(async (act) => {
-        if (act === 'Buka Chat') {
-          try {
-            await vscode.commands.executeCommand('workbench.action.chat.open');
-          } catch (e) {
-            await vscode.commands.executeCommand('workbench.action.quickchat.open');
-          }
-        } else if (act === 'Buka TASK_QUEUE.md') {
-          if (fs.existsSync(queueFile)) {
-            const doc = await vscode.workspace.openTextDocument(queueFile);
-            await vscode.window.showTextDocument(doc);
-          }
-        }
-      });
-
+      // Sesuai instruksi: Langsung eksekusi tanpa pop-up dialog yang menuntut klik tombol manual
+      setStatusBarState('proses', `Agent IDE: [${taskId || 'Tugas'}]`, msg);
       return { executed: true, handler: 'ide', method: 'clipboard+chat_open' };
     }
 
@@ -1403,6 +1452,14 @@ function activate(context) {
       term.sendText(`${cmd} -p "${prompt}"`);
       vscode.window.showInformationMessage(`🧠 Claude Code sedang mengeksekusi tugas ${taskId || ''}...`);
       return { executed: true, handler: 'claude' };
+    }
+
+    if (activeHandler === 'cursor') {
+      const cursorCli = findCli('cursor');
+      const cmd = cursorCli ? `"${cursorCli}"` : 'cursor';
+      term.sendText(`${cmd} "${prompt.replace(/"/g, '\"')}"`);
+      vscode.window.showInformationMessage(`🖱️ Cursor Agent sedang mengeksekusi tugas ${taskId || ''}...`);
+      return { executed: true, handler: 'cursor' };
     }
     if (activeHandler === 'cline') {
       term.sendText(`cline -y "${prompt.replace(/"/g, '\"')}"`);
@@ -2128,34 +2185,38 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                 const agentDisplayName = currentHandler === 'ide' ? 'Agent IDE' : (currentHandler === 'custom' ? 'Custom Agent' : currentHandler.toUpperCase());
                 const runBtnLabel = currentHandler !== 'none' ? i18n('btnRunVia', { agent: agentDisplayName }) : i18n('btnSelectAgent');
 
-                // Jika autoDispatchAgent aktif dan handler bukan 'none', periksa aturan sekuensial
+                // Sesuai instruksi: Jika autoDispatchAgent aktif dan handler bukan 'none',
+                // JANGAN munculkan notifikasi pop-up dialog yang menuntut klik manual,
+                // tapi LANGSUNG eksekusi sesuai dengan agen yang dipilih
                 if (cur.autoDispatchAgent && currentHandler !== 'none') {
                   const qContentNow = fs.existsSync(queueFile) ? fs.readFileSync(queueFile, 'utf-8') : '';
                   const activeSec = qContentNow.split('## ✅ Riwayat Tugas Selesai')[0];
                   const mActive = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i.exec(activeSec);
                   if (!mActive || mActive[1].toLowerCase() === taskItem.id.toLowerCase()) {
-                    executeTaskWithAgent(taskItem.id, taskItem.instruction);
+                    const taskAgentOverride = resolveAgentHandlerFromText(taskItem.assigned_agent);
+                    executeTaskWithAgent(taskItem.id, taskItem.instruction, taskAgentOverride);
                   } else {
                     log('info', `[SEKUENSIAL] Menunda auto-dispatch ${taskItem.id} karena tugas ${mActive[1]} masih [IN_PROGRESS].`);
                   }
-                }
-
-                showTimedNotification(
-                  `⚡ [${taskItem.id}] Tugas Baru: "${instBrief}" (Prompt disalin ke clipboard)`,
-                  15,
-                  runBtnLabel,
-                  'Buka TASK_QUEUE'
-                ).then(async (act) => {
-                  if (act === runBtnLabel) {
-                    if (!currentHandler) {
-                      vscode.commands.executeCommand('telegramNotifier.selectAgentHandler');
-                    } else {
-                      executeTaskWithAgent(taskItem.id, taskItem.instruction);
+                } else {
+                  // HANYA tampilkan dialog pop-up jika autoDispatchAgent dinonaktifkan (mode manual) atau handler 'none'
+                  showTimedNotification(
+                    `⚡ [${taskItem.id}] Tugas Baru: "${instBrief}" (Prompt disalin ke clipboard)`,
+                    15,
+                    runBtnLabel,
+                    'Buka TASK_QUEUE'
+                  ).then(async (act) => {
+                    if (act === runBtnLabel) {
+                      if (!currentHandler) {
+                        vscode.commands.executeCommand('telegramNotifier.selectAgentHandler');
+                      } else {
+                        executeTaskWithAgent(taskItem.id, taskItem.instruction);
+                      }
+                    } else if (act === 'Buka TASK_QUEUE') {
+                      vscode.commands.executeCommand('telegramNotifier.openQueue');
                     }
-                  } else if (act === 'Buka TASK_QUEUE') {
-                    vscode.commands.executeCommand('telegramNotifier.openQueue');
-                  }
-                });
+                  });
+                }
               }
             }
           }
