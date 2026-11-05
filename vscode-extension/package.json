@@ -2,14 +2,13 @@
   "name": "tele-vs-code",
   "displayName": "Tele-vs-Code",
   "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "publisher": "BiruIndonesiaCreative",
   "author": {
-    "name": "usmrip",
-    "email": "iam@usm.rip",
-    "url": "https://github.com/usmrip"
+    "name": "Biru Indonesia Creative",
+    "url": "https://biru.co.id/tele-vs-code/"
   },
-  "homepage": "https://github.com/usmrip/telegram-vsc-agents#readme",
+  "homepage": "https://biru.co.id/tele-vs-code/",
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -155,24 +154,14 @@
             "",
             "auto",
             "ide",
-            "agy",
-            "claude",
-            "cline",
-            "roo",
-            "gemini",
-            "copilot",
+            "ide-antigravity",
             "custom"
           ],
           "enumDescriptions": [
             "(Kosong / Nonaktif) Jangan jalankan apapun secara otomatis, hanya catat ke TASK_QUEUE.md",
-            "(Auto) Deteksi otomatis AI Agent terpasang di sistem (fallback ke Agent IDE jika CLI belum terpasang)",
-            "Agent IDE (VS Code Chat / Antigravity / Copilot / Gemini) - Eksekusi langsung di Chat IDE tanpa CLI eksternal",
-            "Google Antigravity CLI (agy)",
-            "Claude Code CLI (claude)",
-            "Cline Autonomous Coding Agent (cline)",
-            "Roo Code Autonomous Agent (roo)",
-            "Gemini CLI / Code Assist (gemini)",
-            "GitHub Copilot (copilot)",
+            "(Auto) Deteksi otomatis AI Agent yang tersedia di mesin/server ini",
+            "Agent IDE Otomatis (Antigravity Chat IDE aktif di server ini)",
+            "Antigravity IDE Chat (Kirim & eksekusi langsung di panel Chat Antigravity tanpa CLI)",
             "(Isi Manual) Perintah terminal kustom dari customAgentCommand"
           ],
           "description": "Pilih AI Agent yang akan mengeksekusi tugas antrean dari Telegram. Jika kosong, tidak ada tugas yang dieksekusi otomatis.",
@@ -208,119 +197,95 @@
           "type": "boolean",
           "default": false,
           "description": "Aktifkan mode debug untuk menyampaikan detail pekerjaan worker, direktori TASK_QUEUE.md, eksekutor agen, dan perintah eksekusinya",
-          "markdownDescription": "Jika \true, panel output log akan menyampaikan detail pekerjaan worker, termasuk direktori file TASK_QUEUE.md, agen AI yang dipilih, dan baris perintah eksekusinya."
+          "markdownDescription": "Jika `true`, panel output log akan menyampaikan detail pekerjaan worker, termasuk direktori file TASK_QUEUE.md, agen AI yang dipilih, dan baris perintah eksekusinya."
         }
       }
     },
     "commands": [
       {
-        "command": "telegramNotifier.copyAiPrompt",
-        "title": "Salin Prompt Pemicu AI Agent (proses antrian)",
-        "category": "Tele-vs-Code"
+        "command": "telegramNotifier.openSetupWizard",
+        "title": "🪄 Setup Wizard (Panduan Instalasi Awal / Initial Setup)",
+        "category": "Tele-vs-Code",
+        "icon": "$(wand)"
       },
       {
-        "command": "telegramNotifier.setPullInterval",
-        "title": "Atur Durasi Refresh Polling Worker",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.runAgentAgy",
-        "title": "Jalankan AI Agent Otomatis (Antigravity agy CLI)",
+        "command": "telegramNotifier.showMenu",
+        "title": "⚡ Buka Menu Utama / Open Main Menu",
         "category": "Tele-vs-Code"
       },
       {
         "command": "telegramNotifier.runNextTask",
-        "title": "Kerjakan Antrean Tugas Berikutnya (Kirim ke Chat AI)",
+        "title": "▶️ Jalankan Tugas Berikutnya / Run Next Task Now",
         "category": "Tele-vs-Code"
       },
       {
-        "command": "telegramNotifier.setFolder",
-        "title": "Atur Folder Workspace / Working Directory",
+        "command": "telegramNotifier.restartTask",
+        "title": "🔄 Restart Tugas (/restart) / Restart Task",
         "category": "Tele-vs-Code"
       },
       {
         "command": "telegramNotifier.addTask",
-        "title": "Tambah Tugas Baru / Kirim Perintah ke Antrean & Telegram",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.quickSetup",
-        "title": "Hubungkan ke Server Biru (API Secret & Project Key)",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.sendSuccess",
-        "title": "Kirim Notifikasi: SELESAI (100% Tuntas)",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.sendProgress",
-        "title": "Kirim Notifikasi: PROSES (Sedang Dikerjakan)",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.sendError",
-        "title": "Kirim Notifikasi: KENDALA (Ada Masalah)",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.pullTasks",
-        "title": "Tarik Antrean Tugas Baru dari Webhook",
+        "title": "➕ Buat Tugas Baru / Add New Task",
         "category": "Tele-vs-Code"
       },
       {
         "command": "telegramNotifier.openQueue",
-        "title": "Buka File TASK_QUEUE.md",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.openDashboard",
-        "title": "Buka Web Dashboard Task Manager",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.setupSecretKey",
-        "title": "Setup API Secret Key & Webhook (Daftar Akun)",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.toggleAutoPull",
-        "title": "Otomatisasi Worker: Aktifkan / Jeda Auto-Pull",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.startCliWorker",
-        "title": "Jalankan Autonomous Worker di Terminal (tele-worker)",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.whoami",
-        "title": "Siapa Saya? (Identifikasi Workspace & Server)",
-        "category": "Tele-vs-Code"
-      },
-      {
-        "command": "telegramNotifier.switchLanguage",
-        "title": "Switch Language / Ganti Bahasa (ID / EN)",
+        "title": "📖 Buka Antrean Tugas (TASK_QUEUE.md) / Open Task Queue",
         "category": "Tele-vs-Code"
       },
       {
         "command": "telegramNotifier.selectAgentHandler",
-        "title": "Pilih AI Agent Handler (Deteksi Terpasang, Dropdown, atau Manual)",
+        "title": "🤖 Pilih AI Agent Eksekutor / Select AI Agent Executor",
         "category": "Tele-vs-Code"
       },
       {
-        "command": "telegramNotifier.executeActiveTask",
-        "title": "Jalankan Tugas Aktif via Agent Handler Terpilih",
+        "command": "telegramNotifier.setFolder",
+        "title": "📂 Atur Folder Kerja (Working Directory) / Set Working Directory",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.cleanupUnusedTaskQueues",
+        "title": "🧹 Bersihkan TASK_QUEUE.md di Folder Lain / Clean Up Unused Queues",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.pullTasks",
+        "title": "☁️ Tarik Antrean dari Server Sekarang / Pull Tasks Now",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.toggleAutoPull",
+        "title": "⏯️ Aktifkan atau Jeda Worker Otomatis / Toggle Auto-Worker",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.setPullInterval",
+        "title": "⏱️ Atur Jeda Cek Server / Set Server Polling Interval",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.startCliWorker",
+        "title": "💻 Jalankan Worker Mandiri di Terminal / Run Terminal Worker",
         "category": "Tele-vs-Code"
       },
       {
         "command": "telegramNotifier.uploadMedia",
-        "title": "Unggah File / Media Dokumentasi ke Server Biru",
+        "title": "📤 Unggah File atau Media ke Server / Upload File or Media",
         "category": "Tele-vs-Code"
       },
       {
-        "command": "telegramNotifier.setAgentCronInterval",
-        "title": "Atur Interval Pemantauan Berkala Agent (Auto-Schedule / Cron)",
+        "command": "telegramNotifier.openDashboard",
+        "title": "🌐 Buka Web Dashboard / Open Web Dashboard",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.whoami",
+        "title": "👤 Info Koneksi & Workspace (/whoami) / Workspace Info",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.switchLanguage",
+        "title": "🌍 Ganti Bahasa / Switch Language (ID / EN)",
         "category": "Tele-vs-Code"
       },
       {
@@ -335,6 +300,13 @@
           "command": "telegramNotifier.uploadMedia",
           "group": "tele_vs_code",
           "when": "!explorerResourceIsFolder"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "telegramNotifier.openSetupWizard",
+          "when": "view == telegramNotifier.taskView",
+          "group": "navigation"
         }
       ]
     },
@@ -358,10 +330,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/usmrip/telegram-vsc-agents.git"
+    "url": "https://biru.co.id/tele-vs-code/"
   },
   "bugs": {
-    "url": "https://github.com/usmrip/telegram-vsc-agents/issues"
+    "url": "https://biru.co.id/tele-vs-code/"
   },
   "keywords": [
     "telegram",

@@ -56,7 +56,7 @@ const vsceBin = path.join(extDir, 'node_modules', '@vscode', 'vsce', 'vsce');
 if (fs.existsSync(vsceBin)) {
   try {
     console.log('[INFO] Memaketkan via @vscode/vsce resmi...');
-    execSync(`node "${vsceBin}" package --no-git-tag-version --allow-missing-repository -o "${outputVsix}"`, {
+    execSync(`node "${vsceBin}" package --no-git-tag-version --allow-missing-repository --allow-star-activation -o "${outputVsix}"`, {
       cwd: extDir,
       stdio: 'inherit'
     });
@@ -140,9 +140,9 @@ const vsixManifestXml = `<?xml version="1.0" encoding="utf-8"?>
       <Property Id="Microsoft.VisualStudio.Code.Engine" Value="^${minEngine}" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionPublisherDisplayName" Value="Biru Indonesia Creative" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="workspace,ui" />
-      <Property Id="Microsoft.VisualStudio.Services.Links.Source" Value="https://github.com/usmrip/telegram-vsc-agents.git" />
-      <Property Id="Microsoft.VisualStudio.Services.Links.Support" Value="https://github.com/usmrip/telegram-vsc-agents/issues" />
-      <Property Id="Microsoft.VisualStudio.Services.Links.Learn" Value="https://github.com/usmrip/telegram-vsc-agents#readme" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.Source" Value="https://biru.co.id/tele-vs-code/" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.Support" Value="https://biru.co.id/tele-vs-code/" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.Learn" Value="https://biru.co.id/tele-vs-code/" />
       <Property Id="Microsoft.VisualStudio.Services.GitHubFlavoredMarkdown" Value="true" />
       <Property Id="Microsoft.VisualStudio.Services.Content.Pricing" Value="Free" />
     </Properties>

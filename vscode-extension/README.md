@@ -4,7 +4,6 @@
 > Delegasikan instruksi, kontrol otomatisasi coding AI Agent, dan pantau hasil pekerjaan di Visual Studio Code secara langsung melalui aplikasi Telegram Anda di HP/Laptop kapan saja dan di mana saja.
 
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-BiruIndonesiaCreative.tele--vs--code-007acc?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code)
-[![GitHub Repo](https://img.shields.io/badge/GitHub-usmrip%2Ftelegram--vsc--agents-blue?logo=github)](https://github.com/usmrip/telegram-vsc-agents)
 [![Dashboard Server](https://img.shields.io/badge/Server-biru.co.id%2Ftele--vs--code-success)](https://biru.co.id/tele-vs-code/)
 
 📌 **Marketplace:** [https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code](https://marketplace.visualstudio.com/items?itemName=BiruIndonesiaCreative.tele-vs-code)
@@ -59,6 +58,6 @@ Di grup atau private chat bot Telegram Anda:
 
 ---
 
-## 👨‍💻 Kontributor & Lisensi
-Dibuat dengan ❤️ oleh **[usmrip](https://github.com/usmrip)** & **Biru Indonesia Creative**.  
-Lisensi: [MIT](https://github.com/usmrip/telegram-vsc-agents/blob/main/LICENSE).
+## 👨‍💻 Pengembang & Lisensi
+Dikembangkan oleh **Biru Indonesia Creative** ([https://biru.co.id/tele-vs-code/](https://biru.co.id/tele-vs-code/)).  
+Lisensi: MIT.

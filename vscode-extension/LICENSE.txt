@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 usmrip (iam@usm.rip) & Biru Indonesia Creative (biru.co.id)
+Copyright (c) 2026 Biru Indonesia Creative (https://biru.co.id)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
