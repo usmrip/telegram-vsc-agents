@@ -302,9 +302,10 @@ async function run() {
         console.log(`✅ [${data.id}] Berhasil dicatat ke Dashboard Status Server (${status}).`);
         updateLocalQueueFile(data.id, instruction, sender, status, notes);
 
-        // Kirim notifikasi ke Telegram bahwa tugas dari IDE Chat sedang diproses
+        // Kirim notifikasi ke Telegram (Cegah ganda: lewati jika server sudah mengirimkan notifikasi langsung)
         const notifyJs = getNotifyScript();
-        if (notifyJs) {
+        const serverAlreadyNotified = Boolean(data && (data.notified_by_server || data.notified));
+        if (notifyJs && !serverAlreadyNotified) {
           try {
             const shortInst = instruction.length > 80 ? (instruction.substring(0, 77) + '...') : instruction;
             const statArg = status === 'IN_PROGRESS' ? 'PROSES' : (status === 'DONE' ? 'SELESAI' : 'INFO');
@@ -426,7 +427,7 @@ async function run() {
 
         const notifyJs = getNotifyScript();
         // Cegah notifikasi ganda: Hanya kirim jika server belum mengirimkan notifikasi mulai (1x saja)
-        const alreadyNotified = (data && (data.start_notified || data.notified_now || data.already_notified));
+        const alreadyNotified = Boolean(data && (data.start_notified || data.notified_now || data.already_notified || data.notified_by_server));
         if (notifyJs && !alreadyNotified) {
           try {
             const details = [];
@@ -501,9 +502,10 @@ async function run() {
         console.log(`✅ [${taskId}] Status di server berhasil diperbarui ke: ${command.toUpperCase()}`);
         updateLocalQueueFile(taskId, '', 'IDE Chat', command.toUpperCase(), report);
 
-        // Kirim laporan ke Telegram via tele-notify
+        // Kirim laporan ke Telegram via tele-notify (Cegah duplikasi: lewati jika server sudah mengirim langsung)
         const notifyJs = getNotifyScript();
-        if (notifyJs) {
+        const serverAlreadyNotified = Boolean(data && (data.notified_by_server || data.already_notified || data.notified));
+        if (notifyJs && !serverAlreadyNotified) {
           try {
             const statArg = command === 'done' ? 'SELESAI' : 'KENDALA';
             const notifyArgs = [];

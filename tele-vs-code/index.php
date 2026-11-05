@@ -342,6 +342,7 @@ function runDatabaseMigrations($pdo) {
     try { $pdo->exec("ALTER TABLE projects ADD COLUMN bot_verified_at DATETIME DEFAULT NULL"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE tasks ADD COLUMN assigned_agent TEXT DEFAULT 'Antigravity AI Agent'"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE tasks ADD COLUMN start_notified INTEGER DEFAULT 0"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE tasks ADD COLUMN done_notified INTEGER DEFAULT 0"); } catch (Exception $e) {}
     try {
         $pdo->exec("CREATE TABLE IF NOT EXISTS chat_sessions (
             chat_id TEXT PRIMARY KEY,
@@ -3444,40 +3445,32 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $stmtIns->execute([$taskId, $user['id'], $prjId, $instruction, $sender, $status, $now, $now, $notes, $command, $assignedAgent]);
 
         // Kirim Notifikasi ke Telegram Bot Proyek agar user melihat update langsung di HP/Telegram
+        $notifiedByServer = false;
         if ($prjId > 0) {
             $stmtPrj = $db->prepare("SELECT bot_token, chat_id, name FROM projects WHERE id = ?");
             $stmtPrj->execute([$prjId]);
             $pData = $stmtPrj->fetch(PDO::FETCH_ASSOC);
-            if ($pData && !empty($pData['bot_token']) && !empty($pData['chat_id'])) {
+            if ($pData && !empty($pData['bot_token']) && !empty($pData['chat_id']) && empty($user['block_notify'])) {
                 $statBadge = ($status === 'IN_PROGRESS') ? '⚡ SEDANG DIKERJAKAN' : ($status === 'DONE' ? '✅ SELESAI' : '⏳ MENUNGGU');
-                $teleMsg = "💻 <b>PERINTAH DARI IDE CHAT / VS CODE</b>
-
-"
-                         . "🆔 <b>ID:</b> <code>$taskId</code>
-"
-                         . "📁 <b>Proyek:</b> <code>" . htmlspecialchars($pData['name']) . "</code>
-"
-                         . "👤 <b>Pengirim:</b> " . htmlspecialchars($sender) . "
-"
-                         . "🤖 <b>Agent:</b> " . htmlspecialchars($assignedAgent) . "
-"
-                         . "📊 <b>Status:</b> <b>$statBadge</b>
-"
-                         . "📝 <b>Instruksi:</b>
-" . htmlspecialchars($instruction) . "
-
-"
+                $teleMsg = "💻 <b>PERINTAH DARI IDE CHAT / VS CODE</b>\n\n"
+                         . "🆔 <b>ID:</b> <code>$taskId</code>\n"
+                         . "📁 <b>Proyek:</b> <code>" . htmlspecialchars($pData['name']) . "</code>\n"
+                         . "👤 <b>Pengirim:</b> " . htmlspecialchars($sender) . "\n"
+                         . "🤖 <b>Agent:</b> " . htmlspecialchars($assignedAgent) . "\n"
+                         . "📊 <b>Status:</b> <b>$statBadge</b>\n"
+                         . "📝 <b>Instruksi:</b>\n" . htmlspecialchars($instruction) . "\n\n"
                          . '🌐 <a href="https://biru.co.id/tele-vs-code/?tab=tasks">Buka Dashboard Status</a>';
-                callTelegram($pData['bot_token'], 'sendMessage', [
+                $tRes = callTelegram($pData['bot_token'], 'sendMessage', [
                     'chat_id' => $pData['chat_id'],
                     'text' => $teleMsg,
                     'parse_mode' => 'HTML',
                     'disable_web_page_preview' => true
                 ]);
+                $notifiedByServer = ($tRes && !empty($tRes['ok']));
             }
         }
 
-        echo json_encode(['ok' => true, 'id' => $taskId, 'message' => "Tugas $taskId berhasil dicatat"]);
+        echo json_encode(['ok' => true, 'id' => $taskId, 'message' => "Tugas $taskId berhasil dicatat", 'notified_by_server' => $notifiedByServer]);
         exit;
     }
 
@@ -3675,8 +3668,11 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
         $botToken = !empty($task['bot_token']) ? $task['bot_token'] : $user['bot_token'];
         $chatId = !empty($task['chat_id']) ? $task['chat_id'] : $user['chat_id'];
         $pName = !empty($task['project_name']) ? $task['project_name'] : $user['project_name'];
+        $alreadyDoneNotified = !empty($task['done_notified']);
+        $notifiedByServer = false;
 
-        if ($botToken && $chatId) {
+        // Cegah notifikasi ganda ke Telegram jika status DONE/FAILED sudah pernah dikirim
+        if ($botToken && $chatId && !$alreadyDoneNotified && empty($_REQUEST['skip_notify'])) {
             if (empty($user['block_notify'])) {
                 $emoji = ($stat === 'DONE') ? '✅' : '🚨';
                 
@@ -3718,15 +3714,27 @@ if (in_array($action, ['api_pull', 'api_push', 'api_done', 'api_failed', 'api_in
                       . $solusiSection
                       . "🤖 <i>Dikirim via tele-vs-code</i>";
 
-                callTelegram($botToken, 'sendMessage', [
+                $resTel = callTelegram($botToken, 'sendMessage', [
                     'chat_id' => $chatId,
                     'text' => $text,
                     'parse_mode' => 'HTML'
                 ]);
+                if ($resTel && !empty($resTel['ok'])) {
+                    $notifiedByServer = true;
+                    try {
+                        $db->prepare("UPDATE tasks SET done_notified = 1 WHERE id = ?")->execute([$taskId]);
+                    } catch (Exception $e) {}
+                }
             }
         }
 
-        echo json_encode(['ok' => true, 'message' => "Tugas $taskId diperbarui ke $stat", 'result' => $result]);
+        echo json_encode([
+            'ok' => true,
+            'message' => "Tugas $taskId diperbarui ke $stat",
+            'result' => $result,
+            'notified_by_server' => ($alreadyDoneNotified || $notifiedByServer),
+            'already_notified' => $alreadyDoneNotified
+        ]);
         exit;
     }
 

@@ -2426,23 +2426,29 @@ function tryExecuteDirectTask(instruction, targetDir, cur) {
 async function markServerTaskDone(cur, taskId, notes = '') {
   try {
     const url = `${cur.webhookUrl.replace(/\/?$/, '/')}?action=done&secret=${cur.secretKey}&id=${encodeURIComponent(taskId)}`;
-    await safeFetch(url, {
+    const res = await safeFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `notes=${encodeURIComponent(notes)}`
     });
-  } catch (e) {}
+    return await res.json().catch(() => null);
+  } catch (e) {
+    return null;
+  }
 }
 
 async function markServerTaskFailed(cur, taskId, notes = '') {
   try {
     const url = `${cur.webhookUrl.replace(/\/?$/, '/')}?action=failed&secret=${cur.secretKey}&id=${encodeURIComponent(taskId)}`;
-    await safeFetch(url, {
+    const res = await safeFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `notes=${encodeURIComponent(notes)}`
     });
-  } catch (e) {}
+    return await res.json().catch(() => null);
+  } catch (e) {
+    return null;
+  }
 }
 
 function appendFailedToTaskQueueFile(queueFile, task, reason) {
@@ -2512,15 +2518,17 @@ async function processActiveLocalTasks(cur) {
         const execRes = tryExecuteDirectTask(currentInProgress.instruction, cur.folder, cur);
         if (execRes && execRes.executed) {
           const rep = execRes.report;
-          await markServerTaskDone(cur, currentInProgress.id, rep);
+          const resDone = await markServerTaskDone(cur, currentInProgress.id, rep);
           appendDoneToTaskQueueFile(queueFile, currentInProgress, rep);
-          try {
-            await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${currentInProgress.id}`, 'SELESAI', [
-              `Instruksi: ${currentInProgress.instruction.substring(0, 90)}`,
-              `Hasil: ${rep}`,
-              `Pengirim: ${currentInProgress.sender}`
-            ], cur.project, cur.timezone);
-          } catch (nErr) {}
+          if (!resDone || (!resDone.notified_by_server && !resDone.already_notified)) {
+            try {
+              await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${currentInProgress.id}`, 'SELESAI', [
+                `Instruksi: ${currentInProgress.instruction.substring(0, 90)}`,
+                `Hasil: ${rep}`,
+                `Pengirim: ${currentInProgress.sender}`
+              ], cur.project, cur.timezone);
+            } catch (nErr) {}
+          }
           showTimedNotification(`✅ Tugas [${currentInProgress.id}] berhasil dieksekusi: ${rep}`, 10);
           // Rekursif ke tugas berikutnya secara berantai sampai semua tugas tuntas
           return processActiveLocalTasks(cur);
@@ -2554,15 +2562,17 @@ async function processActiveLocalTasks(cur) {
       const execRes = tryExecuteDirectTask(firstPending.instruction, cur.folder, cur);
       if (execRes && execRes.executed) {
         const rep = execRes.report;
-        await markServerTaskDone(cur, firstPending.id, rep);
+        const resDone = await markServerTaskDone(cur, firstPending.id, rep);
         appendDoneToTaskQueueFile(queueFile, firstPending, rep);
-        try {
-          await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${firstPending.id}`, 'SELESAI', [
-            `Instruksi: ${firstPending.instruction.substring(0, 90)}`,
-            `Hasil: ${rep}`,
-            `Pengirim: ${firstPending.sender}`
-          ], cur.project, cur.timezone);
-        } catch (nErr) {}
+        if (!resDone || (!resDone.notified_by_server && !resDone.already_notified)) {
+          try {
+            await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${firstPending.id}`, 'SELESAI', [
+              `Instruksi: ${firstPending.instruction.substring(0, 90)}`,
+              `Hasil: ${rep}`,
+              `Pengirim: ${firstPending.sender}`
+            ], cur.project, cur.timezone);
+          } catch (nErr) {}
+        }
         showTimedNotification(`✅ Tugas [${firstPending.id}] berhasil dieksekusi: ${rep}`, 10);
         // Otomatis berlanjut ke tugas PENDING berikutnya!
         return processActiveLocalTasks(cur);
@@ -2701,14 +2711,16 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
             fs.writeFileSync(queueFile, content, 'utf-8');
           }
 
-          // Kirim notifikasi antrean ke Telegram jika tugas baru masuk
-          if (isNewTask && taskItem.status !== 'DONE' && !cur.autoExecuteSimpleTasks) {
+          // Cegah notifikasi ganda ke Telegram:
+          // 1. Tugas dari Telegram sudah dibalas langsung oleh Bot Webhook di Telegram ("📥 TUGAS DITERIMA DI ANTREAN!").
+          // 2. Tugas IN_PROGRESS sudah ditangani saat markTaskOnProcess -> tele-task start -> server (1x).
+          // 3. Hanya kirim notifikasi antrean jika tugas baru ini belum pernah dikirimkan notifikasinya.
+          const isFromTelegram = taskItem.sender && taskItem.sender !== 'IDE Chat' && taskItem.sender !== 'VS Code' && taskItem.sender !== 'CLI Worker';
+          if (isNewTask && taskItem.status !== 'DONE' && targetStatus !== 'IN_PROGRESS' && !isFromTelegram && !cur.autoExecuteSimpleTasks) {
             try {
-              const notifyStatus = targetStatus === 'IN_PROGRESS' ? 'PROSES' : 'INFO';
-              const notifyTitle = targetStatus === 'IN_PROGRESS' ? `Memulai Pekerjaan: ${taskItem.id}` : `Tugas Masuk Antrean: ${taskItem.id}`;
-              const statusDesc = targetStatus === 'IN_PROGRESS'
-                ? 'Diterima oleh VS Code & sedang dikerjakan oleh AI Agent...'
-                : 'Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)';
+              const notifyStatus = 'INFO';
+              const notifyTitle = `Tugas Masuk Antrean: ${taskItem.id}`;
+              const statusDesc = 'Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)';
               await sendTelegramMessage(cur.botToken, cur.chatId, notifyTitle, notifyStatus, [
                 `Perintah: ${taskItem.instruction}`,
                 `Pengirim: ${taskItem.sender}`,
@@ -2724,17 +2736,19 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
               const execRes = tryExecuteDirectTask(taskItem.instruction, cur.folder, cur);
               if (execRes && execRes.executed) {
                 const rep = execRes.report;
-                await markServerTaskDone(cur, taskItem.id, rep);
+                const resDone = await markServerTaskDone(cur, taskItem.id, rep);
                 appendDoneToTaskQueueFile(queueFile, taskItem, rep);
                 content = fs.readFileSync(queueFile, 'utf-8');
 
-                try {
-                  await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${taskItem.id}`, 'SELESAI', [
-                    `Instruksi: ${taskItem.instruction.substring(0, 90)}`,
-                    `Hasil: ${rep}`,
-                    `Pengirim: ${taskItem.sender}`
-                  ], cur.project, cur.timezone);
-                } catch (nErr) {}
+                if (!resDone || (!resDone.notified_by_server && !resDone.already_notified)) {
+                  try {
+                    await sendTelegramMessage(cur.botToken, cur.chatId, `Tugas Selesai: ${taskItem.id}`, 'SELESAI', [
+                      `Instruksi: ${taskItem.instruction.substring(0, 90)}`,
+                      `Hasil: ${rep}`,
+                      `Pengirim: ${taskItem.sender}`
+                    ], cur.project, cur.timezone);
+                  } catch (nErr) {}
+                }
 
                 log('info', `[TUGAS SELESAI] ID: ${taskItem.id} tuntas dieksekusi: ${rep}`);
                 showTimedNotification(`✅ Tugas [${taskItem.id}] berhasil dieksekusi: ${rep}`, 10);

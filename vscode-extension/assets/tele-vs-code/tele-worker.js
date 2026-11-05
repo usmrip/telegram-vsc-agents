@@ -208,9 +208,11 @@ async function markTaskStatus(taskId, status = 'IN_PROGRESS', notes = '') {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `notes=${encodeURIComponent(notes)}`
     });
-    await res.text();
+    const data = await res.json().catch(() => null);
+    return data;
   } catch (err) {
     console.error(`⚠️ Gagal update status di server: ${err.message}`);
+    return null;
   }
 }
 
@@ -463,14 +465,17 @@ async function executeTask(task) {
     const directResult = tryExecuteDirectTask(inst, projectDir);
     if (directResult && directResult.executed) {
       const report = directResult.report;
-      await markTaskDone(task.id, report);
+      const resDone = await markTaskDone(task.id, report);
       appendToTaskQueueFile(task, report);
 
-      sendNotification(`Tugas Selesai: ${task.id}`, 'SELESAI', [
-        `Instruksi: ${inst.substring(0, 90)}`,
-        `Hasil: ${report}`,
-        `Pengirim: ${task.sender}`
-      ]);
+      // Cegah pengiriman ganda jika server sudah mengirim notifikasi SELESAI
+      if (!resDone || (!resDone.notified_by_server && !resDone.already_notified)) {
+        sendNotification(`Tugas Selesai: ${task.id}`, 'SELESAI', [
+          `Instruksi: ${inst.substring(0, 90)}`,
+          `Hasil: ${report}`,
+          `Pengirim: ${task.sender}`
+        ]);
+      }
       console.log(`✅ [${task.id}] Berhasil dieksekusi 100%: ${report}`);
       return;
     }
@@ -572,11 +577,15 @@ async function executeTask(task) {
         console.error(`⚠️ Kendala saat eksekusi CLI Agent: ${agentErr.message}`);
       }
     } else {
-      sendNotification(`Tugas Masuk Antrean: ${task.id}`, 'INFO', [
-        `Instruksi: ${inst.substring(0, 90)}`,
-        `Pengirim: ${task.sender}`,
-        `Status: Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)`
-      ]);
+      // Cegah spam: jika dari Telegram, bot webhook sudah membalas saat tugas diterima
+      const isFromTelegram = task.sender && task.sender !== 'IDE Chat' && task.sender !== 'VS Code' && task.sender !== 'CLI Worker';
+      if (!isFromTelegram) {
+        sendNotification(`Tugas Masuk Antrean: ${task.id}`, 'INFO', [
+          `Instruksi: ${inst.substring(0, 90)}`,
+          `Pengirim: ${task.sender}`,
+          `Status: Masuk Antrean [PENDING] (Menunggu giliran eksekusi AI Agent)`
+        ]);
+      }
       console.log(`⚡ [${task.id}] Tugas dicatat ke TASK_QUEUE.md dengan status [PENDING].`);
       console.log(`📢 Notifikasi INFO dikirim ke Telegram.`);
       console.log(`⚠️ Menunggu AI Agent (Chat IDE / CLI) untuk menyelesaikan pekerjaan coding.\n`);
