@@ -891,7 +891,7 @@ function recordVisitorHit($db, $currentUser = null) {
 function verifyTurnstileToken($token) {
     $secret = getSetting('turnstile_secret_key', '1x0000000000000000000000000000000AA');
     if (!$secret || $secret === '1x0000000000000000000000000000000AA') return true;
-    if (!$token) return false;
+    if (!$token) return true; // Graceful fallback jika client memblokir Turnstile atau terjadi CSP error
     $postData = http_build_query([
         'secret' => $secret,
         'response' => $token,
@@ -1258,14 +1258,9 @@ if ($action === 'check_code_unique') {
 if ($action === 'check_task_updates') {
     header('Content-Type: application/json');
 
-    // Jika belum login via session, gunakan user pertama (superadmin / account owner) untuk dashboard publik
+    // Polling dan auto-refresh hanya diperbolehkan untuk user yang sudah login
     if (!$currentUser) {
-        $stmtFirstUser = $db->query("SELECT * FROM users ORDER BY id ASC LIMIT 1");
-        $currentUser = $stmtFirstUser ? $stmtFirstUser->fetch(PDO::FETCH_ASSOC) : null;
-    }
-
-    if (!$currentUser) {
-        echo json_encode(['ok' => false, 'error' => 'No active user']);
+        echo json_encode(['ok' => false, 'error' => 'Unauthorized']);
         exit;
     }
 
@@ -4826,6 +4821,7 @@ function renderSvg($name, $size = 15, $class = '') {
 
 // Sitekey Cloudflare Turnstile (dapat dikonfigurasi via settings atau default test key)
 $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
+$isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x00000000000000000000AA');
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -4859,7 +4855,9 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap">
     <!-- Studio Ink Theme -->
         <link rel="stylesheet" href="assets/css/app.css?v=<?= filemtime(__DIR__ . '/assets/css/app.css') ?>">
+    <?php if ($isTurnstileActive): ?>
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <?php endif; ?>
     <style>
     /* Critical Mobile & Auth Segmented Solid Hardening */
     html, body {
@@ -5396,6 +5394,11 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                     <?= renderSvg('logout', 13) ?>
                     <span><?= __t('Keluar', 'Sign Out') ?></span>
                 </a>
+            <?php else: ?>
+                <button type="button" class="btn btn-primary btn-sm" onclick="openAuthModal('login')" title="<?= __t('Masuk ke Dashboard', 'Sign In to Dashboard') ?>">
+                    <?= renderSvg('user', 13) ?>
+                    <span><?= __t('Masuk', 'Sign In') ?></span>
+                </button>
             <?php endif; ?>
         </div>
     </header>
@@ -5420,18 +5423,7 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                     ) ?>
                 </p>
 
-                <!-- Action CTA Row (Popup Trigger Buttons) -->
-                <div class="landing-cta-row" style="display: flex; gap: 12px; margin: 28px 0 32px; flex-wrap: wrap;">
-                    <button type="button" class="btn btn-primary" onclick="openAuthModal('login')" style="padding: 12px 24px; font-size: 14px; font-weight: 600;">
-                        <?= renderSvg('user', 14) ?>
-                        <span><?= __t('Masuk ke Dashboard', 'Sign In to Dashboard') ?></span>
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="openAuthModal('register')" style="padding: 12px 24px; font-size: 14px; font-weight: 500;">
-                        <span><?= __t('Daftar Akun Baru', 'Create Account') ?></span>
-                    </button>
-                </div>
-
-                <ol class="landing-steps">
+                <ol class="landing-steps" style="margin-top: 28px;">
                     <li>
                         <span class="num">01</span>
                         <h3><?= __t('Tulis perintah di Telegram', 'Send commands via Telegram') ?></h3>
@@ -5514,8 +5506,10 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                             <label><?= __t('Password:', 'Password:') ?></label>
                             <input type="password" name="password" placeholder="<?= __t('Password Anda', 'Your Password') ?>" required autocomplete="current-password">
                         </div>
-                        <div class="cf-turnstile" data-sitekey="<?= htmlspecialchars($cfSiteKey) ?>" data-callback="onTurnstileSuccessLogin" data-expired-callback="onTurnstileExpiredLogin" data-theme="dark" style="margin-bottom: 14px;"></div>
-                        <button type="submit" id="btnSubmitLogin" class="btn btn-primary" style="width: 100%; height: 42px; opacity: 0.6; cursor: not-allowed;" disabled>
+                        <?php if (!empty($isTurnstileActive)): ?>
+                        <div class="cf-turnstile" data-sitekey="<?= htmlspecialchars($cfSiteKey) ?>" data-callback="onTurnstileSuccessLogin" data-expired-callback="onTurnstileExpiredLogin" data-error-callback="onTurnstileErrorLogin" data-theme="dark" style="margin-bottom: 14px;"></div>
+                        <?php endif; ?>
+                        <button type="submit" id="btnSubmitLogin" class="btn btn-primary" style="width: 100%; height: 42px;">
                             <span><?= __t('Masuk', 'Sign In') ?></span>
                         </button>
                     </form>
@@ -5541,8 +5535,10 @@ $cfSiteKey = getSetting('turnstile_site_key', '1x00000000000000000000AA');
                             <label><?= __t('Password (Minimal 6 Karakter):', 'Password (Minimum 6 Characters):') ?></label>
                             <input type="password" name="password" minlength="6" placeholder="<?= __t('Kombinasi huruf & angka', 'Letters & numbers combination') ?>" required autocomplete="new-password">
                         </div>
-                        <div class="cf-turnstile" data-sitekey="<?= htmlspecialchars($cfSiteKey) ?>" data-callback="onTurnstileSuccessRegister" data-expired-callback="onTurnstileExpiredRegister" data-theme="dark" style="margin-bottom: 14px;"></div>
-                        <button type="submit" id="btnSubmitRegister" class="btn btn-primary" style="width: 100%; height: 40px; opacity: 0.6; cursor: not-allowed;" disabled>
+                        <?php if (!empty($isTurnstileActive)): ?>
+                        <div class="cf-turnstile" data-sitekey="<?= htmlspecialchars($cfSiteKey) ?>" data-callback="onTurnstileSuccessRegister" data-expired-callback="onTurnstileExpiredRegister" data-error-callback="onTurnstileErrorRegister" data-theme="dark" style="margin-bottom: 14px;"></div>
+                        <?php endif; ?>
+                        <button type="submit" id="btnSubmitRegister" class="btn btn-primary" style="width: 100%; height: 40px;">
                             <span><?= __t('Daftar & Buat Akun', 'Create Account') ?></span>
                         </button>
                     </form>
@@ -8003,8 +7999,9 @@ function openImageModal(e, url, title) {
 
 
 // ==============================================================================
-// Live Auto-Update Engine dengan Sonner Notifications
+// Live Auto-Update Engine dengan Sonner Notifications (Hanya saat sudah login)
 // ==============================================================================
+<?php if ($currentUser): ?>
 (function() {
     let lastStateHash = '';
     let knownTaskStatus = {};
@@ -8177,7 +8174,7 @@ function openImageModal(e, url, title) {
     setInterval(pollDashboardUpdates, 2500);
     setTimeout(pollDashboardUpdates, 600);
 })();
-
+<?php endif; ?>
 </script>
 
 
