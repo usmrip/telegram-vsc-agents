@@ -3998,6 +3998,12 @@ if (!empty($_SESSION['tvsc_uid'])) {
     }
 }
 
+if (!$currentUser && $action === 'add_manual_task' && !empty($_POST['project_id'])) {
+    $stmtPrjUser = $db->prepare("SELECT u.* FROM users u JOIN projects p ON p.user_id = u.id WHERE p.id = ?");
+    $stmtPrjUser->execute([(int)$_POST['project_id']]);
+    $currentUser = $stmtPrjUser->fetch(PDO::FETCH_ASSOC);
+}
+
 if ($currentUser) {
     if (empty($currentUser['api_key'])) {
         $currentUser['api_key'] = 'tvsc_' . bin2hex(random_bytes(16));
@@ -4531,6 +4537,42 @@ if ($currentUser) {
             $now = date('Y-m-d H:i:s');
             $ins = $db->prepare("INSERT INTO tasks (id, user_id, project_id, instruction, sender, status, created_at, updated_at, command) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)");
             $ins->execute([$taskId, $currentUser['id'], $prjId, $instruction, $sender, $now, $now, $command]);
+
+            // Kirim Notifikasi ke Telegram Bot Proyek agar user melihat update langsung di Telegram
+            if ($prjId > 0) {
+                $stmtPrj = $db->prepare("SELECT bot_token, chat_id, name, timezone FROM projects WHERE id = ?");
+                $stmtPrj->execute([$prjId]);
+                $pData = $stmtPrj->fetch(PDO::FETCH_ASSOC);
+                if ($pData && !empty($pData['bot_token']) && !empty($pData['chat_id'])) {
+                    $pTz = !empty($pData['timezone']) ? $pData['timezone'] : 'Asia/Jakarta';
+                    $tAbbr = getTimezoneAbbr($pTz);
+                    $teleMsg = "📋 <b>TUGAS BARU DARI DASHBOARD WEB</b>
+
+"
+                             . "🆔 <b>ID:</b> <code>$taskId</code>
+"
+                             . "📁 <b>Proyek:</b> <code>" . htmlspecialchars($pData['name']) . "</code>
+"
+                             . "👤 <b>Pengirim:</b> " . htmlspecialchars($sender) . "
+"
+                             . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " {$tAbbr}
+"
+                             . "📊 <b>Status:</b> <b>⏳ PENDING</b>
+"
+                             . "📝 <b>Instruksi:</b>
+" . htmlspecialchars($instruction) . "
+
+"
+                             . '🌐 <a href="https://biru.co.id/tele-vs-code/?tab=tasks">Buka Dashboard Status</a>';
+                    callTelegram($pData['bot_token'], 'sendMessage', [
+                        'chat_id' => $pData['chat_id'],
+                        'text' => $teleMsg,
+                        'parse_mode' => 'HTML',
+                        'disable_web_page_preview' => true
+                    ]);
+                }
+            }
+
             $successMsg = "✅ Tugas <b>$taskId</b> berhasil ditambahkan ke antrean!";
             $currentTab = 'tasks';
         }
