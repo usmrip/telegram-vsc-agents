@@ -1319,24 +1319,46 @@ function activate(context) {
     const targetFolder = cur.folder || process.cwd();
     const queueFile = path.join(targetFolder, 'TASK_QUEUE.md');
 
-    // Tentukan handler: utamakan agentOverride, lalu instruksi (@agent/--agent), lalu TASK_QUEUE.md, lalu setting user
-    let targetHandler = (agentOverride || '').trim();
-    if (!targetHandler && instruction) {
+    // Tentukan handler: utamakan instruksi (@agent/--agent), lalu setting user cur.agentHandler, lalu agentOverride / TASK_QUEUE.md
+    let targetHandler = '';
+
+    // 1. Cek instruksi spesifik (@claude, @gemini, dll.) - prioritas tertinggi
+    if (instruction) {
       const mAgt = instruction.match(/@([a-zA-Z0-9_-]+)/i) || instruction.match(/(?:--agent|\[agent:\s*)([\w\s-]+)\]?/i);
       if (mAgt) {
         targetHandler = resolveAgentHandlerFromText(mAgt[1]);
       }
     }
+
+    // 2. Jika user secara eksplisit memilih handler 'ide', jangan biarkan label default 'Antigravity AI Agent' menimpanya
+    if (!targetHandler && (cur.agentHandler === 'ide' || (cur.agentHandler && cur.agentHandler !== 'auto'))) {
+      targetHandler = cur.agentHandler.trim();
+    }
+
+    // 3. Jika belum ditentukan, cek agentOverride yang valid
+    if (!targetHandler && agentOverride) {
+      const resolvedOverride = (agentOverride || '').trim();
+      if (!(cur.agentHandler === 'ide' && resolvedOverride === 'agy')) {
+        targetHandler = resolvedOverride;
+      }
+    }
+
+    // 4. Jika belum ditentukan, baca dari TASK_QUEUE.md
     if (!targetHandler && taskId && fs.existsSync(queueFile)) {
       try {
         const qText = fs.readFileSync(queueFile, 'utf-8');
         const cleanId = taskId.replace(/^#/, '');
-        const mAgent = new RegExp('###\\s+\\[(?:PENDING|IN_PROGRESS)\\]\\s+#?' + cleanId + '[\\s\\S]*?-\\s+\\*\\*Agent:\\*\\*\\s+([^\\r\\n]+)', 'i').exec(qText);
+        const mAgent = new RegExp('###\\s+\\[(?:PENDING|IN_PROGRESS)\\]\\s+#?' + cleanId + '[\\s\\S]*?-\\s+\\*\\\*Agent:\\\*\\\*\\s+([^\\r\\n]+)', 'i').exec(qText);
         if (mAgent) {
-          targetHandler = resolveAgentHandlerFromText(mAgent[1]);
+          const resolvedFromQueue = resolveAgentHandlerFromText(mAgent[1]);
+          if (resolvedFromQueue && !(cur.agentHandler === 'ide' && resolvedFromQueue === 'agy')) {
+            targetHandler = resolvedFromQueue;
+          }
         }
       } catch (e) {}
     }
+
+    // 5. Fallback ke cur.agentHandler atau 'auto'
     if (!targetHandler) {
       targetHandler = (cur.agentHandler || 'auto').trim();
     }
@@ -1427,6 +1449,15 @@ function activate(context) {
       }
     }
 
+    // Fallback cerdas: Jika handler 'agy' dipilih namun binary agy tidak terinstal di OS, otomatis arahkan ke 'ide'
+    if (activeHandler === 'agy') {
+      const agyBin = findCli('agy');
+      if (!agyBin) {
+        log('info', 'CLI agy tidak ditemukan di PATH/sistem. Otomatis fallback ke Agent IDE.');
+        activeHandler = 'ide';
+      }
+    }
+
     // Penanganan khusus untuk Agent IDE (Chat IDE interaktif, tanpa perlu terminal CLI)
     if (activeHandler === 'ide') {
       try {
@@ -1435,33 +1466,44 @@ function activate(context) {
         log('warn', `Gagal menyalin prompt ke clipboard: ${clipErr.message}`);
       }
 
-      // Buka panel chat IDE (prefill prompt jika didukung oleh VS Code)
-      try {
-        await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt });
-      } catch (chatErr) {
+      // 1. Jika ekstensi Google Antigravity aktif di IDE: isi prompt & langsung auto-send!
+      const hasAntigravity = vscode.extensions.all.some(e => /antigravity/i.test(e.id));
+      if (hasAntigravity) {
         try {
-          await vscode.commands.executeCommand('workbench.action.chat.open');
-        } catch (chatErr2) {
-          try {
-            await vscode.commands.executeCommand('workbench.action.quickchat.open', { query: prompt });
-          } catch (qcErr) {}
+          await vscode.commands.executeCommand('antigravity.panel.focus');
+          await vscode.commands.executeCommand('antigravity.addContext', prompt);
+          await new Promise(resolve => setTimeout(resolve, 450));
+          await vscode.commands.executeCommand('antigravity.triggerSend');
+
+          if (cur.debugMode) {
+            log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+            log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Google Antigravity Chat (Auto-Send via RPC)`);
+          }
+          setStatusBarState('proses', `Agent IDE: [${taskId || 'Tugas'}]`, `Tugas ${taskId} dikirim otomatis ke Antigravity Chat`);
+          return { executed: true, handler: 'ide', method: 'antigravity_auto_send' };
+        } catch (agyErr) {
+          log('warn', `Gagal auto-send via Antigravity RPC: ${agyErr.message}`);
         }
       }
 
-      const taskDisplay = taskId ? ` ${taskId}` : '';
-      const msg = (cur.language === 'en'
-        ? `📋 [Agent IDE] Task${taskDisplay} prompt copied to clipboard and Chat opened! Paste (Ctrl+V) and send to Agent IDE.`
-        : `📋 [Agent IDE] Prompt tugas${taskDisplay} disalin ke clipboard dan Chat dibuka! Tempel (Ctrl+V) dan kirim ke Agent IDE.`);
-
-      if (cur.debugMode) {
-        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
-        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Agent IDE (Chat IDE Interaktif)`);
-        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : Salin ke clipboard & buka Chat IDE: workbench.action.chat.open (query: "${prompt.replace(/"/g, '\"')}")`);
+      // 2. Fallback untuk VS Code Chat standar (Copilot / Gemini): gunakan isPartialQuery: false agar langsung auto-submit
+      try {
+        await vscode.commands.executeCommand('workbench.action.chat.open', {
+          query: prompt,
+          isPartialQuery: false
+        });
+        await vscode.commands.executeCommand('workbench.action.chat.submit');
+      } catch (chatErr) {
+        try {
+          await vscode.commands.executeCommand('workbench.action.quickchat.open', {
+            query: prompt,
+            isPartialQuery: false
+          });
+        } catch (qcErr) {}
       }
 
-      // Sesuai instruksi: Langsung eksekusi tanpa pop-up dialog yang menuntut klik tombol manual
-      setStatusBarState('proses', `Agent IDE: [${taskId || 'Tugas'}]`, msg);
-      return { executed: true, handler: 'ide', method: 'clipboard+chat_open' };
+      setStatusBarState('proses', `Agent IDE: [${taskId || 'Tugas'}]`, `Tugas ${taskId} dikirim ke Chat IDE`);
+      return { executed: true, handler: 'ide', method: 'vscode_chat_auto_submit' };
     }
 
     // Terminal runner untuk CLI Agents
@@ -1959,7 +2001,7 @@ function appendFailedToTaskQueueFile(queueFile, task, reason) {
   try {
     if (!fs.existsSync(queueFile)) return;
     let content = fs.readFileSync(queueFile, 'utf-8');
-    const escapedId = (task.id || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\async function processActiveLocalTasks(cur) {');
+    const escapedId = (task.id || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
     const regexActive = new RegExp('### \\[(PENDING|WAITING|QUEUE|IN_PROGRESS|FAILED|KENDALA)\\]\\s+' + escapedId + '[\\s\\S]*?(?=(###|##|$))', 'g');
     content = content.replace(regexActive, '');
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -2293,9 +2335,6 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                 const prompt = buildAgentPrompt(taskItem.id, taskItem.instruction);
                 await vscode.env.clipboard.writeText(prompt);
 
-                const currentHandler = (cur.agentHandler || 'auto').trim();
-                const agentDisplayName = currentHandler === 'ide' ? 'Agent IDE' : (currentHandler === 'custom' ? 'Custom Agent' : currentHandler.toUpperCase());
-                const runBtnLabel = currentHandler !== 'none' ? i18n('btnRunVia', { agent: agentDisplayName }) : i18n('btnSelectAgent');
 
                 // Sesuai instruksi: JANGAN PERNAH memunculkan notifikasi pop-up dialog yang menuntut klik manual ([Run via AUTO]).
                 // Sesuai aturan: LANGSUNG eksekusi seketika sesuai agen yang dipilih!

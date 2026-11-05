@@ -202,13 +202,13 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
     }
     let content = fs.readFileSync(queueFile, 'utf-8');
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const escapedId = (taskId || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 
     if (status === 'DONE' || status === 'FAILED') {
       let finalInstruction = instruction;
       let finalSender = sender;
 
       // Ambil instruksi dan pengirim dari blok aktif jika parameter kosong
-      const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
       const regexActive = new RegExp(`### \\[(PENDING|WAITING|QUEUE|IN_PROGRESS)\\]\\s+${escapedId}[\\s\\S]*?(?=(###|##|$))`, 'g');
       const match = content.match(regexActive);
       if (match && match[0]) {
