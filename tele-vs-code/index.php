@@ -6104,43 +6104,136 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
             <!-- TAB 1: ANTREAN TUGAS BERDASARKAN PROYEK                          -->
             <!-- ================================================================ -->
             <section class="tab-pane">
-                <!-- Banner Panduan Penting: Pemicu Manual AI Agent & Prioritas Pekerja (Warna Kuat & High Visibility) -->
-                <div class="card" style="margin-bottom: 22px; border: 2px solid #f59e0b; background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(99, 102, 241, 0.10) 100%); border-radius: 12px; padding: 18px 22px; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.18);">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 18px;">
+                                <!-- Card Akun & Kredensial Pribadi & Status Bot Telegram -->
+                <?php
+                    // Ambil Proyek yang sedang dipilih atau proyek utama untuk status bot
+                    $targetBotProject = null;
+                    if (!empty($filterProjectId)) {
+                        foreach ($projects as $p) {
+                            if ($p['id'] == $filterProjectId) { $targetBotProject = $p; break; }
+                        }
+                    }
+                    if (!$targetBotProject) {
+                        // Cari proyek yang bot-nya belum terverifikasi untuk diprioritaskan
+                        foreach ($projects as $p) {
+                            if (empty($p['bot_verified_at']) && !empty($p['bot_token'])) {
+                                $targetBotProject = $p;
+                                break;
+                            }
+                        }
+                    }
+                    if (!$targetBotProject && !empty($projects)) {
+                        $targetBotProject = $projects[0];
+                    }
+
+                    $isBotVerified = !empty($targetBotProject['bot_verified_at']);
+                    $hasBotToken = !empty($targetBotProject['bot_token']);
+                    $botNameDisplay = !empty($targetBotProject['bot_username']) ? ('@' . ltrim($targetBotProject['bot_username'], '@')) : (!empty($targetBotProject['name']) ? $targetBotProject['name'] : 'Bot');
+                ?>
+                <div class="card" style="background: linear-gradient(135deg, rgba(22, 22, 28, 0.95), rgba(12, 12, 15, 0.85)); border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 12px; padding: 20px 22px; margin-bottom: 22px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
                         <div style="flex: 1; min-width: 290px;">
-                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                                <span style="background: #f59e0b; color: #000; font-weight: 800; font-size: 11px; padding: 3px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; display: inline-flex; align-items: center; gap: 4px;">
-                                    <?= renderSvg('zap', 12) ?> <?= __t('PETUNJUK UTAMA', 'KEY GUIDANCE') ?>
-                                </span>
-                                <h3 style="font-size: 16px; font-weight: 700; color: #fff; margin: 0;">
-                                    <?= __t('Cara Terbaik: Perintahkan Manual AI Agent di IDE Chat', 'Best Practice: Prompt AI Agent Manually in IDE Chat') ?>
-                                </h3>
-                            </div>
-                            <p style="color: #cbd5e1; font-size: 13px; line-height: 1.6; margin: 0 0 12px 0;">
-                                <?= __t('Saat Anda berada di depan komputer, cara paling handal & instan agar AI Agent langsung menyelesaikan antrean <code>TASK_QUEUE.md</code> adalah mengetik kata kunci pemicu di Chat AI IDE (Antigravity / Claude / Copilot):', 'When you are at your computer, the most reliable and instant way for your AI Agent to solve <code>TASK_QUEUE.md</code> is by typing trigger keywords in your IDE AI Chat (Antigravity / Claude / Copilot):') ?>
+                            <h2 style="font-size: 16px; font-weight: 600; color: #ffffff; display: flex; align-items: center; gap: 8px; margin: 0 0 6px 0;">
+                                <?= renderSvg('key', 16) ?>
+                                <span><?= __t('Akun & Kredensial Pribadi', 'Account & Personal Credentials') ?></span>
+                            </h2>
+                            <p style="font-size: 12.5px; color: var(--text-secondary); margin: 0 0 14px 0; line-height: 1.5;">
+                                <?= __t('Gunakan <b>API Secret Key</b> ini untuk menghubungkan ekstensi Visual Studio Code dengan dashboard antrean.', 'Use this <b>API Secret Key</b> to connect the Visual Studio Code extension with the queue dashboard.') ?>
                             </p>
-                            <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
-                                <span style="color: #94a3b8; font-size: 12px; font-weight: 500;"><?= __t('Pemicu Sakti:', 'Magic Triggers:') ?></span>
-                                <code style="background: rgba(0,0,0,0.5); border: 1px solid rgba(245,158,11,0.5); color: #fbbf24; padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 13px; cursor: pointer;" onclick="copyText('proses antrian', 'Pemicu proses antrian')" title="<?= __t('Klik untuk salin', 'Click to copy') ?>">proses antrian</code>
-                                <code style="background: rgba(0,0,0,0.5); border: 1px solid rgba(245,158,11,0.5); color: #fbbf24; padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 13px; cursor: pointer;" onclick="copyText('handle task queue', 'Pemicu handle task queue')" title="<?= __t('Klik untuk salin', 'Click to copy') ?>">handle task queue</code>
-                                <code style="background: rgba(0,0,0,0.5); border: 1px solid rgba(245,158,11,0.5); color: #fbbf24; padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 13px; cursor: pointer;" onclick="copyText('kerjakan queue', 'Pemicu kerjakan queue')" title="<?= __t('Klik untuk salin', 'Click to copy') ?>">kerjakan queue</code>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="copyText('Periksa file TASK_QUEUE.md dan selesaikan seluruh tugas aktif sampai tuntas 100% sesuai AGENTS.md.', 'Perintah AI Agent')" style="background: #f59e0b; color: #000; font-weight: 700; border: none; margin-left: 6px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px;">
-                                    <?= renderSvg('copy', 13) ?>
-                                    <span><?= __t('Salin Perintah AI', 'Copy AI Prompt') ?></span>
-                                </button>
+
+                            <!-- API Key Box & Zona Waktu -->
+                            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 260px; max-width: 480px; display: flex; align-items: center; gap: 8px; background: var(--bg-surface-inset); border: 1px solid var(--border-subtle); padding: 8px 12px; border-radius: var(--radius-md);">
+                                    <span style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">API Key:</span>
+                                    <code style="font-size: 12.5px; color: #fff; word-break: break-all; flex: 1; font-family: monospace;"><?= htmlspecialchars($currentUser['api_key']) ?></code>
+                                    <button type="button" class="btn btn-icon btn-ghost" onclick="copyText('<?= htmlspecialchars($currentUser['api_key']) ?>', 'API Secret Key')" title="<?= __t('Salin API Key', 'Copy API Key') ?>" style="padding: 4px;">
+                                        <?= renderSvg('copy', 13) ?>
+                                    </button>
+                                </div>
+
+                                <?php 
+                                    $userTz = !empty($currentUser['timezone']) ? $currentUser['timezone'] : 'Asia/Jakarta';
+                                    $userTzAbbr = getTimezoneAbbr($userTz);
+                                ?>
+                                <div style="display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-subtle); padding: 8px 12px; border-radius: var(--radius-md); font-size: 12px; color: var(--text-secondary);">
+                                    <?= renderSvg('clock', 12) ?>
+                                    <span><?= htmlspecialchars($userTz) ?> (<?= htmlspecialchars($userTzAbbr) ?>)</span>
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Prioritas Pekerja Box -->
-                        <div style="background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 10px; padding: 14px 18px; min-width: 270px; max-width: 360px;">
-                            <div style="font-size: 12px; font-weight: 800; color: #fbbf24; text-transform: uppercase; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; letter-spacing: 0.5px;">
-                                <?= renderSvg('activity', 13) ?> <?= __t('Prioritas Pekerja (Agent Priority):', 'Agent Priority Hierarchy:') ?>
+                        <!-- Tombol Aksi Kredensial -->
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                            <a href="?action=download_vsix" class="btn btn-primary btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
+                                <?= renderSvg('download', 13) ?>
+                                <span><?= __t('Unduh Ekstensi .VSIX', 'Download .VSIX Extension') ?></span>
+                            </a>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="openProfileModal()" style="display: inline-flex; align-items: center; gap: 6px;">
+                                <?= renderSvg('user', 13) ?>
+                                <span><?= __t('Edit Profil & Password', 'Edit Profile & Password') ?></span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Divider Garis Halus -->
+                    <div style="height: 1px; background: rgba(255, 255, 255, 0.08); margin: 16px 0;"></div>
+
+                    <!-- Status Bot Telegram & Tombol Setup Bot -->
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px 16px;">
+                        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                            <div style="font-size: 13px; font-weight: 600; color: #fff; display: flex; align-items: center; gap: 6px;">
+                                <?= renderSvg('bot', 15) ?>
+                                <span>Status Bot Telegram:</span>
+                                <?php if ($targetBotProject): ?>
+                                    <span style="font-weight: 400; color: var(--text-muted); font-size: 12px;">(Proyek: <?= htmlspecialchars($targetBotProject['name']) ?>)</span>
+                                <?php endif; ?>
                             </div>
-                            <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; color: #e2e8f0; line-height: 1.6;">
-                                <li><strong style="color: #4ade80;">🥇 <?= __t('Prioritas Utama:', 'Primary Priority:') ?></strong> <code>Antigravity AI Agent</code> <?= __t('(otomatis mengambil semua tugas umum).', '(automatically takes all general tasks).') ?></li>
-                                <li><strong style="color: #60a5fa;">🥈 <?= __t('Prioritas Spesifik:', 'Specific Assignment:') ?></strong> <?= __t('Ditentukan via', 'Assigned via') ?> <code>@claude</code>, <code>@copilot</code>, <code>@cursor</code>, <code>@gemini</code>.</li>
-                                <li><strong style="color: #facc15;">🥉 <?= __t('Fallback Mandiri:', 'Autonomous Fallback:') ?></strong> <?= __t('Jika agent lain offline, Antigravity otomatis mengambil alih antrean.', 'If other agents are offline, Antigravity autonomously takes over.') ?></li>
-                            </ul>
+
+                            <?php if (!$targetBotProject || !$hasBotToken): ?>
+                                <!-- Kondisi 1: Belum Ada Bot Token -->
+                                <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 11.5px; padding: 4px 10px; border-radius: 6px; display: inline-flex; align-items: center; gap: 5px;">
+                                    <?= renderSvg('alert-circle', 12) ?>
+                                    <span><?= __t('Bot Token Belum Diatur', 'Bot Token Not Configured') ?></span>
+                                </span>
+                            <?php elseif ($isBotVerified): ?>
+                                <!-- Kondisi 2: Bot Sudah Terverifikasi -->
+                                <span class="badge" style="background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); font-size: 11.5px; padding: 4px 10px; border-radius: 6px; display: inline-flex; align-items: center; gap: 5px;">
+                                    <?= renderSvg('check', 12) ?>
+                                    <span><?= __t('Bot Terverifikasi', 'Bot Verified') ?>: <b><?= htmlspecialchars($botNameDisplay) ?></b></span>
+                                </span>
+                                <span style="font-size: 11.5px; color: var(--text-muted);">
+                                    <?= __t('Terhubung sejak', 'Connected since') ?> <?= date('d M Y H:i', strtotime($targetBotProject['bot_verified_at'])) ?>
+                                </span>
+                            <?php else: ?>
+                                <!-- Kondisi 3: Bot Belum Terverifikasi -->
+                                <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); font-size: 11.5px; padding: 4px 10px; border-radius: 6px; display: inline-flex; align-items: center; gap: 5px;">
+                                    <?= renderSvg('clock', 12) ?>
+                                    <span><?= __t('Bot Belum Terverifikasi', 'Bot Not Verified Yet') ?>: <b><?= htmlspecialchars($botNameDisplay) ?></b></span>
+                                </span>
+                                <span style="font-size: 11.5px; color: #fcd34d;">
+                                    <?= __t('Silakan jalankan setup wizard untuk verifikasi & menghubungkan perintah bot.', 'Please run setup wizard to verify & connect bot commands.') ?>
+                                </span>
+                            <?php endif; ?>
+                        </div>
+
+                        <!-- Tombol Setup Bot (Muncul jika belum terverifikasi) -->
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <?php if ($targetBotProject && $hasBotToken && !$isBotVerified): ?>
+                                <button type="button" onclick="openSetupBotWizard(<?= $targetBotProject['id'] ?>, '<?= htmlspecialchars(addslashes($targetBotProject['name']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($targetBotProject['bot_token']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($targetBotProject['bot_username'] ?? ''), ENT_QUOTES) ?>')" class="btn btn-primary btn-sm" style="background: #f59e0b; color: #000; font-weight: 700; border: none; display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; box-shadow: 0 2px 10px rgba(245, 158, 11, 0.3);" title="Jalankan Wizard Setup Bot">
+                                    <?= renderSvg('bot', 13) ?>
+                                    <span>Setup Bot <?= htmlspecialchars($botNameDisplay) ?></span>
+                                </button>
+                            <?php elseif ($targetBotProject && $hasBotToken && $isBotVerified): ?>
+                                <button type="button" onclick="openSetupBotWizard(<?= $targetBotProject['id'] ?>, '<?= htmlspecialchars(addslashes($targetBotProject['name']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($targetBotProject['bot_token']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($targetBotProject['bot_username'] ?? ''), ENT_QUOTES) ?>')" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px;" title="Buka Wizard Setup Bot Kembali">
+                                    <?= renderSvg('settings', 13) ?>
+                                    <span>Setup Ulang Bot</span>
+                                </button>
+                            <?php else: ?>
+                                <a href="?tab=projects" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
+                                    <?= renderSvg('plus', 13) ?>
+                                    <span><?= __t('Atur Bot di Pengaturan', 'Setup Bot in Settings') ?></span>
+                                </a>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>
