@@ -338,6 +338,8 @@ function runDatabaseMigrations($pdo) {
     try { $pdo->exec("ALTER TABLE projects ADD COLUMN last_operator TEXT DEFAULT ''"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE projects ADD COLUMN last_seen DATETIME DEFAULT NULL"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE projects ADD COLUMN model_email TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE projects ADD COLUMN bot_username TEXT DEFAULT ''"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE projects ADD COLUMN bot_verified_at DATETIME DEFAULT NULL"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE tasks ADD COLUMN assigned_agent TEXT DEFAULT 'Antigravity AI Agent'"); } catch (Exception $e) {}
     try { $pdo->exec("ALTER TABLE tasks ADD COLUMN start_notified INTEGER DEFAULT 0"); } catch (Exception $e) {}
     try {
@@ -708,6 +710,7 @@ function getProjectCommands($project) {
         $cmd = preg_replace('/^[^a-z0-9_]+/', '', $cmd); // buang simbol @ atau / di awal
         $cmd = preg_replace('/[^a-z0-9_]/', '', $cmd);
         if (empty($cmd) || strlen($cmd) > 32 || isset($seen[$cmd])) continue;
+        if ($cmd === 'verifikasi' || $cmd === 'verify') continue; // Hidden command (khusus wizard)
 
         $desc = trim($d['description']);
         if (mb_strlen($desc) > 200) {
@@ -1471,6 +1474,54 @@ if ($action === 'webhook') {
         $attachmentFileId = $msg['video']['file_id'] ?? null;
         $origName = !empty($msg['video']['file_name']) ? basename($msg['video']['file_name']) : 'video_' . date('Ymd_His') . '.mp4';
         $attachmentName = preg_replace('/[^a-zA-Z0-9_\.-]/', '_', $origName);
+    }
+
+    // Command Khusus Wizard: /verifikasi atau /verify (Dapat dieksekusi sebelum whitelist agar proses setup mulus)
+    if (preg_match('/^\/(verifikasi|verify)(@\w+)?/i', $text)) {
+        $botUsername = '';
+        $botMe = callTelegram($project['bot_token'], 'getMe');
+        if (!empty($botMe['result']['username'])) {
+            $botUsername = '@' . $botMe['result']['username'];
+        } elseif (!empty($project['bot_username'])) {
+            $botUsername = '@' . $project['bot_username'];
+        } else {
+            $botUsername = 'Bot Anda';
+        }
+
+        $nowTime = date('d-m-Y H:i:s') . ' ' . $tzAbbr;
+        $nowTs = time();
+
+        try {
+            // Update status verifikasi proyek
+            $db->prepare("UPDATE projects SET bot_verified_at = CURRENT_TIMESTAMP, bot_username = ?, chat_id = ? WHERE id = ?")
+               ->execute([ltrim($botUsername, '@'), $incomingChatId, $project['id']]);
+            setSetting('bot_verify_ping_' . $project['id'], (string)$nowTs);
+
+            // Daftarkan otomatis user pengirim ke whitelist proyek ini
+            $chkWhite = $db->prepare("SELECT id FROM bot_whitelist WHERE user_id = ? AND telegram_user_id = ?");
+            $chkWhite->execute([$project['user_id'], $senderUserId]);
+            if (!$chkWhite->fetch()) {
+                $db->prepare("INSERT INTO bot_whitelist (user_id, project_id, telegram_user_id, telegram_username, name) VALUES (?, ?, ?, ?, ?)")
+                   ->execute([$project['user_id'], $project['id'], $senderUserId, $senderUsername, $sender]);
+            }
+        } catch (Exception $e) {}
+
+        // Sesuai aturan user: "jika sudah verifikasi, balas ditelegram Bot Anda <nama_BOT> sudah terverifikasi dan terhubungsejak"
+        $reply = "🎉 <b>Verifikasi Berhasil!</b>\n\n"
+               . "Bot Anda <b>{$botUsername}</b> sudah terverifikasi dan terhubung sejak <b>{$nowTime}</b>.\n\n"
+               . "✅ <b>Status:</b> Terverifikasi & Terhubung\n"
+               . "📁 <b>Proyek:</b> <code>" . htmlspecialchars($project['name']) . "</code> (#" . ($project['code'] ?: 'a') . ")\n"
+               . "💬 <b>Chat ID:</b> <code>$incomingChatId</code>\n"
+               . "👤 <b>Whitelist:</b> Terdaftar (Akses Penuh Aktif)\n\n"
+               . "🚀 <b>Bot Siap Digunakan!</b> Anda sekarang dapat langsung mengirimkan instruksi coding, teks biasa, foto, dokumen, atau video ke AI Agent di VS Code.";
+
+        callTelegram($project['bot_token'], 'sendMessage', [
+            'chat_id' => $incomingChatId,
+            'text' => $reply,
+            'parse_mode' => 'HTML',
+            'reply_to_message_id' => $messageId
+        ]);
+        echo "OK"; exit;
     }
 
     // 1. Pemeriksaan Hak Akses Whitelist Pengguna & Filter Proyek yang Diizinkan (Strict Per-Project Whitelist)
@@ -4084,6 +4135,12 @@ if (!empty($_SESSION['tvsc_uid'])) {
     }
 }
 
+if (!$currentUser && in_array($action, ['check_bot_active', 'check_bot_verification'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['ok' => false, 'description' => 'Sesi berakhir. Silakan muat ulang halaman dan masuk kembali.']);
+    exit;
+}
+
 if (!$currentUser && in_array($action, ['test_bot', 'test_notification', 'set_telegram_webhook', 'sync_telegram_menu', 'connect_bot_commands'])) {
     $errorMsg = 'Silakan masuk (login) terlebih dahulu untuk menguji bot atau mengelola proyek.';
 }
@@ -4437,7 +4494,101 @@ if ($currentUser) {
             $del->execute([$pid, $currentUser['id']]);
             $successMsg = "✅ Proyek berhasil dihapus!";
         }
+        if (!empty($_GET['ajax']) || !empty($_POST['ajax'])) {
+            header('Content-Type: application/json; charset=utf-8');
+            if (!empty($resWebhook['ok']) && !empty($resCmd['ok'])) {
+                echo json_encode(['ok' => true, 'message' => 'Perintah & Webhook berhasil dipasang!', 'commands_count' => count($commands), 'bot_username' => $botUser]);
+            } elseif (!empty($resWebhook['ok'])) {
+                echo json_encode(['ok' => true, 'message' => 'Webhook aktif, menu perintah: ' . ($resCmd['description'] ?? 'OK'), 'bot_username' => $botUser]);
+            } else {
+                echo json_encode(['ok' => false, 'description' => $resWebhook['description'] ?? 'Gagal pasang webhook']);
+            }
+            exit;
+        }
         $currentTab = 'projects';
+    }
+
+    // AJAX: Cek Bot Aktif & Ambil Nama Bot (getMe)
+    if ($action === 'check_bot_active') {
+        header('Content-Type: application/json; charset=utf-8');
+        $pid = (int)($_GET['id'] ?? 0);
+        if ($isSuperAdmin) {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ?");
+            $stmtP->execute([$pid]);
+        } else {
+            $stmtP = $db->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
+            $stmtP->execute([$pid, $currentUser['id']]);
+        }
+        $prj = $stmtP->fetch(PDO::FETCH_ASSOC);
+        if (!$prj || empty($prj['bot_token'])) {
+            echo json_encode(['ok' => false, 'description' => 'Telegram Bot Token belum diisi pada proyek ini.']);
+            exit;
+        }
+
+        $resMe = callTelegram($prj['bot_token'], 'getMe');
+        if (!empty($resMe['ok']) && !empty($resMe['result']['username'])) {
+            $botU = $resMe['result']['username'];
+            $botName = $resMe['result']['first_name'] ?? $botU;
+            try {
+                $db->prepare("UPDATE projects SET bot_username = ? WHERE id = ?")->execute([$botU, $prj['id']]);
+            } catch (Exception $e) {}
+            echo json_encode([
+                'ok' => true,
+                'username' => '@' . $botU,
+                'raw_username' => $botU,
+                'name' => $botName,
+                'chat_id' => $prj['chat_id'] ?? ''
+            ]);
+            exit;
+        } else {
+            echo json_encode([
+                'ok' => false,
+                'description' => $resMe['description'] ?? 'Bot tidak aktif atau Bot Token tidak valid. Harap periksa kembali token dari @BotFather.'
+            ]);
+            exit;
+        }
+    }
+
+    // AJAX: Cek Status Verifikasi Bot dari Telegram (/verifikasi)
+    if ($action === 'check_bot_verification') {
+        header('Content-Type: application/json; charset=utf-8');
+        $pid = (int)($_GET['id'] ?? 0);
+        $since = (int)($_GET['since'] ?? 0);
+
+        if ($isSuperAdmin) {
+            $stmtP = $db->prepare("SELECT id, name, bot_token, bot_username, bot_verified_at, chat_id FROM projects WHERE id = ?");
+            $stmtP->execute([$pid]);
+        } else {
+            $stmtP = $db->prepare("SELECT id, name, bot_token, bot_username, bot_verified_at, chat_id FROM projects WHERE id = ? AND user_id = ?");
+            $stmtP->execute([$pid, $currentUser['id']]);
+        }
+        $prj = $stmtP->fetch(PDO::FETCH_ASSOC);
+        if (!$prj) {
+            echo json_encode(['ok' => false, 'verified' => false, 'description' => 'Proyek tidak ditemukan']);
+            exit;
+        }
+
+        $pingTs = (int)getSetting('bot_verify_ping_' . $prj['id'], '0');
+        $isVerified = false;
+        $verifiedAt = $prj['bot_verified_at'];
+
+        if ($pingTs > 0 && ($since === 0 || $pingTs >= ($since - 5))) {
+            $isVerified = true;
+        } elseif (!empty($verifiedAt)) {
+            $vTs = strtotime($verifiedAt);
+            if ($since === 0 || $vTs >= ($since - 5)) {
+                $isVerified = true;
+            }
+        }
+
+        echo json_encode([
+            'ok' => true,
+            'verified' => $isVerified,
+            'verified_at' => $verifiedAt,
+            'bot_username' => !empty($prj['bot_username']) ? ('@' . $prj['bot_username']) : 'Bot',
+            'chat_id' => $prj['chat_id'] ?? ''
+        ]);
+        exit;
     }
 
     // Hubungkan Perintah ke Bot (Webhook + setMyCommands + setChatMenuButton)
@@ -6692,9 +6843,9 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                             </div>
                             <div class="project-card-actions-box">
                                 <?php if (!empty($prj['bot_token'])): ?>
-                                    <button type="button" onclick="openTestBotModal(<?= $prj['id'] ?>, '<?= htmlspecialchars(addslashes($prj['name']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['bot_token']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['chat_id']), ENT_QUOTES) ?>')" class="btn btn-secondary btn-sm" title="Uji Bot">
+                                    <button type="button" onclick="openSetupBotWizard(<?= $prj['id'] ?>, '<?= htmlspecialchars(addslashes($prj['name']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['bot_token']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['bot_username'] ?? ''), ENT_QUOTES) ?>')" class="btn btn-secondary btn-sm" title="Jalankan Wizard Setup Bot">
                                         <?= renderSvg('bot', 13) ?>
-                                        <span>Tes Bot</span>
+                                        <span id="btnSetupBotLabel_<?= $prj['id'] ?>">Setup Bot <?= !empty($prj['bot_username']) ? ('@' . htmlspecialchars($prj['bot_username'])) : '' ?></span>
                                     </button>
                                     <a href="?action=connect_bot_commands&id=<?= $prj['id'] ?>" class="btn btn-outline btn-sm" title="Hubungkan Perintah & Webhook ke Bot Telegram agar bot bisa menerima instruksi">
                                         <?= renderSvg('terminal', 13) ?>
@@ -6770,7 +6921,7 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
                                 <div style="display: flex; gap: 8px; align-items: center;">
                                     <button type="submit" class="btn btn-primary btn-sm">Simpan Pengaturan</button>
                                     <?php if (!empty($prj['bot_token'])): ?>
-                                        <button type="button" onclick="openTestBotModal(<?= $prj['id'] ?>, '<?= htmlspecialchars(addslashes($prj['name']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['bot_token']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['chat_id']), ENT_QUOTES) ?>')" class="btn btn-outline btn-sm">Tes Koneksi</button>
+                                        <button type="button" onclick="openSetupBotWizard(<?= $prj['id'] ?>, '<?= htmlspecialchars(addslashes($prj['name']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['bot_token']), ENT_QUOTES) ?>', '<?= htmlspecialchars(addslashes($prj['bot_username'] ?? ''), ENT_QUOTES) ?>')" class="btn btn-outline btn-sm">Setup Bot <?= !empty($prj['bot_username']) ? ('@' . htmlspecialchars($prj['bot_username'])) : '' ?></button>
                                         <a href="?action=connect_bot_commands&id=<?= $prj['id'] ?>" class="btn btn-secondary btn-sm" title="Hubungkan Perintah & Webhook agar bot dapat menerima perintah di Telegram">
                                             <?= renderSvg('terminal', 13) ?>
                                             <span>Hubungkan Perintah</span>
@@ -7507,80 +7658,213 @@ $isTurnstileActive = (!empty($cfSiteKey) && $cfSiteKey !== '1x000000000000000000
 <!-- ==================================================================== -->
 <!-- Modal Konfirmasi Sapa Bot Sebelum Uji Koneksi (Studio Ink Theme)     -->
 <!-- ==================================================================== -->
-<div id="modalConfirmTestBot" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closeTestBotModal()">
-    <div class="modal-dialog" style="max-width: 540px; padding: 26px 24px; text-align: left; background: var(--bg-surface, #14130f); border: 1px solid var(--border-medium, rgba(236,228,214,0.14)); border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,0.65);">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px;">
+<!-- ==================================================================== -->
+<!-- Modal Interaktif: Setup Bot <nama_BOT> (Studio Ink Theme 3-Steps Wizard) -->
+<!-- ==================================================================== -->
+<div id="modalSetupBotWizard" class="modal-overlay" style="display: none; align-items: center; justify-content: center; backdrop-filter: blur(6px); z-index: 9999;" onclick="if(event.target === this) closeSetupBotWizard()">
+    <div class="modal-dialog" style="max-width: 580px; width: 92%; padding: 28px 26px; text-align: left; background: var(--bg-surface, #14130f); border: 1px solid var(--border-medium, rgba(236,228,214,0.14)); border-radius: 16px; box-shadow: 0 28px 70px rgba(0,0,0,0.75); position: relative; overflow: hidden;">
+
+        <!-- Canvas Efek Konfeti Selebrasi -->
+        <canvas id="confettiCanvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 50; display: none;"></canvas>
+
+        <!-- Header Wizard -->
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
             <div style="display: flex; align-items: center; gap: 12px;">
-                <div style="width: 42px; height: 42px; border-radius: 10px; background: rgba(255, 90, 31, 0.12); border: 1px solid rgba(255, 90, 31, 0.35); display: inline-flex; align-items: center; justify-content: center; color: var(--signal, #ff5a1f);">
-                    <?= renderSvg('bot', 22) ?>
+                <div style="width: 44px; height: 44px; border-radius: 12px; background: rgba(255, 90, 31, 0.12); border: 1px solid rgba(255, 90, 31, 0.35); display: inline-flex; align-items: center; justify-content: center; color: var(--signal, #ff5a1f);">
+                    <?= renderSvg('bot', 24) ?>
                 </div>
                 <div>
-                    <h3 style="font-family: var(--font-display, 'Instrument Serif', Georgia, serif); font-size: 20px; font-weight: normal; color: var(--text-primary, #ece4d6); margin: 0 0 2px 0; letter-spacing: -0.01em;">Konfirmasi Uji Koneksi Bot</h3>
-                    <p style="font-size: 12px; color: var(--text-muted, #777064); margin: 0;">Target: <b id="testBotProjectName" style="color: var(--text-primary, #ece4d6);"></b></p>
+                    <h3 id="wizHeaderTitle" style="font-family: var(--font-display, 'Instrument Serif', Georgia, serif); font-size: 22px; font-weight: normal; color: var(--text-primary, #ece4d6); margin: 0 0 3px 0; letter-spacing: -0.01em;">
+                        Setup Bot <span id="wizBotUsernameText" style="color: var(--signal, #ff5a1f);"></span>
+                    </h3>
+                    <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted, #777064);">
+                        <span>Proyek: <b id="wizProjectNameText" style="color: var(--text-primary, #ece4d6);"></b></span>
+                        <span>•</span>
+                        <span style="color: var(--accent-success, #9cc48a); display: inline-flex; align-items: center; gap: 4px;">
+                            <span style="width: 7px; height: 7px; border-radius: 50%; background: #22c55e; display: inline-block;"></span>
+                            Bot Aktif
+                        </span>
+                    </div>
                 </div>
             </div>
-            <button type="button" class="btn btn-secondary btn-xs" onclick="closeTestBotModal()" style="border-radius: 50%; width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--text-muted);" title="Tutup">&times;</button>
+            <button type="button" class="btn btn-secondary btn-xs" onclick="closeSetupBotWizard()" style="border-radius: 50%; width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--text-muted);" title="Tutup">&times;</button>
         </div>
 
-        <!-- Box Pertanyaan Utama -->
-        <div id="testBotQuestionBox" style="background: rgba(236, 228, 214, 0.03); border: 1px solid var(--border-subtle, rgba(236,228,214,0.08)); border-radius: 10px; padding: 16px; margin-bottom: 18px;">
-            <div style="font-size: 13.5px; font-weight: 600; color: var(--text-primary, #ece4d6); display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                <span style="font-size: 16px;">💬</span>
-                <span>Apakah Anda (atau anggota grup) sudah pernah menyapa bot Anda di Telegram?</span>
+        <!-- Stepper Visual (3 Langkah) -->
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 22px;">
+            <div id="wizStepPill1" class="step-pill-wiz active" style="padding: 7px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 500; display: flex; align-items: center; gap: 6px; background: rgba(255,90,31,0.08); border: 1px solid var(--signal, #ff5a1f); color: var(--text-primary, #ece4d6); transition: all 0.25s ease;">
+                <span id="wizStepNum1" style="width: 18px; height: 18px; border-radius: 50%; background: var(--signal, #ff5a1f); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0;">1</span>
+                <span>1. Sapa Bot</span>
             </div>
-            <p style="font-size: 12.5px; color: var(--text-secondary, #a8a091); line-height: 1.6; margin: 0;">
-                Telegram menerapkan aturan privasi ketat: <b>Bot TIDAK BISA mengirim pesan perdana</b> ke akun pribadi atau grup sebelum ada interaksi pembuka dari user (menekan tombol <b>Start</b> / <code>/start</code> atau mengirim sapaan). Untuk grup, bot wajib ditambahkan ke grup terlebih dahulu.
-            </p>
+            <div id="wizStepPill2" class="step-pill-wiz" style="padding: 7px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 500; display: flex; align-items: center; gap: 6px; background: var(--bg-surface-elevated, #1a1814); border: 1px solid var(--border-subtle, rgba(236,228,214,0.08)); color: var(--text-muted, #777064); transition: all 0.25s ease;">
+                <span id="wizStepNum2" style="width: 18px; height: 18px; border-radius: 50%; background: rgba(236,228,214,0.1); color: var(--text-secondary, #a8a091); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0;">2</span>
+                <span>2. Pasang Perintah</span>
+            </div>
+            <div id="wizStepPill3" class="step-pill-wiz" style="padding: 7px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 500; display: flex; align-items: center; gap: 6px; background: var(--bg-surface-elevated, #1a1814); border: 1px solid var(--border-subtle, rgba(236,228,214,0.08)); color: var(--text-muted, #777064); transition: all 0.25s ease;">
+                <span id="wizStepNum3" style="width: 18px; height: 18px; border-radius: 50%; background: rgba(236,228,214,0.1); color: var(--text-secondary, #a8a091); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0;">3</span>
+                <span>3. Verifikasi</span>
+            </div>
         </div>
 
-        <!-- Pilihan Aksi: Sudah vs Belum -->
-        <div id="testBotActionButtons" style="display: flex; flex-direction: column; gap: 10px;">
-            <button type="button" class="btn btn-primary" id="btnTestBotProceed" onclick="proceedTestBot()" style="width: 100%; justify-content: center; padding: 12px 18px; font-size: 13px; font-weight: 600; background: var(--text-primary, #ece4d6); color: #0d0c0a; border: none; border-radius: 999px;">
-                <?= renderSvg('check', 15) ?>
-                <span>Ya, Sudah Menyapa Bot — Jalankan Uji Tes Sekarang</span>
-            </button>
-            <button type="button" class="btn btn-secondary" onclick="showBotGuideStep()" style="width: 100%; justify-content: center; padding: 11px 18px; font-size: 13px; border-radius: 999px;">
-                <?= renderSvg('info', 15) ?>
-                <span>Belum / Ragu — Beritahu Saya Langkahnya</span>
-            </button>
-        </div>
+        <!-- ======================= STEP 1: SAPA BOT ======================= -->
+        <div id="wizStepContent1" class="wiz-step-pane" style="display: block;">
+            <div style="background: rgba(236, 228, 214, 0.03); border: 1px solid var(--border-subtle, rgba(236,228,214,0.08)); border-radius: 12px; padding: 18px; margin-bottom: 20px;">
+                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary, #ece4d6); display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                    <span style="font-size: 18px;">💬</span>
+                    <span>Apakah Anda (atau anggota grup) sudah pernah menyapa bot Anda di Telegram?</span>
+                </div>
+                <p style="font-size: 12.5px; color: var(--text-secondary, #a8a091); line-height: 1.6; margin: 0;">
+                    Telegram menerapkan aturan privasi ketat: <b>Bot TIDAK BISA mengirim pesan perdana</b> ke akun pribadi atau grup sebelum ada interaksi pembuka dari pengguna (seperti menekan tombol <b>START</b> / <code>/start</code> atau mengirimkan pesan sapaan). Untuk grup, bot wajib dimasukkan ke dalam grup terlebih dahulu.
+                </p>
+            </div>
 
-        <!-- Box Panduan Interaktif (Tampil jika memilih "Belum") -->
-        <div id="testBotGuideBox" style="display: none; margin-top: 14px; background: var(--bg-surface-inset, #0a0907); border: 1px dashed var(--border-medium, rgba(236,228,214,0.14)); border-radius: 10px; padding: 16px;">
-            <h4 style="font-size: 13px; font-weight: 600; color: var(--signal, #ff5a1f); margin: 0 0 10px 0; display: flex; align-items: center; gap: 6px;">
-                <?= renderSvg('link', 14) ?>
-                <span>Langkah Agar Bot Dapat Berinteraksi dengan Anda</span>
-            </h4>
-            <ol style="margin: 0; padding-left: 20px; font-size: 12px; color: var(--text-secondary, #a8a091); line-height: 1.65;">
-                <li style="margin-bottom: 8px;">
-                    <b style="color: var(--text-primary, #ece4d6);">Buka Bot di Telegram:</b> Cari bot Anda di aplikasi Telegram (bisa menggunakan nama pengguna/username bot Anda).
-                </li>
-                <li style="margin-bottom: 8px;">
-                    <b style="color: var(--text-primary, #ece4d6);">Klik Tombol START / Mulai:</b> Di ruang obrolan bot, tekan tombol <b>START</b> (atau ketik pesan pembuka apa saja seperti <code>/start</code> atau <code>Halo</code>).
-                </li>
-                <li style="margin-bottom: 8px;">
-                    <b style="color: var(--text-primary, #ece4d6);">Jika Notifikasi Ditujukan ke Grup:</b> Masukkan bot ke dalam grup Telegram Anda, dan pastikan izin mengirim pesan aktif (atau jadikan bot sebagai Admin grup).
-                </li>
-                <li>
-                    <b style="color: var(--text-primary, #ece4d6);">Pastikan Chat ID Sesuai:</b> Masukkan Chat ID pribadi Anda atau Chat ID grup (diawali tanda minus <code>-</code>) pada pengaturan proyek.
-                </li>
-            </ol>
-
-            <div style="margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap;">
-                <a href="https://t.me/" id="linkOpenTelegramBot" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" style="flex: 1; min-width: 150px; justify-content: center; border-radius: 999px;">
-                    <?= renderSvg('globe', 13) ?>
-                    <span>Buka Telegram</span>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <a href="https://t.me/" id="btnWizOpenBotLink" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="width: 100%; justify-content: center; padding: 12px 18px; font-size: 13px; border-radius: 999px;">
+                    <?= renderSvg('globe', 14) ?>
+                    <span>Buka Bot di Telegram (<span id="wizLinkBotUsername">t.me</span>)</span>
                 </a>
-                <button type="button" class="btn btn-primary btn-sm" onclick="proceedTestBot()" style="flex: 1.3; min-width: 200px; justify-content: center; background: var(--text-primary, #ece4d6); color: #0d0c0a; border: none; border-radius: 999px; font-weight: 600;">
-                    <?= renderSvg('play', 13) ?>
-                    <span>Saya Sudah Sapa, Uji Sekarang!</span>
+                <button type="button" class="btn btn-primary" onclick="goToWizStep(2)" style="width: 100%; justify-content: center; padding: 12px 18px; font-size: 13px; font-weight: 600; background: var(--text-primary, #ece4d6); color: #0d0c0a; border: none; border-radius: 999px;">
+                    <?= renderSvg('check', 14) ?>
+                    <span>Ya, Sudah Menyapa Bot — Lanjut Langkah 2 ➡️</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ======================= STEP 2: PASANG PERINTAH ======================= -->
+        <div id="wizStepContent2" class="wiz-step-pane" style="display: none;">
+            <div style="background: rgba(236, 228, 214, 0.03); border: 1px solid var(--border-subtle, rgba(236,228,214,0.08)); border-radius: 12px; padding: 18px; margin-bottom: 18px;">
+                <div style="font-size: 14px; font-weight: 600; color: var(--signal, #ff5a1f); display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                    <?= renderSvg('terminal', 16) ?>
+                    <span>Kenapa Harus Memasang Perintah Telegram?</span>
+                </div>
+                <div style="font-size: 12.5px; color: var(--text-secondary, #a8a091); line-height: 1.65;">
+                    <div style="margin-bottom: 8px;">
+                        <b style="color: var(--text-primary, #ece4d6);">1. Koneksi Webhook Realtime:</b> Menghubungkan bot dengan server Tele-vs-Code agar setiap instruksi coding, teks biasa, foto, dokumen, atau video yang Anda kirim di Telegram langsung ditangkap dan diteruskan ke AI Agent di VS Code.
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <b style="color: var(--text-primary, #ece4d6);">2. Menu Perintah Interaktif [ / ]:</b> Mendaftarkan daftar perintah resmi (<code>/task</code>, <code>/status</code>, <code>/projects</code>, dll.) ke tombol menu Telegram sehingga Anda tidak perlu menghafal format perintah.
+                    </div>
+                    <div>
+                        <b style="color: var(--text-primary, #ece4d6);">3. Tombol Menu Chat:</b> Mengaktifkan tombol menu di obrolan Telegram agar selalu siap digunakan.
+                    </div>
+                </div>
+            </div>
+
+            <div id="wizStep2Feedback" style="display: none; padding: 12px 14px; border-radius: 10px; font-size: 12.5px; margin-bottom: 16px;"></div>
+
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <button type="button" id="btnWizInstallCommands" class="btn btn-primary" onclick="executeWizInstallCommands()" style="width: 100%; justify-content: center; padding: 12px 18px; font-size: 13px; font-weight: 600; background: var(--text-primary, #ece4d6); color: #0d0c0a; border: none; border-radius: 999px;">
+                    <?= renderSvg('zap', 14) ?>
+                    <span>⚡ Pasang Perintah & Webhook Sekarang</span>
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="goToWizStep(1)" style="width: 100%; justify-content: center; padding: 10px 18px; font-size: 12.5px; border-radius: 999px;">
+                    <span>⬅️ Kembali ke Langkah 1</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ======================= STEP 3: VERIFIKASI DUA ARAH ======================= -->
+        <div id="wizStepContent3" class="wiz-step-pane" style="display: none;">
+            
+            <!-- Keadaan 1: Menunggu Verifikasi dari Telegram -->
+            <div id="wizStep3Waiting">
+                <div style="text-align: center; padding: 14px 10px 20px;">
+                    <!-- Animasi Radar Pulse -->
+                    <div style="position: relative; width: 68px; height: 68px; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center;">
+                        <div style="position: absolute; width: 100%; height: 100%; border-radius: 50%; background: rgba(255,90,31,0.15); animation: radarPulse 1.8s ease-out infinite;"></div>
+                        <div style="position: absolute; width: 70%; height: 70%; border-radius: 50%; background: rgba(255,90,31,0.25); animation: radarPulse 1.8s ease-out infinite 0.4s;"></div>
+                        <div style="width: 44px; height: 44px; border-radius: 50%; background: var(--signal, #ff5a1f); display: flex; align-items: center; justify-content: center; color: #fff; z-index: 2;">
+                            <?= renderSvg('terminal', 20) ?>
+                        </div>
+                    </div>
+
+                    <h4 style="font-size: 15px; font-weight: 600; color: var(--text-primary, #ece4d6); margin: 0 0 6px 0;">
+                        Ketik <code>/verifikasi</code> di Telegram
+                    </h4>
+                    <p style="font-size: 12.5px; color: var(--text-secondary, #a8a091); line-height: 1.55; margin: 0 auto 16px; max-width: 440px;">
+                        Buka aplikasi Telegram Anda di obrolan dengan bot <b id="wizVerifyBotName" style="color: var(--text-primary, #ece4d6);"></b> (atau di grup tujuan), lalu ketik dan kirimkan perintah:
+                    </p>
+
+                    <!-- Box Perintah /verifikasi -->
+                    <div style="background: var(--bg-surface-inset, #0a0907); border: 1.5px dashed var(--signal, #ff5a1f); border-radius: 12px; padding: 14px; display: inline-flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                        <code style="font-size: 17px; font-weight: 700; color: #fff; letter-spacing: 1px;">/verifikasi</code>
+                        <button type="button" class="btn btn-secondary btn-xs" onclick="copyText('/verifikasi', 'Perintah verifikasi')" style="border-radius: 999px;">
+                            <?= renderSvg('copy', 12) ?>
+                            <span>Salin</span>
+                        </button>
+                    </div>
+
+                    <div style="display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; color: var(--text-muted, #777064);">
+                        <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--signal, #ff5a1f); animation: blinkDot 1s infinite;"></span>
+                        <span>Mendengarkan sinyal dari Telegram...</span>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <a href="https://t.me/" id="btnWizDirectTg" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="flex: 1; justify-content: center; padding: 11px 16px; font-size: 12.5px; border-radius: 999px;">
+                        <?= renderSvg('globe', 13) ?>
+                        <span>Buka Chat Telegram</span>
+                    </a>
+                    <button type="button" class="btn btn-outline" onclick="goToWizStep(2)" style="flex: 1; justify-content: center; padding: 11px 16px; font-size: 12.5px; border-radius: 999px;">
+                        <span>⬅️ Kembali</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Keadaan 2: Verifikasi Berhasil 100% (Konfeti + Ucapan Terima Kasih) -->
+            <div id="wizStep3Success" style="display: none; text-align: center; padding: 18px 10px 10px;">
+                <div style="width: 62px; height: 62px; border-radius: 50%; background: rgba(156, 196, 138, 0.15); border: 2px solid var(--accent-success, #9cc48a); display: flex; align-items: center; justify-content: center; color: var(--accent-success, #9cc48a); margin: 0 auto 16px; animation: bounceIn 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);">
+                    <?= renderSvg('check', 30) ?>
+                </div>
+
+                <h3 style="font-family: var(--font-display, 'Instrument Serif', Georgia, serif); font-size: 26px; font-weight: normal; color: var(--text-primary, #ece4d6); margin: 0 0 6px 0;">
+                    🎉 Terima Kasih! Bot Anda Telah Terverifikasi & Terhubung
+                </h3>
+                <p style="font-size: 13px; color: var(--text-secondary, #a8a091); line-height: 1.6; max-width: 460px; margin: 0 auto 20px;">
+                    Bot <b id="wizSuccessBotUsername" style="color: var(--text-primary, #ece4d6);"></b> telah terhubung penuh dengan server dan siap menerima tugas coding kapan saja dari Telegram ke VS Code.
+                </p>
+
+                <div style="background: var(--bg-surface-inset, #0a0907); border: 1px solid var(--border-subtle, rgba(236,228,214,0.08)); border-radius: 12px; padding: 14px 18px; margin-bottom: 22px; text-align: left; font-size: 12.5px; color: var(--text-secondary, #a8a091);">
+                    <div style="padding: 4px 0; border-bottom: 1px solid var(--border-subtle, rgba(236,228,214,0.08)); display: flex; justify-content: space-between;">
+                        <span>Status Bot:</span>
+                        <b style="color: var(--accent-success, #9cc48a);">🟢 Terverifikasi & Aktif</b>
+                    </div>
+                    <div style="padding: 4px 0; border-bottom: 1px solid var(--border-subtle, rgba(236,228,214,0.08)); display: flex; justify-content: space-between;">
+                        <span>Waktu Verifikasi:</span>
+                        <b id="wizSuccessVerifiedAt" style="color: var(--text-primary, #ece4d6);">-</b>
+                    </div>
+                    <div style="padding: 4px 0; display: flex; justify-content: space-between;">
+                        <span>Perintah Telegram:</span>
+                        <b style="color: var(--text-primary, #ece4d6);">Aktif di Tombol [ / ]</b>
+                    </div>
+                </div>
+
+                <button type="button" class="btn btn-primary" onclick="closeSetupBotWizard(true)" style="width: 100%; justify-content: center; padding: 13px 22px; font-size: 13.5px; font-weight: 700; background: var(--text-primary, #ece4d6); color: #0d0c0a; border: none; border-radius: 999px; box-shadow: 0 4px 18px rgba(0,0,0,0.4);">
+                    <?= renderSvg('check', 15) ?>
+                    <span>Selesai & Tutup Wizard</span>
                 </button>
             </div>
         </div>
     </div>
 </div>
 
-<div id="modalTaskDetail" class="modal-overlay">
+<style>
+@keyframes radarPulse {
+    0% { transform: scale(0.6); opacity: 0.9; }
+    100% { transform: scale(1.6); opacity: 0; }
+}
+@keyframes blinkDot {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+}
+@keyframes bounceIn {
+    0% { transform: scale(0.3); opacity: 0; }
+    50% { transform: scale(1.08); opacity: 1; }
+    100% { transform: scale(1); }
+}
+</style>
+
+ class="modal-overlay"><div id="modalTaskDetail" class="modal-overlay">
     <div class="modal-dialog">
         <div class="modal-header">
             <h3 class="modal-title">
@@ -8136,42 +8420,300 @@ window.onTurnstileExpiredRegister = function() {
 
 // Modal Profil & Password
 
-// Modal Konfirmasi Sapa Bot Sebelum Uji Tes Koneksi
-let currentTestBotProjectId = null;
-function openTestBotModal(projectId, projectName, botToken, chatId) {
-    currentTestBotProjectId = projectId;
-    const m = document.getElementById('modalConfirmTestBot');
-    if (!m) {
-        window.location.href = '?action=test_bot&id=' + projectId;
+// ==============================================================================
+// Interactive Wizard: Setup Bot <nama_BOT> (Step-by-Step with Verification & Confetti)
+// ==============================================================================
+let wizProjectId = null;
+let wizProjectName = '';
+let wizBotToken = '';
+let wizBotUsername = '';
+let wizCurrentStep = 1;
+let wizVerifyPollInterval = null;
+let wizVerifyStartTime = 0;
+
+// Validasi Bot Aktif & Buka Wizard Setup Bot
+async function openSetupBotWizard(projectId, projectName, botToken, botUsername) {
+    wizProjectId = projectId;
+    wizProjectName = projectName;
+    wizBotToken = botToken;
+    wizBotUsername = botUsername || '';
+
+    if (!botToken || botToken.trim() === '') {
+        alert('❌ Telegram Bot Token belum diisi pada proyek ' + (projectName || '') + '. Harap masukkan dan simpan Bot Token terlebih dahulu di form proyek.');
+        const form = document.getElementById('projectForm_' + projectId);
+        if (form) form.style.display = 'block';
         return;
     }
-    const nameEl = document.getElementById('testBotProjectName');
-    if (nameEl) nameEl.textContent = projectName || 'Proyek #' + projectId;
 
-    const qBox = document.getElementById('testBotQuestionBox');
-    const aBox = document.getElementById('testBotActionButtons');
-    const gBox = document.getElementById('testBotGuideBox');
-    if (qBox) qBox.style.display = 'block';
-    if (aBox) aBox.style.display = 'flex';
-    if (gBox) gBox.style.display = 'none';
+    // Tampilkan indikator loading tombol
+    const btnLabel = document.getElementById('btnSetupBotLabel_' + projectId);
+    const originalLabel = btnLabel ? btnLabel.innerHTML : '';
+    if (btnLabel) btnLabel.innerHTML = '⏳ Memeriksa Bot...';
 
-    m.style.display = 'flex';
-}
-function closeTestBotModal() {
-    const m = document.getElementById('modalConfirmTestBot');
-    if (m) m.style.display = 'none';
-}
-function showBotGuideStep() {
-    const guide = document.getElementById('testBotGuideBox');
-    if (guide) {
-        guide.style.display = 'block';
-        guide.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    try {
+        const res = await fetch('?action=check_bot_active&id=' + projectId);
+        const data = await res.json();
+
+        if (btnLabel) btnLabel.innerHTML = originalLabel;
+
+        if (!data.ok) {
+            alert('❌ Bot Tidak Aktif: ' + (data.description || 'Bot Token tidak valid atau dinonaktifkan oleh Telegram.') + '\n\nWizard Setup Bot hanya dapat dijalankan setelah bot Telegram aktif.');
+            return;
+        }
+
+        // Simpan username bot yang terverifikasi
+        wizBotUsername = data.username || ('@' + (data.raw_username || 'Bot'));
+
+        // Update teks judul dan label
+        const titleEl = document.getElementById('wizBotUsernameText');
+        if (titleEl) titleEl.textContent = wizBotUsername;
+        const prjEl = document.getElementById('wizProjectNameText');
+        if (prjEl) prjEl.textContent = projectName;
+        const linkBotEl = document.getElementById('wizLinkBotUsername');
+        if (linkBotEl) linkBotEl.textContent = 't.me/' + data.raw_username;
+        const openLink = document.getElementById('btnWizOpenBotLink');
+        if (openLink) openLink.href = 'https://t.me/' + data.raw_username;
+        const openLinkDirect = document.getElementById('btnWizDirectTg');
+        if (openLinkDirect) openLinkDirect.href = 'https://t.me/' + data.raw_username;
+        const verifyBotName = document.getElementById('wizVerifyBotName');
+        if (verifyBotName) verifyBotName.textContent = wizBotUsername;
+
+        // Reset step ke Step 1
+        goToWizStep(1);
+
+        // Buka modal
+        const modal = document.getElementById('modalSetupBotWizard');
+        if (modal) modal.style.display = 'flex';
+
+    } catch (err) {
+        if (btnLabel) btnLabel.innerHTML = originalLabel;
+        alert('❌ Gagal memeriksa status bot: ' + err.message);
     }
 }
-function proceedTestBot() {
-    if (currentTestBotProjectId) {
-        window.location.href = '?action=test_bot&id=' + currentTestBotProjectId;
+
+function closeSetupBotWizard(shouldReload) {
+    if (wizVerifyPollInterval) {
+        clearInterval(wizVerifyPollInterval);
+        wizVerifyPollInterval = null;
     }
+    const modal = document.getElementById('modalSetupBotWizard');
+    if (modal) modal.style.display = 'none';
+    if (shouldReload) {
+        window.location.reload();
+    }
+}
+
+function goToWizStep(stepNum) {
+    wizCurrentStep = stepNum;
+
+    // Update Step Pills
+    for (let i = 1; i <= 3; i++) {
+        const pill = document.getElementById('wizStepPill' + i);
+        const num = document.getElementById('wizStepNum' + i);
+        const content = document.getElementById('wizStepContent' + i);
+
+        if (i === stepNum) {
+            if (pill) {
+                pill.style.background = 'rgba(255,90,31,0.08)';
+                pill.style.borderColor = 'var(--signal, #ff5a1f)';
+                pill.style.color = 'var(--text-primary, #ece4d6)';
+            }
+            if (num) {
+                num.style.background = 'var(--signal, #ff5a1f)';
+                num.style.color = '#fff';
+            }
+            if (content) content.style.display = 'block';
+        } else if (i < stepNum) {
+            if (pill) {
+                pill.style.background = 'rgba(236,228,214,0.06)';
+                pill.style.borderColor = 'var(--border-strong, rgba(236,228,214,0.28))';
+                pill.style.color = 'var(--text-primary, #ece4d6)';
+            }
+            if (num) {
+                num.style.background = 'var(--text-primary, #ece4d6)';
+                num.style.color = '#0d0c0a';
+            }
+            if (content) content.style.display = 'none';
+        } else {
+            if (pill) {
+                pill.style.background = 'var(--bg-surface-elevated, #1a1814)';
+                pill.style.borderColor = 'var(--border-subtle, rgba(236,228,214,0.08))';
+                pill.style.color = 'var(--text-muted, #777064)';
+            }
+            if (num) {
+                num.style.background = 'rgba(236,228,214,0.1)';
+                num.style.color = 'var(--text-secondary, #a8a091)';
+            }
+            if (content) content.style.display = 'none';
+        }
+    }
+
+    // Jika masuk Step 3: Mulai Polling Verifikasi Telegram
+    if (stepNum === 3) {
+        startVerificationPolling();
+    } else {
+        if (wizVerifyPollInterval) {
+            clearInterval(wizVerifyPollInterval);
+            wizVerifyPollInterval = null;
+        }
+    }
+}
+
+// Langkah 2: Eksekusi Pasang Perintah & Webhook via AJAX
+async function executeWizInstallCommands() {
+    const btn = document.getElementById('btnWizInstallCommands');
+    const fb = document.getElementById('wizStep2Feedback');
+    if (!wizProjectId) return;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '⏳ Menghubungkan Webhook & Mendaftarkan Perintah...';
+    }
+
+    try {
+        const res = await fetch('?action=connect_bot_commands&id=' + wizProjectId + '&ajax=1');
+        const data = await res.json();
+
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '⚡ Pasang Perintah & Webhook Sekarang';
+        }
+
+        if (data.ok) {
+            if (fb) {
+                fb.style.display = 'block';
+                fb.style.background = 'rgba(156,196,138,0.14)';
+                fb.style.border = '1px solid var(--accent-success, #9cc48a)';
+                fb.style.color = 'var(--accent-success, #9cc48a)';
+                fb.innerHTML = '✅ <b>Berhasil!</b> ' + (data.message || 'Perintah & Webhook aktif.') + ' Mengalihkan ke langkah verifikasi...';
+            }
+            setTimeout(() => {
+                goToWizStep(3);
+            }, 800);
+        } else {
+            if (fb) {
+                fb.style.display = 'block';
+                fb.style.background = 'rgba(255,90,31,0.14)';
+                fb.style.border = '1px solid var(--signal, #ff5a1f)';
+                fb.style.color = '#ff8555';
+                fb.innerHTML = '❌ <b>Gagal:</b> ' + (data.description || 'Tidak dapat memasang webhook.');
+            }
+        }
+    } catch (err) {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '⚡ Pasang Perintah & Webhook Sekarang';
+        }
+        if (fb) {
+            fb.style.display = 'block';
+            fb.style.background = 'rgba(255,90,31,0.14)';
+            fb.style.border = '1px solid var(--signal, #ff5a1f)';
+            fb.style.color = '#ff8555';
+            fb.innerHTML = '❌ <b>Kesalahan:</b> ' + err.message;
+        }
+    }
+}
+
+// Langkah 3: Polling Status Verifikasi /verifikasi dari Telegram
+function startVerificationPolling() {
+    if (wizVerifyPollInterval) clearInterval(wizVerifyPollInterval);
+    wizVerifyStartTime = Math.floor(Date.now() / 1000);
+
+    const waitingBox = document.getElementById('wizStep3Waiting');
+    const successBox = document.getElementById('wizStep3Success');
+    if (waitingBox) waitingBox.style.display = 'block';
+    if (successBox) successBox.style.display = 'none';
+
+    wizVerifyPollInterval = setInterval(async () => {
+        if (!wizProjectId) return;
+        try {
+            const res = await fetch('?action=check_bot_verification&id=' + wizProjectId + '&since=' + wizVerifyStartTime);
+            const data = await res.json();
+
+            if (data.ok && data.verified) {
+                // Berhasil verifikasi!
+                clearInterval(wizVerifyPollInterval);
+                wizVerifyPollInterval = null;
+
+                if (waitingBox) waitingBox.style.display = 'none';
+                if (successBox) successBox.style.display = 'block';
+
+                const succBot = document.getElementById('wizSuccessBotUsername');
+                if (succBot) succBot.textContent = data.bot_username || wizBotUsername;
+                const succTime = document.getElementById('wizSuccessVerifiedAt');
+                if (succTime) succTime.textContent = data.verified_at || new Date().toLocaleString();
+
+                // Picu Efek Konfeti Halus!
+                triggerSmoothConfetti();
+            }
+        } catch (e) {
+            // Abaikan error polling sementara
+        }
+    }, 2000);
+}
+
+// Generator Efek Konfeti Canvas Ringan & Halus (Zero Dependency)
+function triggerSmoothConfetti() {
+    const canvas = document.getElementById('confettiCanvas');
+    if (!canvas) return;
+    canvas.style.display = 'block';
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const pieces = [];
+    const colors = ['#ff5a1f', '#ece4d6', '#9cc48a', '#9dbbd0', '#e0ac4a', '#f43f5e', '#a855f7'];
+
+    for (let i = 0; i < 80; i++) {
+        pieces.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * -canvas.height * 0.5,
+            size: Math.random() * 8 + 4,
+            color: colors[Math.floor(Math.random() * colors.length)],
+            speedY: Math.random() * 3 + 2,
+            speedX: Math.random() * 4 - 2,
+            rotation: Math.random() * 360,
+            rotationSpeed: Math.random() * 6 - 3,
+            opacity: 1
+        });
+    }
+
+    let frame = 0;
+    function renderConfetti() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        let activeCount = 0;
+
+        pieces.forEach(p => {
+            p.y += p.speedY;
+            p.x += p.speedX;
+            p.rotation += p.rotationSpeed;
+            if (p.y > canvas.height * 0.7) {
+                p.opacity -= 0.02;
+            }
+
+            if (p.opacity > 0 && p.y < canvas.height) {
+                activeCount++;
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.rotate((p.rotation * Math.PI) / 180);
+                ctx.globalAlpha = Math.max(0, p.opacity);
+                ctx.fillStyle = p.color;
+                ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
+                ctx.restore();
+            }
+        });
+
+        frame++;
+        if (activeCount > 0 && frame < 180) {
+            requestAnimationFrame(renderConfetti);
+        } else {
+            canvas.style.display = 'none';
+        }
+    }
+    requestAnimationFrame(renderConfetti);
+}
+
 }
 
 function openProfileModal() {
