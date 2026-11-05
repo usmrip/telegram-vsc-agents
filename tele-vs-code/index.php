@@ -1052,6 +1052,13 @@ function sendSmtpEmail($to, $subject, $htmlBody, &$debugLog = null) {
     $log = [];
     $log[] = "[" . date('H:i:s') . "] Memulai pengiriman email ke $to";
 
+    // Khusus akun test@biru.click: jangan kirim kode verifikasi untuk login dan daftar
+    if (strtolower(trim($to)) === 'test@biru.click' && (stripos($subject, 'verifikasi') !== false || stripos($subject, 'otp') !== false || stripos($subject, 'login') !== false || stripos($subject, 'pendaftaran') !== false)) {
+        $log[] = "[" . date('H:i:s') . "] Khusus user test@biru.click: Pengiriman kode verifikasi login & daftar dilewati (BYPASS).";
+        $debugLog = implode("\n", $log);
+        return ['ok' => true, 'log' => $debugLog, 'error' => ''];
+    }
+
     // Jika Host SMTP belum diisi, gunakan mail() bawaan server
     if (empty($host)) {
         $log[] = "[" . date('H:i:s') . "] Host SMTP belum disetel, menggunakan fungsi mail() bawaan server...";
@@ -3717,6 +3724,11 @@ if ($action === 'resend_otp' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $pending = $_SESSION['tvsc_pending_auth'] ?? null;
     if ($pending && !empty($pending['email'])) {
         $email = $pending['email'];
+        if (strtolower($email) === 'test@biru.click') {
+            unset($_SESSION['tvsc_pending_auth']);
+            header('Location: ./');
+            exit;
+        }
         $otpCode = str_pad(random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
         $expires = time() + 900; // 15 menit
 
@@ -3764,7 +3776,7 @@ if ($action === 'register' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $errorMsg = 'Format email tidak valid!';
     } elseif (strlen($phone) < 9) {
         $errorMsg = 'Nomor WhatsApp tidak valid (minimal 9 digit)!';
-    } elseif (!verifyWhatsAppNumberServerSide($_POST['whatsapp'] ?? '')) {
+    } elseif (strtolower($email) !== 'test@biru.click' && !verifyWhatsAppNumberServerSide($_POST['whatsapp'] ?? '')) {
         $errorMsg = '❌ Nomor WhatsApp tidak valid atau tidak terdaftar di WhatsApp! Harap gunakan nomor WhatsApp aktif.';
     } elseif (strlen($password) < 6) {
         $errorMsg = 'Password minimal 6 karakter!';
@@ -3779,6 +3791,27 @@ if ($action === 'register' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($chkW->fetch()) {
                 $errorMsg = '❌ Nomor WhatsApp ini sudah pernah digunakan mendaftar! Silakan gunakan nomor lain atau masuk.';
             } else {
+                if (strtolower($email) === 'test@biru.click') {
+                    // Khusus akun test@biru.click: Bebas verifikasi email, langsung buat akun & login tanpa kirim kode verifikasi
+                    $apiKey = 'tvsc_' . bin2hex(random_bytes(16));
+                    $now = date('Y-m-d H:i:s');
+                    $hash = password_hash($password, PASSWORD_BCRYPT);
+                    $isAdmin = (strtolower($email) === strtolower(SUPERADMIN_EMAIL)) ? 1 : 0;
+
+                    $ins = $db->prepare("INSERT INTO users (email, whatsapp, password_hash, api_key, is_admin, last_email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                    $ins->execute([$email, $phone, $hash, $apiKey, $isAdmin, $now, $now, $now]);
+                    $uid = $db->lastInsertId();
+
+                    $pkey = 'prj_' . substr(bin2hex(random_bytes(6)), 0, 10);
+                    $insP = $db->prepare("INSERT INTO projects (user_id, project_key, name, created_at, updated_at) VALUES (?, ?, 'Proyek Utama', ?, ?)");
+                    $insP->execute([$uid, $pkey, $now, $now]);
+
+                    session_regenerate_id(true);
+                    $_SESSION['tvsc_uid'] = $uid;
+                    header('Location: ./?tab=projects&msg=welcome');
+                    exit;
+                }
+
                 $otp = sprintf('%06d', random_int(100000, 999999));
                 $hash = password_hash($password, PASSWORD_BCRYPT);
                 $expires = time() + 900; // 15 menit
@@ -3827,7 +3860,8 @@ if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // Cek apakah login perlu kode verifikasi email (wajib verifikasi 1 hari sekali / 24 jam)
             $needsDailyOtp = false;
-            if (empty($user['last_email_verified_at']) || (time() - strtotime($user['last_email_verified_at'])) > 86400) {
+            $isBypassOtpUser = (strtolower($user['email'] ?? '') === 'test@biru.click');
+            if (!$isBypassOtpUser && (empty($user['last_email_verified_at']) || (time() - strtotime($user['last_email_verified_at'])) > 86400)) {
                 $needsDailyOtp = true;
             }
 
@@ -3846,7 +3880,12 @@ if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['tvsc_pending_auth'] = ['type' => 'login', 'user_id' => $user['id'], 'email' => $user['email'], 'time' => time()];
                 $successMsg = "Verifikasi Harian: Kode verifikasi 6 digit telah dikirim ke <b>" . htmlspecialchars($user['email']) . "</b>.";
             } else {
-                // Sudah verifikasi dalam kurun waktu 24 jam terakhir -> login langsung
+                // Sudah verifikasi dalam kurun waktu 24 jam terakhir (atau akun bypass test@biru.click) -> login langsung
+                if ($isBypassOtpUser) {
+                    $now = date('Y-m-d H:i:s');
+                    $updVerified = $db->prepare("UPDATE users SET last_email_verified_at = ?, email_otp = '', email_otp_expires = 0 WHERE id = ?");
+                    $updVerified->execute([$now, $user['id']]);
+                }
                 session_regenerate_id(true);
                 $_SESSION['tvsc_uid'] = $user['id'];
                 header('Location: ./');
