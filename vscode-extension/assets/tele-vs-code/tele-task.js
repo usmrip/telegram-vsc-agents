@@ -160,16 +160,14 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
     }
     let content = fs.readFileSync(queueFile, 'utf-8');
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    const cleanId = (taskId || '').replace(/^#/, '');
 
-    if (status === 'DONE' || status === 'FAILED' || status === 'KENDALA') {
-      const finalStatus = (status === 'KENDALA' || status === 'FAILED') ? 'FAILED' : 'DONE';
+    if (status === 'DONE' || status === 'FAILED') {
       let finalInstruction = instruction;
       let finalSender = sender;
 
       // Ambil instruksi dan pengirim dari blok aktif jika parameter kosong
-      const cleanId = (taskId || '').replace(/^#/, '');
-      const regexActive = new RegExp('### \\[(PENDING|WAITING|QUEUE|IN_PROGRESS)\\]\\s+#?' + cleanId + '[\\s\\S]*?(?=(?:###|##|$))', 'gi');
+      const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const regexActive = new RegExp(`### \\[(PENDING|WAITING|QUEUE|IN_PROGRESS)\\]\\s+${escapedId}[\\s\\S]*?(?=(###|##|$))`, 'g');
       const match = content.match(regexActive);
       if (match && match[0]) {
         if (!finalInstruction) {
@@ -191,7 +189,7 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
       }
       const durationStr = formatDuration(taskStartTime, now);
       const durationLine = durationStr ? `- **Durasi:** ${durationStr}\n` : '';
-      const doneBlock = `### [${finalStatus}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${finalSender || 'IDE Chat'}\n- **Agent:** ${agent || 'Antigravity AI Agent'}\n${durationLine}- **Instruksi:** ${cleanInstruction}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
+      const doneBlock = `### [${status}] ${taskId}\n- **Waktu:** ${now}\n- **Pengirim:** ${finalSender || 'IDE Chat'}\n- **Agent:** ${agent || 'Antigravity AI Agent'}\n${durationLine}- **Instruksi:** ${cleanInstruction}\n- **Status:** ${status}\n- **Laporan Agent:** ${notes}\n\n`;
       const doneMarker = '## ✅ Riwayat Tugas Selesai';
       if (content.includes(doneMarker)) {
         content = content.replace(doneMarker, `${doneMarker}\n\n${doneBlock}`);
@@ -200,7 +198,7 @@ function updateLocalQueueFile(taskId, instruction, sender, status, notes = '', a
       }
     } else if (status === 'IN_PROGRESS') {
       // Jika tugas sudah ada sebagai [PENDING] atau [WAITING], ubah statusnya menjadi [IN_PROGRESS]
-      const regexPending = new RegExp('### \\[(PENDING|WAITING|QUEUE)\\]\\s+#?' + cleanId + '[\\s\\S]*?(?=(?:###|##|$))', 'i');
+      const regexPending = new RegExp(`### \\[(PENDING|WAITING|QUEUE)\\]\\s+${escapedId}[\\s\\S]*?(?=(###|##|$))`, 'i');
       const matchPending = content.match(regexPending);
       if (matchPending && matchPending[0]) {
         let block = matchPending[0];
@@ -415,26 +413,21 @@ async function run() {
         }
       } else {
         console.error(`❌ Gagal update server: ${data.error}`);
-        updateLocalQueueFile(taskId, '', 'IDE Chat', isDoneCmd ? 'DONE' : 'FAILED', report);
-        const notifyJs = getNotifyScript();
-        if (notifyJs) {
-          try {
-            const statArg = isDoneCmd ? 'SELESAI' : 'KENDALA';
-            const notifyArgs = [];
-            if (computedDuration) notifyArgs.push(`--duration "${computedDuration}"`);
-            notifyArgs.push(`--detail "${report.replace(/"/g, '\\"')}"`);
-            execSync(`node "${notifyJs}" "Tugas: ${taskId}" --status ${statArg} ${notifyArgs.join(' ')}`, { stdio: 'inherit' });
-          } catch (e) {}
+        if (fs.existsSync(queueFile)) {
+          const qText = fs.readFileSync(queueFile, 'utf-8');
+          const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+          if (new RegExp(`### \\[.*?\\]\\s+${escapedId}`, 'i').test(qText)) {
+            console.log(`ℹ️ Memperbarui status tugas lokal [${taskId}] ke IN_PROGRESS di TASK_QUEUE.md...`);
+            updateLocalQueueFile(taskId, '', 'IDE Chat', 'IN_PROGRESS', note);
+          }
         }
       }
     } catch (err) {
       console.error(`❌ Network error: ${err.message}`);
     }
-  } else if (['done', 'selesai', 'sukses', 'success', 'failed', 'kendala', 'error', 'fail', 'gagal'].includes(command)) {
-    const isFailCmd = ['failed', 'kendala', 'error', 'fail', 'gagal'].includes(command);
-    const isDoneCmd = !isFailCmd;
+  } else if (command === 'done' || command === 'failed') {
     const taskId = args[1] || '';
-    const report = args[2] || (isDoneCmd ? 'Selesai 100%' : 'Gagal');
+    const report = args[2] || (command === 'done' ? 'Selesai 100%' : 'Gagal');
 
     if (!taskId) {
       console.error('[ERROR] Task ID wajib disertakan!');
@@ -450,8 +443,8 @@ async function run() {
       let localStartTime = '';
       if (fs.existsSync(queueFile)) {
         const qText = fs.readFileSync(queueFile, 'utf-8');
-        const cleanId = (taskId || '').replace(/^#/, '');
-        const mActive = new RegExp(`### \\[.*?\\]\\s+#?${cleanId}[\\s\\S]*?-\\s+\\*\\*Waktu:\\*\\*\\s*([^\\r\\n]+)`, 'i').exec(qText);
+        const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const mActive = new RegExp(`### \\[.*?\\]\\s+${escapedId}[\\s\\S]*?-\\s+\\*\\*Waktu:\\*\\*\\s*([^\\r\\n]+)`, 'i').exec(qText);
         if (mActive) {
           localStartTime = mActive[1].trim();
           computedDuration = formatDuration(localStartTime, new Date());
@@ -467,7 +460,7 @@ async function run() {
         }
       }
 
-      const act = isDoneCmd ? 'done' : 'failed';
+      const act = command === 'done' ? 'done' : 'failed';
       const url = `${normalizedUrl}?action=${act}&secret=${secretKey}&id=${encodeURIComponent(taskId)}`;
       const paramsObj = { notes: report, result: report };
       if (computedDuration) paramsObj.duration = computedDuration;
@@ -481,14 +474,14 @@ async function run() {
       const data = await res.json();
 
       if (data.ok) {
-        console.log(`✅ [${taskId}] Status di server berhasil diperbarui ke: ${isDoneCmd ? 'DONE' : 'FAILED'}`);
+        console.log(`✅ [${taskId}] Status di server berhasil diperbarui ke: ${command.toUpperCase()}`);
         updateLocalQueueFile(taskId, '', 'IDE Chat', command.toUpperCase(), report);
 
         // Kirim laporan ke Telegram via tele-notify
         const notifyJs = getNotifyScript();
         if (notifyJs) {
           try {
-            const statArg = isDoneCmd ? 'SELESAI' : 'KENDALA';
+            const statArg = command === 'done' ? 'SELESAI' : 'KENDALA';
             const notifyArgs = [];
             if (computedDuration) notifyArgs.push(`--duration "${computedDuration}"`);
             notifyArgs.push(`--detail "${report.replace(/"/g, '\\"')}"`);
@@ -497,7 +490,14 @@ async function run() {
         }
       } else {
         console.error(`❌ Gagal update server: ${data.error}`);
-        updateLocalQueueFile(taskId, '', 'IDE Chat', isDoneCmd ? 'DONE' : 'FAILED', report);
+        if (fs.existsSync(queueFile)) {
+          const qText = fs.readFileSync(queueFile, 'utf-8');
+          const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+          if (new RegExp(`### \\[.*?\\]\\s+${escapedId}`, 'i').test(qText)) {
+            console.log(`ℹ️ Memperbarui status tugas lokal [${taskId}] ke ${command.toUpperCase()} di TASK_QUEUE.md...`);
+            updateLocalQueueFile(taskId, '', 'IDE Chat', command.toUpperCase(), report);
+          }
+        }
       }
     } catch (err) {
       console.error(`❌ Network error: ${err.message}`);

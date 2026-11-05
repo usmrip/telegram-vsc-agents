@@ -63,10 +63,7 @@ if (fs.existsSync(vsceBin)) {
 
     // Disimpan langsung ke publishDir sebagai outputVsix
 
-    // Salin ke web lokal
-    if (fs.existsSync(teleVsCodeWebDir)) {
-      fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, vsixFileName));
-    }
+
 
     // Salin ke server live
     if (fs.existsSync(liveWebDir)) {
@@ -180,10 +177,7 @@ try {
     execSync(`cd "${stagingDir}" && zip -r "${outputVsix}" .`, { stdio: 'inherit' });
   }
 
-  // Langsung tersimpan di publishDir
-  if (fs.existsSync(teleVsCodeWebDir)) {
-    fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, vsixFileName));
-  }
+
   if (fs.existsSync(liveWebDir)) {
     try {
       fs.copyFileSync(outputVsix, path.join(liveWebDir, vsixFileName));
@@ -194,9 +188,7 @@ try {
     const aliasName = `${name}-${version.replace('-', '')}.vsix`;
     const publishAlias = path.join(publishDir, aliasName);
     fs.copyFileSync(outputVsix, publishAlias);
-    if (fs.existsSync(teleVsCodeWebDir)) {
-      fs.copyFileSync(outputVsix, path.join(teleVsCodeWebDir, aliasName));
-    }
+
     if (fs.existsSync(liveWebDir)) {
       try {
         fs.copyFileSync(outputVsix, path.join(liveWebDir, aliasName));

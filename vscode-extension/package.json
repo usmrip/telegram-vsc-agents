@@ -2,7 +2,7 @@
   "name": "tele-vs-code",
   "displayName": "Tele-vs-Code",
   "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "publisher": "BiruIndonesiaCreative",
   "author": {
     "name": "usmrip",
@@ -150,7 +150,7 @@
         },
         "telegramNotifier.agentHandler": {
           "type": "string",
-          "default": "",
+          "default": "auto",
           "enum": [
             "",
             "auto",
@@ -186,7 +186,7 @@
         },
         "telegramNotifier.autoDispatchAgent": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Otomatis jalankan AI Agent handler yang dipilih saat tugas baru masuk dari Telegram",
           "markdownDescription": "Jika `true`, AI Agent handler yang dipilih akan otomatis langsung dipanggil di terminal saat tugas baru masuk tanpa harus mengklik toast notification."
         },

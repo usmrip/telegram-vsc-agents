@@ -1695,9 +1695,11 @@ if ($action === 'webhook') {
     }
 
     // Command /use atau /switch untuk ganti proyek aktif
-    if (preg_match('/^\/(use|switch|pilih|proyek_aktif)(\s+(.+))?$/i', $text, $mUse)) {
-        $target = trim($mUse[3] ?? '');
-        if (!$target) {
+    if (preg_match('/^\/(use|switch|pilih|proyek_aktif)(?:@\w+)?(?:\s+([\s\S]+))?$/i', $text, $mUse)) {
+        $rawTarget = trim($mUse[2] ?? '');
+        $target = '';
+        $inlineInstruction = '';
+        if ($rawTarget === '') {
             $curCode = !empty($activeProject['code']) ? $activeProject['code'] : 'a';
             $ownerInfo = !empty($activeProject['email']) ? "\n👤 <b>Akun:</b> <code>" . htmlspecialchars($activeProject['email']) . "</code>" : "";
             $reply = "🌟 <b>PROYEK AKTIF SAAT INI:</b>\n"
@@ -1711,35 +1713,55 @@ if ($action === 'webhook') {
                    . "🔄 <b>Ganti Proyek Aktif:</b>\n"
                    . "Ketik: <code>/use &lt;kode_tag&gt;</code> (Contoh: <code>/use a</code> atau <code>/use b</code>)\n"
                    . "Ketik <code>/projects</code> untuk melihat semua proyek Anda.";
+            callTelegram($project['bot_token'], 'sendMessage', [
+                'chat_id' => $incomingChatId,
+                'text' => $reply,
+                'parse_mode' => 'HTML',
+                'reply_to_message_id' => $messageId
+            ]);
+            echo "OK"; exit;
         } else {
-            $targetLower = strtolower(ltrim($target, '#'));
-            $foundP = null;
+            $parts = preg_split('/\r?\n/', $rawTarget, 2);
+            $firstLine = trim($parts[0]);
+            $words = preg_split('/\s+/', $firstLine, 2);
+            $candidateToken = strtolower(ltrim($words[0], '#'));
 
-            // Prioritas 1: Exact match Kode Proyek (misal 'b') atau Project Key (misal 'prj_xxxx')
+            $foundP = null;
+            // Prioritas 1: Exact match Kode Proyek, Project Key, ID, atau Nomor Urut pada token pertama
             foreach ($allProjects as $idx => $p) {
                 $pCode = strtolower($p['code'] ?: chr(97 + ($idx % 26)));
                 $pKey = strtolower($p['project_key'] ?? '');
-                if ($targetLower === $pCode || ($pKey && $targetLower === $pKey)) {
+                if ($candidateToken === $pCode || ($pKey && $candidateToken === $pKey) || $candidateToken === (string)$p['id'] || $candidateToken === (string)($idx + 1)) {
                     $foundP = $p;
+                    $target = $candidateToken;
+                    $inlineInstruction = trim(($words[1] ?? '') . (isset($parts[1]) ? "\n" . $parts[1] : ''));
                     break;
                 }
             }
 
-            // Prioritas 2: Exact match ID atau Nomor Urut (1, 2, 3...)
+            // Prioritas 2: Cek firstLine secara utuh
             if (!$foundP) {
+                $candidateFull = strtolower(ltrim($firstLine, '#'));
                 foreach ($allProjects as $idx => $p) {
-                    if ($targetLower === (string)$p['id'] || $targetLower === (string)($idx + 1)) {
+                    $pCode = strtolower($p['code'] ?: chr(97 + ($idx % 26)));
+                    $pKey = strtolower($p['project_key'] ?? '');
+                    if ($candidateFull === $pCode || ($pKey && $candidateFull === $pKey) || $candidateFull === (string)$p['id'] || $candidateFull === (string)($idx + 1) || $candidateFull === strtolower(trim($p['name'] ?? ''))) {
                         $foundP = $p;
+                        $target = $candidateFull;
+                        $inlineInstruction = isset($parts[1]) ? trim($parts[1]) : '';
                         break;
                     }
                 }
             }
 
-            // Prioritas 3: Exact match Nama Proyek (Hanya jika SAMA PERSIS, TIDAK mengandung atau awalan)
+            // Prioritas 3: Cek rawTarget secara utuh (jika tidak ada instruksi tambahan)
             if (!$foundP) {
+                $candidateRaw = strtolower(ltrim($rawTarget, '#'));
                 foreach ($allProjects as $idx => $p) {
-                    if ($targetLower === strtolower(trim($p['name'] ?? ''))) {
+                    if ($candidateRaw === strtolower(trim($p['name'] ?? ''))) {
                         $foundP = $p;
+                        $target = $candidateRaw;
+                        $inlineInstruction = '';
                         break;
                     }
                 }
@@ -1753,24 +1775,44 @@ if ($action === 'webhook') {
 
                 $pCode = $foundP['code'] ?: $foundP['id'];
                 $ownerInfo = !empty($foundP['email']) ? "\n👤 <b>Akun:</b> <code>" . htmlspecialchars($foundP['email']) . "</code>" : "";
-                $reply = "🎯 <b>PROYEK AKTIF BERHASIL DIUBAH!</b>\n\n"
-                       . "📁 <b>Proyek Saat Ini:</b> <code>" . htmlspecialchars($foundP['name']) . "</code> (Kode: <code>#$pCode</code>)" . $ownerInfo . "\n"
-                       . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n\n"
-                       . "👉 Semua pesan instruksi dari Anda selanjutnya di chat ini akan otomatis dikerjakan oleh VS Code proyek <b>" . htmlspecialchars($foundP['name']) . "</b>.\n\n"
-                       . "<i>Gunakan tag <code>#&lt;kode&gt;</code> jika ingin menargetkan proyek lain sesekali.</i>";
+
+                if ($inlineInstruction !== '') {
+                    callTelegram($project['bot_token'], 'sendMessage', [
+                        'chat_id' => $incomingChatId,
+                        'text' => "🎯 <b>Proyek aktif dialihkan ke " . htmlspecialchars($foundP['name']) . " (<code>#$pCode</code>)</b>.\n⚡ Memproses instruksi...",
+                        'parse_mode' => 'HTML',
+                        'reply_to_message_id' => $messageId
+                    ]);
+                    $activeProject = $foundP;
+                    $targetProject = $foundP;
+                    $text = $inlineInstruction;
+                } else {
+                    $reply = "🎯 <b>PROYEK AKTIF BERHASIL DIUBAH!</b>\n\n"
+                           . "📁 <b>Proyek Saat Ini:</b> <code>" . htmlspecialchars($foundP['name']) . "</code> (Kode: <code>#$pCode</code>)" . $ownerInfo . "\n"
+                           . "🕒 <b>Waktu:</b> " . date('d-m-Y H:i:s') . " $tzAbbr\n\n"
+                           . "👉 Semua pesan instruksi dari Anda selanjutnya di chat ini akan otomatis dikerjakan oleh VS Code proyek <b>" . htmlspecialchars($foundP['name']) . "</b>.\n\n"
+                           . "<i>Gunakan tag <code>#&lt;kode&gt;</code> jika ingin menargetkan proyek lain sesekali.</i>";
+                    callTelegram($project['bot_token'], 'sendMessage', [
+                        'chat_id' => $incomingChatId,
+                        'text' => $reply,
+                        'parse_mode' => 'HTML',
+                        'reply_to_message_id' => $messageId
+                    ]);
+                    echo "OK"; exit;
+                }
             } else {
                 $reply = "⛔ <b>AKSES PROYEK DITOLAK</b>\n\n"
-                       . "Proyek '<b>" . htmlspecialchars($target) . "</b>' tidak ditemukan atau Anda tidak terdaftar di whitelist untuk proyek tersebut.\n\n"
+                       . "Proyek '<b>" . htmlspecialchars($firstLine) . "</b>' tidak ditemukan atau Anda tidak terdaftar di whitelist untuk proyek tersebut.\n\n"
                        . "Ketik <code>/projects</code> untuk melihat daftar proyek yang diizinkan untuk akun Anda.";
+                callTelegram($project['bot_token'], 'sendMessage', [
+                    'chat_id' => $incomingChatId,
+                    'text' => $reply,
+                    'parse_mode' => 'HTML',
+                    'reply_to_message_id' => $messageId
+                ]);
+                echo "OK"; exit;
             }
         }
-        callTelegram($project['bot_token'], 'sendMessage', [
-            'chat_id' => $incomingChatId,
-            'text' => $reply,
-            'parse_mode' => 'HTML',
-            'reply_to_message_id' => $messageId
-        ]);
-        echo "OK"; exit;
     }
 
     // Command /lapo: Melihat apa yang sedang dikerjakan sebuah tag proyek

@@ -455,9 +455,10 @@ function getEffectiveConfig() {
   const chatId = cfgVscode.TELEGRAM_CHAT_ID || cfgLocal.TELEGRAM_CHAT_ID || cfgEnv.TELEGRAM_CHAT_ID || vsConfig.get('chatId') || cfgGlobal.TELEGRAM_CHAT_ID || '';
 
   // AI Agent Handler Configuration
-  const agentHandler = cfgVscode.TELE_AGENT_HANDLER || cfgLocal.TELE_AGENT_HANDLER || vsConfig.get('agentHandler') || '';
+  const rawAgentHandler = cfgVscode.TELE_AGENT_HANDLER || cfgLocal.TELE_AGENT_HANDLER || vsConfig.get('agentHandler');
+  const agentHandler = (rawAgentHandler !== undefined && rawAgentHandler !== null && rawAgentHandler !== '') ? rawAgentHandler : 'auto';
   const customAgentCommand = cfgVscode.TELE_CUSTOM_AGENT_COMMAND || cfgLocal.TELE_CUSTOM_AGENT_COMMAND || vsConfig.get('customAgentCommand') || '';
-  const autoDispatchAgent = vsConfig.get('autoDispatchAgent') === true;
+  const autoDispatchAgent = vsConfig.get('autoDispatchAgent') !== false;
 
   return { folder, botToken, chatId, webhookUrl, secretKey, timezone, language, project, wsFolder, autoPull, askOnStartup, pullInterval, showToastOnNewTask, autoExecuteSimpleTasks, agentHandler, customAgentCommand, autoDispatchAgent, vscodeConf };
 }
@@ -1325,13 +1326,17 @@ function activate(context) {
         log('warn', `Gagal menyalin prompt ke clipboard: ${clipErr.message}`);
       }
 
-      // Buka panel chat IDE
+      // Buka panel chat IDE (prefill prompt jika didukung oleh VS Code)
       try {
-        await vscode.commands.executeCommand('workbench.action.chat.open');
+        await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt });
       } catch (chatErr) {
         try {
-          await vscode.commands.executeCommand('workbench.action.quickchat.open');
-        } catch (qcErr) {}
+          await vscode.commands.executeCommand('workbench.action.chat.open');
+        } catch (chatErr2) {
+          try {
+            await vscode.commands.executeCommand('workbench.action.quickchat.open', { query: prompt });
+          } catch (qcErr) {}
+        }
       }
 
       const taskDisplay = taskId ? ` ${taskId}` : '';
@@ -1624,13 +1629,21 @@ function activate(context) {
 
   try {
     const qWatcher = vscode.workspace.createFileSystemWatcher('**/TASK_QUEUE.md');
-    qWatcher.onDidChange(() => {
-      checkDoneTasksInQueue(getEffectiveConfig().folder);
+    qWatcher.onDidChange(async () => {
+      const curConfig = getEffectiveConfig();
+      checkDoneTasksInQueue(curConfig.folder);
       taskProvider.refresh();
+      if (curConfig.autoDispatchAgent && (curConfig.agentHandler || 'auto') !== 'none') {
+        await processActiveLocalTasks(curConfig);
+      }
     });
-    qWatcher.onDidCreate(() => {
-      checkDoneTasksInQueue(getEffectiveConfig().folder);
+    qWatcher.onDidCreate(async () => {
+      const curConfig = getEffectiveConfig();
+      checkDoneTasksInQueue(curConfig.folder);
       taskProvider.refresh();
+      if (curConfig.autoDispatchAgent && (curConfig.agentHandler || 'auto') !== 'none') {
+        await processActiveLocalTasks(curConfig);
+      }
     });
     context.subscriptions.push(qWatcher);
   } catch (wErr) {}
@@ -1815,12 +1828,14 @@ async function processActiveLocalTasks(cur) {
     const activeSection = queueContent.split('## ✅ Riwayat Tugas Selesai')[0];
     const regex = /###\s+\[(PENDING|IN_PROGRESS)\]\s+(#?TASK-[A-Za-z0-9_-]+)[\r\n]+([\s\S]*?)(?=(?:###\s+\[|##|$))/gi;
     let match;
+    const hasAnyInProgress = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i.test(activeSection);
+
     while ((match = regex.exec(activeSection)) !== null) {
       const taskId = match[2].startsWith('#') ? match[2] : `#${match[2]}`;
       const block = match[3];
       const mStat = block.match(/-\s+\*\*Status:\*\*\s*([^\r\n]+)/i);
       const taskStat = mStat ? mStat[1].trim().toUpperCase() : (match[1] || '').toUpperCase();
-      if (['FAILED', 'KENDALA', 'ERROR', 'GAGAL'].includes(taskStat)) {
+      if (['FAILED', 'KENDALA', 'ERROR', 'GAGAL', 'DONE'].includes(taskStat)) {
         continue;
       }
 
@@ -1851,6 +1866,7 @@ async function processActiveLocalTasks(cur) {
               ], cur.project, cur.timezone);
             } catch (nErr) {}
             showTimedNotification(`✅ Tugas [${taskObj.id}] berhasil dieksekusi: ${rep}`, 10);
+            continue;
           }
         } catch (execErr) {
           log('error', '❌ Gagal eksekusi tugas lokal [' + taskObj.id + ']: ' + execErr.message);
@@ -1864,6 +1880,21 @@ async function processActiveLocalTasks(cur) {
             ], cur.project, cur.timezone);
           } catch (nErr) {}
           showTimedNotification('🚨 Tugas [' + taskObj.id + '] mengalami kendala: ' + execErr.message, 10);
+          continue;
+        }
+
+        // Tugas non-direct (coding / AI Agent):
+        // Jika statusnya PENDING dan autoDispatchAgent aktif, periksa aturan sekuensial
+        if (taskStat === 'PENDING' && cur.autoDispatchAgent && (cur.agentHandler || 'auto') !== 'none') {
+          if (!hasAnyInProgress) {
+            log('info', `[Auto-Dispatch] Mengalihkan tugas pending ${taskObj.id} ke AI Agent Handler (${cur.agentHandler || 'auto'})...`);
+            await executeTaskWithAgent(taskObj.id, taskObj.instruction);
+            // Sesuai aturan sekuensial murni: hanya dispatch 1 tugas pada satu waktu!
+            break;
+          } else {
+            log('info', `[SEKUENSIAL] Menunda auto-dispatch ${taskObj.id} karena masih ada tugas yang sedang [IN_PROGRESS].`);
+            break;
+          }
         }
       }
     }
@@ -2062,12 +2093,12 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
                 const prompt = buildAgentPrompt(taskItem.id, taskItem.instruction);
                 await vscode.env.clipboard.writeText(prompt);
 
-                const currentHandler = (cur.agentHandler || '').trim();
+                const currentHandler = (cur.agentHandler || 'auto').trim();
                 const agentDisplayName = currentHandler === 'ide' ? 'Agent IDE' : (currentHandler === 'custom' ? 'Custom Agent' : currentHandler.toUpperCase());
-                const runBtnLabel = currentHandler ? i18n('btnRunVia', { agent: agentDisplayName }) : i18n('btnSelectAgent');
+                const runBtnLabel = currentHandler !== 'none' ? i18n('btnRunVia', { agent: agentDisplayName }) : i18n('btnSelectAgent');
 
-                // Jika autoDispatchAgent aktif dan handler terisi, periksa aturan sekuensial
-                if (cur.autoDispatchAgent && currentHandler) {
+                // Jika autoDispatchAgent aktif dan handler bukan 'none', periksa aturan sekuensial
+                if (cur.autoDispatchAgent && currentHandler !== 'none') {
                   const qContentNow = fs.existsSync(queueFile) ? fs.readFileSync(queueFile, 'utf-8') : '';
                   const activeSec = qContentNow.split('## ✅ Riwayat Tugas Selesai')[0];
                   const mActive = /###\s+\[IN_PROGRESS\]\s+(#?TASK-[A-Za-z0-9_-]+)/i.exec(activeSec);

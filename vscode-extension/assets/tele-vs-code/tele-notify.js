@@ -28,14 +28,11 @@ let status = 'SELESAI';
 let agent = 'Antigravity AI Agent';
 let mediaUrl = null;
 let duration = '';
-let taskId = '';
 const details = [];
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
-  if (arg === '--task' || arg === '-k') {
-    taskId = args[++i] || '';
-  } else if (arg === '--status' || arg === '-s') {
+  if (arg === '--status' || arg === '-s') {
     status = (args[++i] || 'SELESAI').toUpperCase();
   } else if (arg === '--duration' || arg === '--durasi') {
     if (args[i + 1]) duration = args[++i];
@@ -58,21 +55,6 @@ for (let i = 0; i < args.length; i++) {
 
 if (!title) title = 'Laporan Tugas';
 status = status.toUpperCase();
-
-// Ekstrak taskId jika belum ada
-if (!taskId) {
-  const mTitle = title.match(/#?TASK-[A-Za-z0-9_-]+/i);
-  if (mTitle) taskId = mTitle[0].startsWith('#') ? mTitle[0] : '#' + mTitle[0];
-  if (!taskId) {
-    for (const d of details) {
-      const mD = d.match(/#?TASK-[A-Za-z0-9_-]+/i);
-      if (mD) {
-        taskId = mD[0].startsWith('#') ? mD[0] : '#' + mD[0];
-        break;
-      }
-    }
-  }
-}
 
 // Ekstrak durasi dari detail jika belum dispesifikasikan via flag
 if (!duration) {
