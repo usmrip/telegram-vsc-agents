@@ -413,14 +413,6 @@ async function run() {
         }
       } else {
         console.error(`❌ Gagal update server: ${data.error}`);
-        if (fs.existsSync(queueFile)) {
-          const qText = fs.readFileSync(queueFile, 'utf-8');
-          const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-          if (new RegExp(`### \\[.*?\\]\\s+${escapedId}`, 'i').test(qText)) {
-            console.log(`ℹ️ Memperbarui status tugas lokal [${taskId}] ke IN_PROGRESS di TASK_QUEUE.md...`);
-            updateLocalQueueFile(taskId, '', 'IDE Chat', 'IN_PROGRESS', note);
-          }
-        }
       }
     } catch (err) {
       console.error(`❌ Network error: ${err.message}`);
@@ -490,14 +482,6 @@ async function run() {
         }
       } else {
         console.error(`❌ Gagal update server: ${data.error}`);
-        if (fs.existsSync(queueFile)) {
-          const qText = fs.readFileSync(queueFile, 'utf-8');
-          const escapedId = taskId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-          if (new RegExp(`### \\[.*?\\]\\s+${escapedId}`, 'i').test(qText)) {
-            console.log(`ℹ️ Memperbarui status tugas lokal [${taskId}] ke ${command.toUpperCase()} di TASK_QUEUE.md...`);
-            updateLocalQueueFile(taskId, '', 'IDE Chat', command.toUpperCase(), report);
-          }
-        }
       }
     } catch (err) {
       console.error(`❌ Network error: ${err.message}`);

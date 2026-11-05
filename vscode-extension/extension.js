@@ -164,6 +164,12 @@ const I18N = {
     agentManualTitle: "Ketik Perintah Terminal Kustom untuk AI Agent",
     agentManualPrompt: "Contoh: agy --dangerously-skip-permissions -p \"{prompt}\" atau /usr/local/bin/my-agent --task \"{instruction}\"",
     agentEmptyToast: "ℹ️ Agent Handler dikosongkan. Tugas dari Telegram hanya akan dicatat ke TASK_QUEUE.md tanpa eksekusi otomatis.",
+    menuDebugModeActive: "$(bug) Mode Debug: 🟢 AKTIF (Klik untuk Matikan)",
+    menuDebugModeActiveDesc: "Detail direktori TASK_QUEUE, agen, & perintah eksekusi sedang dicatat",
+    menuDebugModeInactive: "$(bug) Mode Debug: ⚪ NONAKTIF (Klik untuk Aktifkan)",
+    menuDebugModeInactiveDesc: "Aktifkan untuk melihat detail direktori TASK_QUEUE, agen, & perintah eksekusi di log",
+    debugModeToastOn: "🐞 Mode Debug Tele-vs-Code: AKTIF. Detail pekerjaan worker, direktori TASK_QUEUE.md, dan perintah eksekusi agen akan dicatat di log.",
+    debugModeToastOff: "⚪ Mode Debug Tele-vs-Code: NONAKTIF. Logging kembali normal.",
     menuAgentCronInterval: "Atur Interval Pemantauan Berkala Agent...",
     menuAgentCronIntervalDesc: "Jeda waktu pemeriksaan TASK_QUEUE.md (Saat ini: {interval} menit)",
     setCronIntervalTitle: "⏱️ Atur Interval Pemantauan Berkala Agent",
@@ -281,6 +287,12 @@ const I18N = {
     agentManualTitle: "Type Custom Terminal Command for AI Agent",
     agentManualPrompt: "Example: agy --dangerously-skip-permissions -p \"{prompt}\" or /usr/local/bin/my-agent --task \"{instruction}\"",
     agentEmptyToast: "ℹ️ Agent Handler is empty. Telegram tasks will only be logged in TASK_QUEUE.md without auto-execution.",
+    menuDebugModeActive: "$(bug) Debug Mode: 🟢 ACTIVE (Click to Turn Off)",
+    menuDebugModeActiveDesc: "Detailed logs for TASK_QUEUE path, agents, & execution commands are active",
+    menuDebugModeInactive: "$(bug) Debug Mode: ⚪ INACTIVE (Click to Turn On)",
+    menuDebugModeInactiveDesc: "Enable to see detailed TASK_QUEUE path, agent, & execution command in log",
+    debugModeToastOn: "🐞 Tele-vs-Code Debug Mode: ACTIVE. Detailed worker logs, TASK_QUEUE.md path, and execution commands will be logged.",
+    debugModeToastOff: "⚪ Tele-vs-Code Debug Mode: INACTIVE. Logging reverted to normal.",
     menuAgentCronInterval: "Set Agent Periodic Check Interval...",
     menuAgentCronIntervalDesc: "TASK_QUEUE.md check interval (Current: {interval} min)",
     setCronIntervalTitle: "⏱️ Set Agent Periodic Check Interval",
@@ -459,8 +471,9 @@ function getEffectiveConfig() {
   const agentHandler = (rawAgentHandler !== undefined && rawAgentHandler !== null && rawAgentHandler !== '') ? rawAgentHandler : 'auto';
   const customAgentCommand = cfgVscode.TELE_CUSTOM_AGENT_COMMAND || cfgLocal.TELE_CUSTOM_AGENT_COMMAND || vsConfig.get('customAgentCommand') || '';
   const autoDispatchAgent = vsConfig.get('autoDispatchAgent') !== false;
+  const debugMode = vsConfig.get('debugMode') === true || process.env.TELE_DEBUG_MODE === '1';
 
-  return { folder, botToken, chatId, webhookUrl, secretKey, timezone, language, project, wsFolder, autoPull, askOnStartup, pullInterval, showToastOnNewTask, autoExecuteSimpleTasks, agentHandler, customAgentCommand, autoDispatchAgent, vscodeConf };
+  return { folder, botToken, chatId, webhookUrl, secretKey, timezone, language, project, wsFolder, autoPull, askOnStartup, pullInterval, showToastOnNewTask, autoExecuteSimpleTasks, agentHandler, customAgentCommand, autoDispatchAgent, debugMode, vscodeConf };
 }
 
 // ------------------------------------------------------------------------------
@@ -1090,6 +1103,10 @@ function activate(context) {
   context.subscriptions.push(outputChannel);
 
   function log(level, message, data = null) {
+    const cur = getEffectiveConfig();
+    if (level === 'debug' && !cur.debugMode) {
+      return; // Abaikan pesan level debug jika debugMode off (default off)
+    }
     const now = new Date();
     const timeStr = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
     const line = `[${timeStr}] [${level.toUpperCase()}] ${message}`;
@@ -1305,6 +1322,12 @@ function activate(context) {
     if (!targetHandler || targetHandler === 'none') {
       return { executed: false, reason: 'Agent Handler kosong / dinonaktifkan (hanya mencatat ke antrean)' };
     }
+    if (cur.debugMode) {
+      log('debug', `[DEBUG EKSEKUSI] Memproses pemicuan tugas ${taskId || '(tanpa ID)'}`);
+      log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile} (ada: ${fs.existsSync(queueFile)})`);
+      log('debug', `[DEBUG EKSEKUSI] Agen yang dipilih       : ${targetHandler || 'auto'} [Target: ${targetHandler}]`);
+    }
+
     // Quota Guard: Cek apakah instruksi atau tugas serupa baru saja dipicu dalam 60 detik (cooldown)
     const taskKey = ((taskId || '').toLowerCase().trim()) + '::' + ((instruction || '').toLowerCase().trim());
     const nowTime = Date.now();
@@ -1407,6 +1430,12 @@ function activate(context) {
         ? `📋 [Agent IDE] Task${taskDisplay} prompt copied to clipboard and Chat opened! Paste (Ctrl+V) and send to Agent IDE.`
         : `📋 [Agent IDE] Prompt tugas${taskDisplay} disalin ke clipboard dan Chat dibuka! Tempel (Ctrl+V) dan kirim ke Agent IDE.`);
 
+      if (cur.debugMode) {
+        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Agent IDE (Chat IDE Interaktif)`);
+        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : Salin ke clipboard & buka Chat IDE: workbench.action.chat.open (query: "${prompt.replace(/"/g, '\"')}")`);
+      }
+
       // Sesuai instruksi: Langsung eksekusi tanpa pop-up dialog yang menuntut klik tombol manual
       setStatusBarState('proses', `Agent IDE: [${taskId || 'Tugas'}]`, msg);
       return { executed: true, handler: 'ide', method: 'clipboard+chat_open' };
@@ -1429,6 +1458,11 @@ function activate(context) {
         .replace(/\{task_id\}/g, taskId || '')
         .replace(/\{instruction\}/g, (instruction || '').replace(/"/g, '\"'))
         .replace(/\{prompt\}/g, prompt.replace(/"/g, '\"'));
+      if (cur.debugMode) {
+        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Custom Agent`);
+        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${finalCmd}`);
+      }
       term.sendText(finalCmd);
       vscode.window.showInformationMessage(`🚀 Menjalankan Custom Command Agent untuk tugas ${taskId || ''}...`);
       return { executed: true, handler: 'custom', command: finalCmd };
@@ -1438,18 +1472,26 @@ function activate(context) {
       const agyBin = findCli('agy');
       const isPowershell = !process.env.SHELL && process.platform === 'win32';
       const cmd = agyBin ? `"${agyBin}"` : 'agy';
-      if (isPowershell) {
-        term.sendText(`& ${cmd} --dangerously-skip-permissions -p "${prompt}"`);
-      } else {
-        term.sendText(`${cmd} --dangerously-skip-permissions -p "${prompt}"`);
+      const execLine = isPowershell ? `& ${cmd} --dangerously-skip-permissions -p "${prompt}"` : `${cmd} --dangerously-skip-permissions -p "${prompt}"`;
+      if (cur.debugMode) {
+        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Google Antigravity (agy CLI: ${agyBin || 'PATH'})`);
+        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
       }
+      term.sendText(execLine);
       vscode.window.showInformationMessage(`🤖 Antigravity CLI (agy) sedang mengeksekusi tugas ${taskId || ''}...`);
       return { executed: true, handler: 'agy' };
     }
 
     if (activeHandler === 'claude') {
       const cmd = process.platform === 'win32' ? 'claude.cmd' : 'claude';
-      term.sendText(`${cmd} -p "${prompt}"`);
+      const execLine = `${cmd} -p "${prompt}"`;
+      if (cur.debugMode) {
+        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Claude Code (claude CLI)`);
+        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
+      }
+      term.sendText(execLine);
       vscode.window.showInformationMessage(`🧠 Claude Code sedang mengeksekusi tugas ${taskId || ''}...`);
       return { executed: true, handler: 'claude' };
     }
@@ -1457,30 +1499,60 @@ function activate(context) {
     if (activeHandler === 'cursor') {
       const cursorCli = findCli('cursor');
       const cmd = cursorCli ? `"${cursorCli}"` : 'cursor';
-      term.sendText(`${cmd} "${prompt.replace(/"/g, '\"')}"`);
+      const execLine = `${cmd} "${prompt.replace(/"/g, '\"')}"`;
+      if (cur.debugMode) {
+        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Cursor Agent (cursor CLI: ${cursorCli || 'PATH'})`);
+        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
+      }
+      term.sendText(execLine);
       vscode.window.showInformationMessage(`🖱️ Cursor Agent sedang mengeksekusi tugas ${taskId || ''}...`);
       return { executed: true, handler: 'cursor' };
     }
     if (activeHandler === 'cline') {
-      term.sendText(`cline -y "${prompt.replace(/"/g, '\"')}"`);
+      const execLine = `cline -y "${prompt.replace(/"/g, '\"')}"`;
+      if (cur.debugMode) {
+        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Cline Autonomous Agent`);
+        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
+      }
+      term.sendText(execLine);
       vscode.window.showInformationMessage(`⚡ Cline sedang mengeksekusi tugas ${taskId || ''}...`);
       return { executed: true, handler: 'cline' };
     }
 
     if (activeHandler === 'roo') {
-      term.sendText(`roo -y "${prompt.replace(/"/g, '\"')}"`);
+      const execLine = `roo -y "${prompt.replace(/"/g, '\"')}"`;
+      if (cur.debugMode) {
+        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Roo Code Autonomous Agent`);
+        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
+      }
+      term.sendText(execLine);
       vscode.window.showInformationMessage(`🦘 Roo Code sedang mengeksekusi tugas ${taskId || ''}...`);
       return { executed: true, handler: 'roo' };
     }
 
     if (activeHandler === 'gemini') {
-      term.sendText(`gemini -p "${prompt.replace(/"/g, '\"')}"`);
+      const execLine = `gemini -p "${prompt.replace(/"/g, '\"')}"`;
+      if (cur.debugMode) {
+        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : Gemini CLI / Code Assist`);
+        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
+      }
+      term.sendText(execLine);
       vscode.window.showInformationMessage(`♊ Gemini CLI sedang mengeksekusi tugas ${taskId || ''}...`);
       return { executed: true, handler: 'gemini' };
     }
 
     if (activeHandler === 'copilot') {
-      term.sendText(`gh copilot explain "${(instruction || '').replace(/"/g, '\"')}"`);
+      const execLine = `gh copilot explain "${(instruction || '').replace(/"/g, '\"')}"`;
+      if (cur.debugMode) {
+        log('debug', `[DEBUG EKSEKUSI] Direktori TASK_QUEUE.md : ${queueFile}`);
+        log('debug', `[DEBUG EKSEKUSI] Menggunakan Agen        : GitHub Copilot CLI`);
+        log('debug', `[DEBUG EKSEKUSI] Perintah Eksekusi      : ${execLine}`);
+      }
+      term.sendText(execLine);
       vscode.window.showInformationMessage(`🐙 GitHub Copilot dipanggil untuk tugas ${taskId || ''}...`);
       return { executed: true, handler: 'copilot' };
     }
@@ -1716,6 +1788,14 @@ function tryExecuteDirectTask(instruction, targetDir, cur) {
     if (!isAuthorizedSecurityUser(userEmail)) {
       throw new Error('⛔ Akses Ditolak: Perintah sistem berbahaya (seperti reboot, shell, atau modifikasi destruktif) diblokir oleh Security Guard dan hanya diizinkan untuk akun terverifikasi iam@usm.rip.');
     }
+  }
+
+  if (cur && cur.debugMode) {
+    const queueFile = path.join(cur.folder || targetDir || process.cwd(), 'TASK_QUEUE.md');
+    log('debug', `[DEBUG WORKER] Memeriksa Direct Task Engine: "${inst}"`);
+    log('debug', `[DEBUG WORKER] Direktori target TASK_QUEUE.md : ${queueFile}`);
+    log('debug', `[DEBUG WORKER] Agen Eksekutor               : Direct Task Engine (0 Token)`);
+    log('debug', `[DEBUG WORKER] Perintah / Instruksi         : ${inst}`);
   }
 
   // 1. Pembuatan Folder / Direktori
@@ -2026,6 +2106,15 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
 
     setStatusBarState('proses', 'Memeriksa Server...', 'Worker memeriksa antrean tugas ke server');
     log('info', `Worker memeriksa antrean tugas ke ${cur.webhookUrl} (Polling ${cur.pullInterval}s)...`);
+
+    if (cur.debugMode) {
+      const qf = path.join(cur.folder || process.cwd(), 'TASK_QUEUE.md');
+      log('debug', `[DEBUG WORKER] Siklus polling dimulai ke endpoint: ${cur.webhookUrl}`);
+      log('debug', `[DEBUG WORKER] Direktori TASK_QUEUE.md : ${qf} (ada: ${fs.existsSync(qf)})`);
+      log('debug', `[DEBUG WORKER] Project Key              : ${cur.project || '(Auto-resolve)'}`);
+      log('debug', `[DEBUG WORKER] Polling Interval         : ${cur.pullInterval}s | Auto-dispatch: ${cur.autoDispatchAgent}`);
+      log('debug', `[DEBUG WORKER] AI Agent Handler Aktif   : ${cur.agentHandler || 'auto'}`);
+    }
 
     // 1. Eksekusi terlebih dahulu tugas lokal yang masih aktif di TASK_QUEUE.md (jika autoExecuteSimpleTasks aktif)
     if (cur.autoExecuteSimpleTasks) {
@@ -2444,6 +2533,12 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
           description: t('menuLogDesc'),
           cmd: 'telegramNotifier.showLog'
         },
+        // 7b. Menu Mode Debug (ON / OFF)
+        {
+          label: cur.debugMode ? t('menuDebugModeActive') : t('menuDebugModeInactive'),
+          description: cur.debugMode ? t('menuDebugModeActiveDesc') : t('menuDebugModeInactiveDesc'),
+          cmd: 'telegramNotifier.toggleDebugMode'
+        },
         // 8. Buka Web Dashboard
         {
           label: '$(browser) ' + t('menuDashboard'),
@@ -2519,6 +2614,11 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
           label: `$(watch) Atur Durasi Refresh Polling Worker (Saat ini: ${cur.pullInterval} detik)`,
           description: 'Ubah frekuensi jeda pemeriksaan antrean tugas baru ke server',
           cmd: 'telegramNotifier.setPullInterval'
+        },
+        {
+          label: cur.debugMode ? t('menuDebugModeActive') : t('menuDebugModeInactive'),
+          description: cur.debugMode ? t('menuDebugModeActiveDesc') : t('menuDebugModeInactiveDesc'),
+          cmd: 'telegramNotifier.toggleDebugMode'
         },
         { label: '$(arrow-left) Kembali ke Menu Utama', description: 'Tutup submenu worker', cmd: 'telegramNotifier.showMenu' }
       ];
@@ -3185,6 +3285,31 @@ TIMEZONE="${matchedProject.timezone || 'Asia/Jakarta'}"
       const cur = getEffectiveConfig();
       vscode.window.showInformationMessage(`✅ Worker Otomasi AKTIF (Memantau tugas setiap ${cur.pullInterval} detik).`);
     }
+  }));
+
+  // 4b. Toggle Mode Debug (ON / OFF)
+  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.toggleDebugMode', async () => {
+    const cur = getEffectiveConfig();
+    const newDebugMode = !cur.debugMode;
+    await cur.vscodeConf.update('debugMode', newDebugMode, vscode.ConfigurationTarget.Global);
+    const queueFile = path.join(cur.folder || process.cwd(), 'TASK_QUEUE.md');
+
+    if (newDebugMode) {
+      log('info', '🐞 [MODE DEBUG AKTIF] Mode Debug diaktifkan.');
+      log('debug', `[DEBUG WORKER] Direktori TASK_QUEUE.md : ${queueFile}`);
+      log('debug', `[DEBUG WORKER] Eksekutor Agen Aktif   : ${cur.agentHandler || 'auto'}`);
+      log('debug', `[DEBUG WORKER] Status Polling Worker   : ${cur.autoPull ? `Aktif (${cur.pullInterval}s)` : 'Dijeda'}`);
+      vscode.window.showInformationMessage(
+        i18n('debugModeToastOn'),
+        'Lihat Log'
+      ).then(act => {
+        if (act === 'Lihat Log') outputChannel.show();
+      });
+    } else {
+      log('info', '⚪ [MODE DEBUG NONAKTIF] Mode Debug dinonaktifkan.');
+      vscode.window.showInformationMessage(i18n('debugModeToastOff'));
+    }
+    updateStatusBar();
   }));
 
   // 5. Jalankan CLI Worker di Terminal

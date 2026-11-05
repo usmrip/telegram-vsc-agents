@@ -2,7 +2,7 @@
   "name": "tele-vs-code",
   "displayName": "Tele-vs-Code",
   "description": "Telegram sebagai pesuruh VS Code dari mana aja - Kontrol, delegasikan tugas, dan pantau AI Agent dari Telegram",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "publisher": "BiruIndonesiaCreative",
   "author": {
     "name": "usmrip",
@@ -203,6 +203,12 @@
           "default": true,
           "description": "Otomatis jalankan timer pemantauan berkala untuk AI Agent saat ekstensi dimuat atau saat agen diganti",
           "markdownDescription": "Jika `true`, ekstensi akan otomatis mengaktifkan jadwal pemantauan berkala untuk AI Agent saat ekstensi dimuat atau saat agen diganti."
+        },
+        "telegramNotifier.debugMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Aktifkan mode debug untuk menyampaikan detail pekerjaan worker, direktori TASK_QUEUE.md, eksekutor agen, dan perintah eksekusinya",
+          "markdownDescription": "Jika \true, panel output log akan menyampaikan detail pekerjaan worker, termasuk direktori file TASK_QUEUE.md, agen AI yang dipilih, dan baris perintah eksekusinya."
         }
       }
     },
@@ -315,6 +321,11 @@
       {
         "command": "telegramNotifier.setAgentCronInterval",
         "title": "Atur Interval Pemantauan Berkala Agent (Auto-Schedule / Cron)",
+        "category": "Tele-vs-Code"
+      },
+      {
+        "command": "telegramNotifier.toggleDebugMode",
+        "title": "Mode Debug (ON / OFF): Logging Detail Worker & Eksekusi",
         "category": "Tele-vs-Code"
       }
     ],
