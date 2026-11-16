@@ -64,11 +64,16 @@ Setiap kali Anda menyelesaikan suatu tugas atau jika menemukan kendala error yan
 
 ---
 
-## 💾 3. MODE EKSEKUSI & PENYIMPANAN LANGSUNG (DIRECT SAVE)
+## 💾 3. MODE EKSEKUSI, ATURAN DEPLOY SERVER & VSIX WORKSPACE (STRICT DEPLOY RULES)
 Karena seluruh riwayat pekerjaan dapat di-undo melalui Git dan IDE:
 - Langsung simpan (save) dan terapkan semua perubahan file, penambahan kode, dan pembuatan fitur tanpa perlu meminta konfirmasi berulang.
 - Langsung jalankan pengujian/verifikasi hingga tuntas 100%.
-- Commit hasil pekerjaan yang sudah selesai ke Git (kecuali jika ada instruksi khusus untuk tidak push ke git).
+- 🚀 **ATURAN DEPLOY SERVER (SERVER ONLY, NO GIT PUSH):**
+  - Setiap pekerjaan selesai, **upload/sinkronkan ke server saja** (`SERVER_DEPLOY_DIR` / `U:\domains\biru.co.id\public_html\tele-vs-code` / folder `tele-vs-code/`).
+  - ⛔ **DILARANG KERAS upload / push ke Git (`git push`)** sebelum ada perintah eksplisit dari pengguna.
+- 📦 **ATURAN VSIX BARU (UPDATE WORKSPACE LOCAL ONLY, NO MARKETPLACE):**
+  - Setiap kali ada paket VSIX baru yang dibangun/di-compile, **wajib langsung update/instal ke workspace ini** (`node vscode-extension/install-vsix.js` atau `code --install-extension <file.vsix> --force`).
+  - ⛔ **DILARANG KERAS publish ke VS Code Marketplace** sebelum ada perintah eksplisit dari pengguna.
 
 ---
 

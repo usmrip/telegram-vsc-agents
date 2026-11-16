@@ -28,10 +28,11 @@ const customLetter = customLetterArg ? customLetterArg.split('=')[1].toLowerCase
 const rawVersion = pkg.version || '1.0.0';
 const baseVersion = rawVersion.replace(/-[a-z]-beta.*$/i, '').replace(/-.*$/, '');
 
-const publishDir = path.join(path.dirname(extDir), 'publish');
+const publishDir = path.join(path.dirname(extDir), 'publish', 'vsix');
 if (!fs.existsSync(publishDir)) fs.mkdirSync(publishDir, { recursive: true });
-const teleVsCodeWebDir = path.join(path.dirname(extDir), 'tele-vs-code');
-const liveWebDir = 'U:\\domains\\biru.co.id\\public_html\\tele-vs-code';
+const teleVsCodeWebDir = path.join(path.dirname(extDir), 'tele-vs-code', 'publish', 'vsix');
+if (!fs.existsSync(teleVsCodeWebDir)) fs.mkdirSync(teleVsCodeWebDir, { recursive: true });
+const liveWebDir = path.join(process.env.SERVER_DEPLOY_DIR || 'U:\\domains\\biru.co.id\\public_html\\tele-vs-code', 'publish', 'vsix');
 
 let version = baseVersion;
 let modeName = 'PRODUCTION';
@@ -116,7 +117,8 @@ if (fs.existsSync(vsceBin)) {
     console.log('[INFO] Memaketkan via @vscode/vsce resmi...');
     execSync(`node "${vsceBin}" package --no-git-tag-version --allow-missing-repository --allow-star-activation -o "${outputVsix}"`, {
       cwd: extDir,
-      stdio: 'inherit'
+      stdio: ['pipe', 'inherit', 'inherit'],
+      input: 'y\n'
     });
 
     // Disimpan langsung ke publishDir sebagai outputVsix
@@ -173,6 +175,17 @@ if (fs.existsSync(vsceBin)) {
     console.log(`\n🎉 Paket VSIX Resmi Microsoft Berhasil Dibuat!`);
     console.log(`📁 Lokasi file VSIX : ${outputVsix}`);
     console.log(`📁 Lokasi Publish   : ${publishDir}\n`);
+
+    // Sesuai aturan: Setiap ada vsix baru, langsung update workspace ini (lokal) jangan ke marketplace dulu
+    if (!isCI) {
+      try {
+        console.log(`🔄 [WORKSPACE UPDATE] Memperbarui ekstensi ke workspace VS Code ini...`);
+        execSync(`node "${path.join(extDir, 'install-vsix.js')}"`, { cwd: extDir, stdio: 'inherit' });
+      } catch (instErr) {
+        console.warn(`⚠️ [WARN] Gagal auto-update VSIX ke workspace: ${instErr.message}`);
+      }
+    }
+
     process.exit(0);
   } catch (vsceErr) {
     console.warn(`[WARN] vsce resmi gagal (${vsceErr.message}), beralih ke fallback internal...`);
@@ -293,6 +306,16 @@ try {
   console.log(`\n🎉 Paket VSIX Berhasil Dibuat!`);
   console.log(`📁 Lokasi file VSIX : ${outputVsix}`);
   console.log(`📁 Lokasi Publish   : ${publishDir}\n`);
+
+  // Sesuai aturan: Setiap ada vsix baru, langsung update workspace ini (lokal) jangan ke marketplace dulu
+  if (!isCI) {
+    try {
+      console.log(`🔄 [WORKSPACE UPDATE] Memperbarui ekstensi ke workspace VS Code ini...`);
+      execSync(`node "${path.join(extDir, 'install-vsix.js')}"`, { cwd: extDir, stdio: 'inherit' });
+    } catch (instErr) {
+      console.warn(`⚠️ [WARN] Gagal auto-update VSIX ke workspace: ${instErr.message}`);
+    }
+  }
 } catch (err) {
   console.error(`❌ Gagal kompresi VSIX: ${err.message}`);
   process.exit(1);

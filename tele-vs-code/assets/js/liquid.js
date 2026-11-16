@@ -185,11 +185,19 @@
         // Direction for cross-document transitions
         window.addEventListener('pagereveal', (e) => {
             if (!e.viewTransition) return;
+            if (e.viewTransition.ready && typeof e.viewTransition.ready.catch === 'function') {
+                e.viewTransition.ready.catch(() => {});
+            }
+            if (e.viewTransition.finished && typeof e.viewTransition.finished.catch === 'function') {
+                e.viewTransition.finished.catch(() => {});
+            }
             let from = -1;
             try { from = parseInt(sessionStorage.getItem(STORE_KEY) || '-1', 10); } catch (err) { /* noop */ }
             const to = currentTabIndex();
-            if (from >= 0 && to >= 0 && from !== to) {
-                e.viewTransition.types.add(to > from ? 'forward' : 'back');
+            if (from >= 0 && to >= 0 && from !== to && e.viewTransition.types) {
+                try {
+                    e.viewTransition.types.add(to > from ? 'forward' : 'back');
+                } catch (err) { /* ignore */ }
             }
         });
 

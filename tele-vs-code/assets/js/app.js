@@ -126,6 +126,49 @@
             mTaskStatusSelect.value = task.status || 'PENDING';
         }
 
+        const attWrap = document.getElementById('mTaskAttachmentsWrap');
+        const attList = document.getElementById('mTaskAttachmentsList');
+        const attLabel = document.getElementById('mTaskAttachmentsLabel');
+        if (attWrap && attList) {
+            attList.innerHTML = '';
+            let atts = [];
+            if (Array.isArray(task.attachments) && task.attachments.length > 0) {
+                atts = task.attachments;
+            } else if (task.attachments_json) {
+                try {
+                    const parsed = JSON.parse(task.attachments_json);
+                    if (Array.isArray(parsed)) atts = parsed;
+                } catch (e) {}
+            }
+            if (atts.length === 0 && task.attachment_url) {
+                atts = [{
+                    url: task.attachment_url,
+                    type: task.attachment_type || 'document',
+                    name: task.attachment_name || 'Lampiran'
+                }];
+            }
+
+            if (atts.length > 0) {
+                attWrap.style.display = 'block';
+                if (attLabel) {
+                    attLabel.textContent = 'Lampiran File (' + atts.length + ' File):';
+                }
+                atts.forEach((att, idx) => {
+                    if (!att || !att.url) return;
+                    const aEl = document.createElement('a');
+                    aEl.href = att.url;
+                    aEl.target = '_blank';
+                    aEl.rel = 'noopener noreferrer';
+                    aEl.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); border-radius: 6px; color: #7dd3fc; font-size: 12px; text-decoration: none;';
+                    const icon = (att.type === 'photo') ? '📷' : ((att.type === 'video') ? '🎬' : ((att.type === 'audio' || att.type === 'voice') ? '🎵' : '📎'));
+                    aEl.textContent = icon + ' ' + (att.name || ('File ' + (idx + 1)));
+                    attList.appendChild(aEl);
+                });
+            } else {
+                attWrap.style.display = 'none';
+            }
+        }
+
         modal.style.display = 'flex';
         document.body.style.overflow = 'hidden';
     };

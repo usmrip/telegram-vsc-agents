@@ -181,26 +181,28 @@
         return div.innerHTML;
     }
 
-    const sonner = {
-        toast: (msg, opts) => show('info', msg, opts),
-        success: (msg, opts) => show('success', msg, opts),
-        error: (msg, opts) => show('error', msg, opts),
-        warning: (msg, opts) => show('warning', msg, opts),
-        info: (msg, opts) => show('info', msg, opts),
-        loading: (msg, opts) => show('loading', msg, opts),
-        dismiss: (id) => dismiss(id),
-        clear: () => {
-            [...toasts].forEach(t => dismiss(t.id));
-        }
+    function sonnerFn(msg, opts) {
+        return show('info', msg, opts);
+    }
+
+    sonnerFn.toast = (msg, opts) => show('info', msg, opts);
+    sonnerFn.success = (msg, opts) => show('success', msg, opts);
+    sonnerFn.error = (msg, opts) => show('error', msg, opts);
+    sonnerFn.warning = (msg, opts) => show('warning', msg, opts);
+    sonnerFn.info = (msg, opts) => show('info', msg, opts);
+    sonnerFn.loading = (msg, opts) => show('loading', msg, opts);
+    sonnerFn.dismiss = (id) => dismiss(id);
+    sonnerFn.clear = () => {
+        [...toasts].forEach(t => dismiss(t.id));
     };
 
     // Replace native window.alert with Sonner Toast
     if (typeof window !== 'undefined') {
         window.alert = function (msg) {
-            sonner.info(String(msg));
+            sonnerFn.info(String(msg));
         };
     }
 
-    return sonner;
+    return sonnerFn;
 }));
 

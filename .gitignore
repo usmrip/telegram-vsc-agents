@@ -29,6 +29,8 @@ scratch/
 *beta*.vsix
 *-beta*.vsix
 tele-vs-code-latest.vsix
+publish/vsix/
+*.vsix
 
 # System & Editor
 .vscode/

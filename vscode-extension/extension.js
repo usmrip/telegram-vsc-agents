@@ -2749,26 +2749,35 @@ function appendDoneToTaskQueueFile(queueFile, task, report) {
           setStatusBarState('proses', `Menangani [${taskItem.id}]`, `Sedang menangani tugas ${taskItem.id}: "${taskItem.instruction}"`);
           log('info', `[TUGAS MASUK] ID: ${taskItem.id} | Pengirim: ${taskItem.sender} | Instruksi: "${taskItem.instruction}"`);
           let attachLines = '';
-          if (taskItem.attachment_url) {
-            try {
-              const attachDir = path.join(cur.folder, 'attachments', taskItem.id.replace(/[^a-zA-Z0-9_-]/g, ''));
-              if (!fs.existsSync(attachDir)) {
-                fs.mkdirSync(attachDir, { recursive: true });
-              }
-              const localFilePath = path.join(attachDir, taskItem.attachment_name || 'lampiran.bin');
-              if (!fs.existsSync(localFilePath)) {
-                const fRes = await fetch(taskItem.attachment_url);
-                if (fRes.ok) {
-                  const fBuf = Buffer.from(await fRes.arrayBuffer());
-                  fs.writeFileSync(localFilePath, fBuf);
+          const rawAttachments = Array.isArray(taskItem.attachments) && taskItem.attachments.length > 0
+            ? taskItem.attachments
+            : (taskItem.attachment_url ? [{ url: taskItem.attachment_url, type: taskItem.attachment_type || 'file', name: taskItem.attachment_name || 'lampiran.bin' }] : []);
+          if (rawAttachments.length > 0) {
+            const downloadedLines = [];
+            for (let attIdx = 0; attIdx < rawAttachments.length; attIdx++) {
+              const attObj = rawAttachments[attIdx];
+              if (!attObj || !attObj.url) continue;
+              const attLabel = rawAttachments.length > 1 ? `Lampiran ${attIdx + 1}` : 'Lampiran';
+              try {
+                const attachDir = path.join(cur.folder, 'attachments', taskItem.id.replace(/[^a-zA-Z0-9_-]/g, ''));
+                if (!fs.existsSync(attachDir)) {
+                  fs.mkdirSync(attachDir, { recursive: true });
                 }
+                const localFilePath = path.join(attachDir, attObj.name || `lampiran_${attIdx + 1}.bin`);
+                if (!fs.existsSync(localFilePath)) {
+                  const fRes = await fetch(attObj.url);
+                  if (fRes.ok) {
+                    const fBuf = Buffer.from(await fRes.arrayBuffer());
+                    fs.writeFileSync(localFilePath, fBuf);
+                  }
+                }
+                const absFileUrl = `file:///${localFilePath.replace(/\\/g, '/')}`;
+                downloadedLines.push(`\n- **${attLabel} Lokal:** [${attObj.name || 'Buka File'}](${absFileUrl}) (${attObj.type || 'file'})\n- **URL ${attLabel}:** [Buka di Browser](${attObj.url})`);
+              } catch (dErr) {
+                downloadedLines.push(`\n- **${attLabel}:** [${attObj.name || 'File'}](${attObj.url}) (${attObj.type || 'file'})`);
               }
-              const relPath = path.relative(cur.folder, localFilePath).replace(/\\/g, '/');
-              const absFileUrl = `file:///${localFilePath.replace(/\\/g, '/')}`;
-              attachLines = `\n- **Lampiran Lokal:** [${taskItem.attachment_name || 'Buka File'}](${absFileUrl}) (${taskItem.attachment_type || 'file'})\n- **URL Lampiran:** [Buka di Browser](${taskItem.attachment_url})`;
-            } catch (dErr) {
-              attachLines = `\n- **Lampiran:** [${taskItem.attachment_name || 'File'}](${taskItem.attachment_url}) (${taskItem.attachment_type || 'file'})`;
             }
+            attachLines = downloadedLines.join('');
           }
 
           // Jika tugas di server berstatus FAILED / KENDALA, JANGAN masukkan ke Tugas Aktif
@@ -6223,31 +6232,38 @@ TELE_AGENT_HANDLER="${selectedAgentHandler}"
     }
   }));
 
-  // 8c. Unggah File / Media Dokumentasi ke Server Biru
-  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.uploadMedia', async (resourceUri) => {
-    let targetFilePath = '';
-    if (resourceUri && resourceUri.fsPath) {
-      targetFilePath = resourceUri.fsPath;
+  // 8c. Unggah File / Media Dokumentasi ke Server Biru (Mendukung Multi-File)
+  context.subscriptions.push(vscode.commands.registerCommand('telegramNotifier.uploadMedia', async (resourceUri, selectedUris) => {
+    let targetFilePaths = [];
+    if (Array.isArray(selectedUris) && selectedUris.length > 0) {
+      targetFilePaths = selectedUris.filter(u => u && u.fsPath).map(u => u.fsPath);
+    } else if (resourceUri && resourceUri.fsPath) {
+      targetFilePaths = [resourceUri.fsPath];
     } else {
       const selected = await vscode.window.showOpenDialog({
-        title: 'Pilih File / Media Dokumentasi untuk Diunggah ke Server Biru',
+        title: 'Pilih 1 atau Beberapa File / Media Dokumentasi untuk Diunggah ke Server Biru',
         openLabel: 'Unggah ke Server Biru',
         canSelectFiles: true,
         canSelectFolders: false,
-        canSelectMany: false
+        canSelectMany: true
       });
       if (!selected || selected.length === 0) return;
-      targetFilePath = selected[0].fsPath;
+      targetFilePaths = selected.map(u => u.fsPath);
     }
 
-    if (!fs.existsSync(targetFilePath)) {
-      vscode.window.showErrorMessage(`File tidak ditemukan: ${targetFilePath}`);
+    targetFilePaths = targetFilePaths.filter(fp => fs.existsSync(fp));
+    if (targetFilePaths.length === 0) {
+      vscode.window.showErrorMessage('File yang dipilih tidak ditemukan.');
       return;
     }
 
+    const labelSummary = targetFilePaths.length === 1
+      ? `"${path.basename(targetFilePaths[0])}"`
+      : `${targetFilePaths.length} berkas (${targetFilePaths.map(p => path.basename(p)).slice(0, 3).join(', ')}${targetFilePaths.length > 3 ? '...' : ''})`;
+
     const caption = await vscode.window.showInputBox({
       title: 'Keterangan Dokumentasi (Opsional)',
-      prompt: `Masukkan catatan / deskripsi untuk berkas "${path.basename(targetFilePath)}"`,
+      prompt: `Masukkan catatan / deskripsi untuk ${labelSummary}`,
       placeHolder: 'Contoh: Screenshot perbaikan bug login, arsitektur v1.0.9, dll.',
       ignoreFocusOut: true
     });
@@ -6263,21 +6279,33 @@ TELE_AGENT_HANDLER="${selectedAgentHandler}"
 
     await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
-      title: `Mengunggah "${path.basename(targetFilePath)}" ke Server Biru...`,
+      title: `Mengunggah ${labelSummary} ke Server Biru...`,
       cancellable: false
     }, async () => {
       try {
-        const result = await uploadMediaToServer(targetFilePath, caption || '', '', sendTeleChoice.send);
+        const uploadedUrls = [];
+        const uploadedNames = [];
+        for (let i = 0; i < targetFilePaths.length; i++) {
+          const fp = targetFilePaths[i];
+          const res = await uploadMediaToServer(fp, caption || '', '', sendTeleChoice.send);
+          if (res && res.file_url) {
+            uploadedUrls.push(res.file_url);
+            uploadedNames.push(res.file_name || path.basename(fp));
+          }
+        }
+        const msgText = uploadedUrls.length === 1
+          ? `🎉 [Dokumentasi Tersimpan] Berkas "${uploadedNames[0]}" berhasil diunggah ke Server Biru!`
+          : `🎉 [Dokumentasi Tersimpan] ${uploadedUrls.length} berkas (${uploadedNames.join(', ')}) berhasil diunggah ke Server Biru!`;
         const action = await vscode.window.showInformationMessage(
-          `🎉 [Dokumentasi Tersimpan] Berkas "${result.file_name}" berhasil diunggah ke Server Biru!`,
-          'Salin Link Dokumentasi',
+          msgText,
+          'Salin Semua Link',
           'Buka di Browser'
         );
-        if (action === 'Salin Link Dokumentasi') {
-          await vscode.env.clipboard.writeText(result.file_url);
-          vscode.window.showInformationMessage(`📋 Link tersalin ke clipboard: ${result.file_url}`);
-        } else if (action === 'Buka di Browser') {
-          vscode.env.openExternal(vscode.Uri.parse(result.file_url));
+        if (action === 'Salin Semua Link') {
+          await vscode.env.clipboard.writeText(uploadedUrls.join('\n'));
+          vscode.window.showInformationMessage(`📋 ${uploadedUrls.length} link tersalin ke clipboard!`);
+        } else if (action === 'Buka di Browser' && uploadedUrls[0]) {
+          vscode.env.openExternal(vscode.Uri.parse(uploadedUrls[0]));
         }
       } catch (err) {
         vscode.window.showErrorMessage(`❌ Gagal unggah dokumentasi: ${err.message}`);
