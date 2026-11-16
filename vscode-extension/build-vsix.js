@@ -28,8 +28,10 @@ const customLetter = customLetterArg ? customLetterArg.split('=')[1].toLowerCase
 const rawVersion = pkg.version || '1.0.0';
 const baseVersion = rawVersion.replace(/-[a-z]-beta.*$/i, '').replace(/-.*$/, '');
 
-const publishDir = path.join(path.dirname(extDir), 'publish', 'vsix');
+const publishDir = path.join(path.dirname(extDir), 'publish');
+const vsixSubDir = path.join(publishDir, 'vsix');
 if (!fs.existsSync(publishDir)) fs.mkdirSync(publishDir, { recursive: true });
+if (!fs.existsSync(vsixSubDir)) fs.mkdirSync(vsixSubDir, { recursive: true });
 const teleVsCodeWebDir = path.join(path.dirname(extDir), 'tele-vs-code', 'publish', 'vsix');
 if (!fs.existsSync(teleVsCodeWebDir)) fs.mkdirSync(teleVsCodeWebDir, { recursive: true });
 const liveWebDir = path.join(process.env.SERVER_DEPLOY_DIR || 'U:\\domains\\biru.co.id\\public_html\\tele-vs-code', 'publish', 'vsix');
@@ -122,8 +124,10 @@ if (fs.existsSync(vsceBin)) {
     });
 
     // Disimpan langsung ke publishDir sebagai outputVsix
-
-
+    try {
+      fs.copyFileSync(outputVsix, path.join(vsixSubDir, vsixFileName));
+      console.log(`[VSIX SUBDIR] Disinkronkan ke: ${path.join(vsixSubDir, vsixFileName)}`);
+    } catch (e) {}
 
     // Salin ke folder web lokal tele-vs-code
     if (fs.existsSync(teleVsCodeWebDir)) {
@@ -271,6 +275,9 @@ try {
     execSync(`cd "${stagingDir}" && zip -r "${outputVsix}" .`, { stdio: 'inherit' });
   }
 
+  try {
+    fs.copyFileSync(outputVsix, path.join(vsixSubDir, vsixFileName));
+  } catch (e) {}
 
   if (fs.existsSync(liveWebDir)) {
     try {
